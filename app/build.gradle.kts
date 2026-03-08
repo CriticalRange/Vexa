@@ -13,7 +13,7 @@ android {
 
     defaultConfig {
         applicationId = "com.critical.vexaemulator"
-        minSdk = 28
+        minSdk = 30
         targetSdk = 36
         versionCode = 1
         versionName = "1.0"
