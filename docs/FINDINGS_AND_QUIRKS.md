@@ -22,6 +22,9 @@
 - Package-name-derived internal paths must not be hardcoded into runtime behavior.
 - Some FEX-facing runtime areas are signal-sensitive enough that small structural mistakes can cause host-side crashes or deadlocks.
 - Upstream FEX has allocator-sensitive areas; convenience abstractions in the wrong place can create correctness risks.
+- Upstream FEX is strongly Linux/rootfs/thunk oriented; VEXA should assume an Android-specific integration layer is needed even if deep FEX changes are avoided.
+- FEXCore alone is unlikely to be sufficient for VEXA bring-up; rootfs pathing, ELF loading, syscall emulation, and thunk handling appear to live outside the pure core.
+- A thin layer around a pinned upstream FEX branch is a safer maintenance strategy than either a deep fork or a pure app-side wrapper around stock Linux binaries.
 
 ## Suspected Findings
 
@@ -67,6 +70,7 @@ Preserve the intent of these workarounds first. Re-implement them cleanly later.
 - What is the smallest VEXA-native FEX handoff that proves rootfs, thunk, and launch wiring without inheriting HyMobile structure?
 - Which old runtime workarounds are still required once package-path assumptions are removed?
 - Which runtime-facing components must remain extremely low-abstraction because of FEX signal or allocator constraints?
+- What is the smallest FEX subset from the pinned `FEX-2601` branch that VEXA actually needs for first bring-up?
 
 ## Evidence To Carry Forward
 

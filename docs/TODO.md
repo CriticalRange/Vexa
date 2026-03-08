@@ -88,6 +88,7 @@
 
 ## FEX-Specific Runtime Checks
 
+- [ ] Identify the minimum FEX subset needed from the pinned `FEX-2601` branch before writing Android integration code.
 - [ ] Write down the FEX constraints that affect VEXA architecture but do not justify copying old HyMobile structure.
 - [ ] Keep signal-sensitive FEX-facing code in a protected low-level area.
 - [ ] Keep allocator-sensitive FEX-facing code in a protected low-level area.

@@ -13,6 +13,8 @@
 - Avoid vague lines like "failed to initialize" without context.
 - Prefer structured log messages over prose.
 - Do not silently swallow runtime errors just to keep the UI smooth.
+- All Android logcat output should use the single tag `VEXA` so `adb logcat -s VEXA` remains the one stable filter during bring-up.
+- The app logger should fan out to both the in-app log store and Android logcat instead of treating them as separate systems.
 
 ## Log Categories
 
@@ -39,6 +41,11 @@ Each log line should carry at least:
 - severity
 - session id
 - short message
+
+Recommended Android logcat rendering:
+
+- tag: `VEXA`
+- body: `[CATEGORY] message key=value key=value`
 
 ## Crash Breadcrumb Idea
 

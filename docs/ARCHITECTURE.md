@@ -98,6 +98,16 @@ The runtime layer should not own Android UI decisions.
 - Do not move signal, threading, or memory-critical behavior into Kotlin just because it is easier to edit.
 - Do not move Android UI concerns into native code.
 
+## Upstream Dependency Strategy
+
+- FEX should be treated as an external upstream dependency, not as code to absorb into the VEXA repository.
+- The currently pinned upstream checkout for investigation is the `FEX-2601` branch in the local `~/FEX` clone.
+- VEXA should prefer a thin Android-facing native integration layer around upstream FEX rather than a deep FEX fork.
+- Wrapper responsibilities should stay on the VEXA side: storage staging, launch contract creation, Android lifecycle coordination, surface handoff, phase reporting, and artifact/log routing.
+- FEX-side changes should be avoided by default and introduced only for proven Android or runtime blockers that cannot be solved in the VEXA integration layer.
+- Desktop-oriented FEX tools such as config UI, install helpers, and rootfs fetch/mount flows should not be treated as required parts of the first VEXA runtime bring-up.
+- The VEXA-side logger should remain the source of truth for app-visible logs and should fan out to Android logcat using the stable tag `VEXA`.
+
 ## Ownership Rules
 
 - You own architecture, runtime semantics, lifecycle policy, and critical implementation decisions.

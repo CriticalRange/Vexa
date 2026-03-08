@@ -114,7 +114,7 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
             category = LogCategory.SURFACE,
             message = "Game Surface is being created..."
         )
-        RuntimeBridge.start(holder.surface)
+        RuntimeBridge.startRuntime(holder.surface)
         VexaLogger.log(
             level = LogLevel.INFO,
             category = LogCategory.SURFACE,
@@ -133,7 +133,7 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
                 "height" to height.toString()
             )
         )
-        RuntimeBridge.onSurfaceChanged(width, height)
+        RuntimeBridge.onRuntimeSurfaceChanged(width, height)
     }
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
@@ -146,7 +146,7 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
                 "isValid" to holder.surface.isValid.toString()
             )
         )
-        RuntimeBridge.stop()
+        RuntimeBridge.stopRuntime()
         VexaLogger.log(
             level = LogLevel.INFO,
             category = LogCategory.SURFACE,

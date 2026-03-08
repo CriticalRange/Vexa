@@ -3,15 +3,21 @@ package com.critical.vexaemulator
 import android.view.Surface
 
 object RuntimeBridge {
-    fun start(surface: Surface) {
-        // TODO: call JNI/native runtime entry here.
-        // Example: nativeStart(surface)
+    init {
+        System.loadLibrary("vexa")
     }
-    fun onSurfaceChanged(width: Int, height: Int) {
+
+    private external fun nativeStartRuntime()
+    private external fun nativeStopRuntime()
+    fun startRuntime(surface: Surface) {
+        nativeStartRuntime()
+    }
+
+    fun onRuntimeSurfaceChanged(width: Int, height: Int) {
         // TODO: add width and height control here
     }
 
-    fun stop() {
-        // TODO: add runtime stop mechanism here
+    fun stopRuntime() {
+        nativeStopRuntime()
     }
 }
