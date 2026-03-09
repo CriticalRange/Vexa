@@ -26,6 +26,7 @@ import androidx.lifecycle.lifecycleScope
 import com.critical.vexaemulator.logging.LogCategory
 import com.critical.vexaemulator.logging.LogLevel
 import com.critical.vexaemulator.logging.VexaLogger
+import com.critical.vexaemulator.runtime.LaunchRequest
 import com.critical.vexaemulator.ui.GameDebugPanel
 import com.critical.vexaemulator.ui.GameLoadingOverlay
 import kotlinx.coroutines.delay
@@ -114,7 +115,15 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
             category = LogCategory.SURFACE,
             message = "Game Surface is being created..."
         )
-        RuntimeBridge.startRuntime(holder.surface)
+        val request = LaunchRequest(
+            executablePath = "/data/user/0/com.critical.vexaemulator/files/game/HytaleClient",
+            rootfsPath = "/data/user/0/com.critical.vexaemulator/files/rootfs",
+            thunkHostPath = "/data/user/0/com.critical.vexaemulator/files/thunks/host",
+            thunkGuestPath = "/data/user/0/com.critical.vexaemulator/files/thunks/guest",
+            workingDirectory = "/data/user/0/com.critical.vexaemulator/files/",
+            artifactDirectory = "/data/user/0/com.critical.vexaemulator/files/artifacts/"
+        )
+        RuntimeBridge.startRuntime(holder.surface, request)
         VexaLogger.log(
             level = LogLevel.INFO,
             category = LogCategory.SURFACE,
