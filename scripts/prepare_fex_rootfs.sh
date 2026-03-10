@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-set -euo pipefail
 
 # Extracts a downloaded FEX .sqsh rootfs into the project .fex-emu/RootFS folder.
 #

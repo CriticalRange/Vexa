@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-set -euo pipefail
-
 # Fetches official FEX RootFS images and stores them in:
 #   ${FEX_APP_DATA_LOCATION:-<repo>/.fex-emu}
 #
