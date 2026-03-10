@@ -4,6 +4,7 @@
 
 #include "launch.h"
 #include <dlfcn.h>
+#include <FEXCore/Config/Config.h>
 
 namespace Vexa::Runtime {
     static void *g_fex_handle = nullptr;
@@ -21,7 +22,10 @@ namespace Vexa::Runtime {
             return {7, "Failed to load libFEXCore.so", err ? err : "unknown"};
         }
 
-        // TODO: Resolve symbols and initialize real FEX runtime here.
+        // Initializing FEX runtime here.
+        FEXCore::Config::Initialize();
+        FEXCore::Config::Load();
+
         return {0, "OK", ""};
     }
 

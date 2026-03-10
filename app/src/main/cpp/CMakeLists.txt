@@ -33,8 +33,26 @@ add_library(${CMAKE_PROJECT_NAME} SHARED
     wrapper/jni.cpp
     main.cpp)
 
+set(FEX_ROOT "/home/critical/FEX" CACHE PATH "Path to FEX source")
+set(FEX_BUILD "/home/critical/FEX/build-android-arm64-ninja" CACHE PATH "Path to FEX build")
+
+if(NOT EXISTS "${FEX_ROOT}/FEXCore/include/FEXCore/Core/Context.h")
+    message(FATAL_ERROR "Invalid FEX_ROOT: ${FEX_ROOT}")
+endif()
+if(NOT EXISTS "${FEX_BUILD}/FEXCore/Source/libFEXCore.so")
+    message(FATAL_ERROR "Invalid FEX_BUILD: ${FEX_BUILD}")
+endif()
+
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../../../third_party/rapidjson/include)
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../../../third_party/rapidjson/include
+    ${FEX_ROOT}/FEXCore/include
+    ${FEX_ROOT}/External/fmt/include
+    ${FEX_BUILD}/include)
+
+add_library(FEXCore SHARED IMPORTED)
+set_target_properties(FEXCore PROPERTIES IMPORTED_LOCATION "${FEX_BUILD}/FEXCore/Source/libFEXCore.so")
+
+target_compile_features(${CMAKE_PROJECT_NAME} PRIVATE cxx_std_20)
 
 # Specifies libraries CMake should link to your target library. You
 # can link libraries from various origins, such as libraries defined in this
@@ -42,4 +60,5 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
 target_link_libraries(${CMAKE_PROJECT_NAME}
     # List libraries link to the target library
     android
-    log)
+    log
+    FEXCore)

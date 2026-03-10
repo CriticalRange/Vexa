@@ -17,6 +17,15 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "1.0"
+        externalNativeBuild {
+            cmake {
+                cppFlags += ""
+                arguments += listOf(
+                    "-DFEX_ROOT=/home/critical/FEX",
+                    "-DFEX_BUILD=/home/critical/FEX/build-android-arm64-ninja"
+                )
+            }
+        }
     }
     buildTypes {
         getByName("release") {
@@ -28,4 +37,3 @@ android {
         }
     }
 }
-
