@@ -10,6 +10,7 @@ import org.json.JSONObject
 
 object RuntimeBridge {
     init {
+        System.loadLibrary("FEXCore")
         System.loadLibrary("vexa")
     }
 
@@ -43,7 +44,7 @@ object RuntimeBridge {
         thunkGuestPath: String,
         workingDirectory: String,
         artifactDirectory: String
-    )
+    ): Int
 
     private external fun nativeStopRuntime()
     fun startRuntime(surface: Surface, request: LaunchRequest) {
@@ -60,7 +61,7 @@ object RuntimeBridge {
                 "artifactDirectory" to request.artifactDirectory,
             )
         )
-        nativeStartRuntime(
+        val preflightCode = nativeStartRuntime(
             executablePath = request.executablePath,
             rootfsPath = request.rootfsPath,
             thunkHostPath = request.thunkHostPath,
@@ -68,6 +69,15 @@ object RuntimeBridge {
             workingDirectory = request.workingDirectory,
             artifactDirectory = request.artifactDirectory
         )
+
+        if (preflightCode != 0) {
+            VexaLogger.log(
+                level = LogLevel.ERROR,
+                category = LogCategory.FAILURE,
+                message = "Native preflight failed",
+                fields = mapOf("code" to preflightCode.toString())
+            )
+        }
     }
 
     fun onRuntimeSurfaceChanged(width: Int, height: Int) {
