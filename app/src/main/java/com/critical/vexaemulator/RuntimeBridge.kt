@@ -1,18 +1,12 @@
 package com.critical.vexaemulator
 
-import android.view.Surface
 import com.critical.vexaemulator.logging.LogCategory
 import com.critical.vexaemulator.logging.LogLevel
 import com.critical.vexaemulator.logging.VexaLogger
 import com.critical.vexaemulator.runtime.LaunchRequest
-
 import org.json.JSONObject
 
 object RuntimeBridge {
-    init {
-        System.loadLibrary("FEXCore")
-        System.loadLibrary("vexa")
-    }
 
     @JvmStatic
     fun logFromNative(level: String, category: String, message: String, fieldsJson: String) {
@@ -37,6 +31,15 @@ object RuntimeBridge {
         )
     }
 
+    private external fun nativeSetLogSink(sink: com.critical.vexaemulator.runtime.NativeLogSink?)
+
+    fun setNativeLogSink(
+        sink:
+        com.critical.vexaemulator.runtime.NativeLogSink?
+    ) {
+        nativeSetLogSink(sink)
+    }
+
     private external fun nativeStartRuntime(
         executablePath: String,
         rootfsPath: String,
@@ -47,7 +50,8 @@ object RuntimeBridge {
     ): Int
 
     private external fun nativeStopRuntime()
-    fun startRuntime(surface: Surface, request: LaunchRequest) {
+
+    fun startRuntime(request: LaunchRequest): Int {
         VexaLogger.log(
             level = LogLevel.INFO,
             category = LogCategory.BOOT,
@@ -78,6 +82,7 @@ object RuntimeBridge {
                 fields = mapOf("code" to preflightCode.toString())
             )
         }
+        return preflightCode
     }
 
     fun onRuntimeSurfaceChanged(width: Int, height: Int) {

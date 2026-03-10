@@ -27,6 +27,11 @@
             android:exported="false"
             android:screenOrientation="sensorLandscape"
             android:theme="@style/Theme.VexaEmulator" />
+
+        <service
+            android:name=".runtime.RuntimeService"
+            android:exported="false"
+            android:process=":runtime" />
     </application>
 
 </manifest>

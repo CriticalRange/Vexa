@@ -33,10 +33,6 @@ namespace Vexa::Log {
 
     std::string AddFields(std::initializer_list<Field> fields);
 
-    std::string AddVexaFields(
-            std::initializer_list<std::pair<std::string, std::string>> fields
-    );
-
     void VexaNativeLog(JNIEnv *env, const char *level, const char *category, const char *msg,
                        const char *fieldsJson);
 

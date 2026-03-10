@@ -3,15 +3,26 @@
 //
 #include <jni.h>
 #include <android/log.h>
-#include <rapidjson/document.h>
-#include <rapidjson/stringbuffer.h>
-#include <rapidjson/writer.h>
+#include "rapidjson/document.h"
+#include "rapidjson/stringbuffer.h"
+#include "rapidjson/writer.h"
 #include <string>
 #include <type_traits>
+#include <mutex>
 
-#include "vexa_native_log.h"
+#include "native_log.h"
 
 #define VEXA_TAG "VEXA"
+
+static JavaVM *g_vm = nullptr;
+static jobject g_log_sink = nullptr; // GlobalRef
+static jmethodID g_on_native_log = nullptr;
+static std::mutex g_log_sink_mutex;
+
+jint JNI_OnLoad(JavaVM *vm, void *) {
+    g_vm = vm;
+    return JNI_VERSION_1_6;
+}
 
 namespace Vexa::Log {
 
@@ -41,19 +52,6 @@ namespace Vexa::Log {
                        const char *fieldsJson) {
         if (!env) return;
 
-        jclass bridge = env->FindClass("com/critical/vexaemulator/RuntimeBridge");
-        if (!bridge) return;
-
-        jmethodID mid = env->GetStaticMethodID(
-                bridge,
-                "logFromNative",
-                "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V"
-
-        );
-        if (!mid) {
-            env->DeleteLocalRef(bridge);
-            return;
-        }
 
         jstring jLevel = env->NewStringUTF(level ? level : "INFO");
         jstring jCategory = env->NewStringUTF(category ? category : "RUNTIME");
@@ -67,17 +65,50 @@ namespace Vexa::Log {
             if (jCategory) env->DeleteLocalRef(jCategory);
             if (jMsg) env->DeleteLocalRef(jMsg);
             if (jFields) env->DeleteLocalRef(jFields);
-            env->DeleteLocalRef(bridge);
             return;
         }
 
-        env->CallStaticVoidMethod(bridge, mid, jLevel, jCategory, jMsg, jFields);
+        std::lock_guard<std::mutex> lock(g_log_sink_mutex);
+        if (g_log_sink && g_on_native_log) {
+            if (jLevel && jCategory && jMsg && jFields) {
+                env->CallVoidMethod(g_log_sink, g_on_native_log, jLevel, jCategory, jMsg,
+                                    jFields);
+            }
+        }
 
         env->DeleteLocalRef(jLevel);
         env->DeleteLocalRef(jCategory);
         env->DeleteLocalRef(jMsg);
-        env->DeleteLocalRef(bridge);
         env->DeleteLocalRef(jFields);
     }
 
 } // namespace Vexa::Log
+extern "C"
+JNIEXPORT void JNICALL
+Java_com_critical_vexaemulator_RuntimeBridge_nativeSetLogSink(JNIEnv *env, jobject thiz,
+                                                              jobject sink) {
+    std::lock_guard<std::mutex>
+            lock(g_log_sink_mutex);
+
+    if (g_log_sink) {
+        env->DeleteGlobalRef(g_log_sink);
+        g_log_sink = nullptr;
+        g_on_native_log = nullptr;
+    }
+
+    if (!sink) return;
+
+    jclass sinkCls = env->GetObjectClass(sink);
+    if (!sinkCls) return;
+
+    jmethodID mid = env->GetMethodID(
+            sinkCls,
+            "onNativeLog",
+            "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V"
+    );
+    env->DeleteLocalRef(sinkCls);
+    if (!mid) return;
+
+    g_log_sink = env->NewGlobalRef(sink);
+    g_on_native_log = mid;
+}

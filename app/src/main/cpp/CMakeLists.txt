@@ -27,9 +27,11 @@ project("vexa")
 # used in the AndroidManifest.xml file.
 add_library(${CMAKE_PROJECT_NAME} SHARED
     # List C/C++ source files with relative paths to this CMakeLists.txt.
-    runtime/vexa_native_log.cpp
-    runtime/runtime_wrapper.cpp
-    runtime/runtime_jni.cpp)
+    logging/native_log.cpp
+    runtime/preflight.cpp
+    runtime/launch.cpp
+    wrapper/jni.cpp
+    main.cpp)
 
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../../../../third_party/rapidjson/include)
