@@ -1,6 +1,6 @@
 ## Runtime TODO: FEX Bring-up Sequence
 
-- [ ] First priority: Compile VEXA runtime wrapper directly against FEX headers/libs
+- [x] First priority: Compile VEXA runtime wrapper directly against FEX headers/libs
   (`target_include_directories` + `target_link_libraries`) and avoid string-based `dlsym` calls
   for mangled C++ symbols.
 - [ ] Integrate `FEXCore::Config::Initialize()` in runtime startup and log success/failure as

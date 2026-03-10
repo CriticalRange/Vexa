@@ -36,6 +36,9 @@ namespace Vexa::Log {
     void VexaNativeLog(JNIEnv *env, const char *level, const char *category, const char *msg,
                        const char *fieldsJson);
 
+    void VexaNativeLogRaw(const char *level, const char *category, const char *msg,
+                          const char *fieldsJson);
+
 #define VEXA_LOGD(env, category, msg, fieldsJson) Vexa::Log::VexaNativeLog((env), "DEBUG", (category), (msg), (fieldsJson))
 #define VEXA_LOGI(env, category, msg, fieldsJson) Vexa::Log::VexaNativeLog((env), "INFO", (category), (msg), (fieldsJson))
 #define VEXA_LOGW(env, category, msg, fieldsJson) Vexa::Log::VexaNativeLog((env), "WARN", (category), (msg), (fieldsJson))

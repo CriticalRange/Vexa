@@ -82,7 +82,35 @@ namespace Vexa::Log {
         env->DeleteLocalRef(jFields);
     }
 
+    void VexaNativeLogRaw(const char *level, const char *category, const char *message,
+                          const char *fields) {
+        if (!g_vm) return;
+
+        JNIEnv *env = nullptr;
+        bool didAttach = false;
+
+        jint state = g_vm->GetEnv(reinterpret_cast<void **>(&env), JNI_VERSION_1_6);
+        if (state == JNI_EDETACHED) {
+            if (g_vm->AttachCurrentThread(&env, nullptr) != JNI_OK || !env) return;
+            didAttach = true;
+        } else if (state != JNI_OK || !env) {
+            return;
+        }
+
+        VexaNativeLog(
+                env,
+                level ? level : "INFO",
+                category ? category : "RUNTIME",
+                message ? message : "",
+                fields ? fields : "{}"
+        );
+        if (didAttach) {
+            g_vm->DetachCurrentThread();
+        }
+    }
+
 } // namespace Vexa::Log
+
 extern "C"
 JNIEXPORT void JNICALL
 Java_com_critical_vexaemulator_RuntimeBridge_nativeSetLogSink(JNIEnv *env, jobject thiz,

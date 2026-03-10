@@ -17,7 +17,8 @@ namespace Vexa::Runtime {
         std::string detail;
     };
 
-    LaunchResult StartRuntime(const Vexa::Common::PreflightPaths &paths);
+    LaunchResult
+    StartRuntime(JNIEnv *env, const Vexa::Common::PreflightPaths &preflightPaths);
 
     void StopRuntime();
 }
