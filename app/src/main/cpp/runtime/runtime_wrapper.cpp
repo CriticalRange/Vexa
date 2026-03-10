@@ -4,6 +4,8 @@
 #include <jni.h>
 #include <android/log.h>
 
+#include "vexa_native_log.h"
+
 #define VEXA_TAG "VEXA"
 
 extern "C"
@@ -17,8 +19,6 @@ Java_com_critical_vexaemulator_RuntimeBridge_nativeStartRuntime(JNIEnv *env, job
                                                                 jstring artifactDirectory) {
     const char *executableTranslated = env->GetStringUTFChars(executablePath, nullptr);
     if (!executableTranslated) {
-        __android_log_print(ANDROID_LOG_ERROR, "VEXA", "Failed to read executablePath from JNI");
-        return;
     }
     const char *rootfsPathTranslated = env->GetStringUTFChars(rootfsPath, nullptr);
     if (!rootfsPathTranslated) {
@@ -50,11 +50,31 @@ Java_com_critical_vexaemulator_RuntimeBridge_nativeStartRuntime(JNIEnv *env, job
                             "Failed to read artifactDirectoryTranslated from JNI");
         return;
     }
-    __android_log_print(ANDROID_LOG_INFO, VEXA_TAG,
-                        "startRuntime is called on %s, %s, %s, %s %s %s",
-                        executableTranslated, rootfsPathTranslated, thunkHostPathTranslated,
-                        thunkGuestPathTranslated, workingDirectoryTranslated,
-                        artifactDirectoryTranslated);
+    VEXA_LOGI(env, "BOOT", "startRuntime is called from JNI",
+              Vexa::Log::AddFields({{
+                                            Vexa::Log::F("executableTranslated",
+                                                         executableTranslated)
+                                    },
+                                    {
+                                            Vexa::Log::F("rootfsPathTranslated",
+                                                         rootfsPathTranslated)
+                                    },
+                                    {
+                                            Vexa::Log::F("thunkHostPathTranslated",
+                                                         thunkHostPathTranslated)
+                                    },
+                                    {
+                                            Vexa::Log::F("thunkGuestPathTranslated",
+                                                         thunkGuestPathTranslated)
+                                    },
+                                    {
+                                            Vexa::Log::F("workingDirectoryTranslated",
+                                                         workingDirectoryTranslated)
+                                    },
+                                    {
+                                            Vexa::Log::F("artifactDirectoryTranslated",
+                                                         artifactDirectoryTranslated)
+                                    }}).c_str());
     env->ReleaseStringUTFChars(executablePath, executableTranslated);
     env->ReleaseStringUTFChars(rootfsPath, rootfsPathTranslated);
     env->ReleaseStringUTFChars(thunkHostPath, thunkHostPathTranslated);

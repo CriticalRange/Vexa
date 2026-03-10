@@ -6,9 +6,34 @@ import com.critical.vexaemulator.logging.LogLevel
 import com.critical.vexaemulator.logging.VexaLogger
 import com.critical.vexaemulator.runtime.LaunchRequest
 
+import org.json.JSONObject
+
 object RuntimeBridge {
     init {
         System.loadLibrary("vexa")
+    }
+
+    @JvmStatic
+    fun logFromNative(level: String, category: String, message: String, fieldsJson: String) {
+        val lvl = runCatching { LogLevel.valueOf(level) }.getOrDefault(LogLevel.INFO)
+        val cat = runCatching { LogCategory.valueOf(category) }.getOrDefault(LogCategory.RUNTIME)
+        val fields = mutableMapOf<String, String>()
+        if (!fieldsJson.isNullOrBlank()) {
+            runCatching {
+                val obj = JSONObject(fieldsJson)
+                val keys = obj.keys()
+                while (keys.hasNext()) {
+                    val k = keys.next()
+                    fields[k] = obj.optString(k, "")
+                }
+            }
+        }
+        VexaLogger.log(
+            level = lvl,
+            category = cat,
+            message = message,
+            fields = fields
+        )
     }
 
     private external fun nativeStartRuntime(

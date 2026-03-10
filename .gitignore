@@ -13,6 +13,7 @@
 /.idea/navEditor.xml
 /.idea/assetWizardSettings.xml
 .DS_Store
+/third_party
 /build
 /captures
 .externalNativeBuild
