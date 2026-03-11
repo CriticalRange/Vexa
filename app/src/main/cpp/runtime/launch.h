@@ -7,6 +7,7 @@
 
 #pragma once
 
+#include "jni.h"
 #include "../common/preflight_paths.h"
 
 namespace Vexa::Runtime {

@@ -4,7 +4,7 @@
 #pragma once
 
 #include <string>
-#include "../common/preflight_paths.h"
+#include "../../common/preflight_paths.h"
 
 // Preflight codes (Determines whether FEX will run or not
 // 0 = OK

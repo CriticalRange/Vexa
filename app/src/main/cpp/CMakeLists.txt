@@ -28,7 +28,11 @@ project("vexa")
 add_library(${CMAKE_PROJECT_NAME} SHARED
     # List C/C++ source files with relative paths to this CMakeLists.txt.
     logging/native_log.cpp
-    runtime/preflight.cpp
+    runtime/init/preflight.cpp
+    runtime/init/logging_init.cpp
+    runtime/init/config_init.cpp
+    runtime/init/core_init.cpp
+    runtime/init/thread_init.cpp
     runtime/launch.cpp
     wrapper/jni.cpp
     main.cpp)
@@ -47,6 +51,7 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../../../../third_party/rapidjson/include
     ${FEX_ROOT}/FEXCore/include
     ${FEX_ROOT}/Source
+    ${FEX_ROOT}/Source/Tools/LinuxEmulation
     ${FEX_ROOT}/External/fmt/include
     ${FEX_ROOT}/External/robin-map/include
     ${FEX_BUILD}/include)
@@ -55,12 +60,20 @@ add_library(FEXTinyJson STATIC IMPORTED)
 set_target_properties(FEXTinyJson PROPERTIES IMPORTED_LOCATION "${FEX_BUILD}/External/tiny-json/libtiny-json.a")
 add_library(FEXCommon STATIC IMPORTED)
 set_target_properties(FEXCommon PROPERTIES IMPORTED_LOCATION "${FEX_BUILD}/Source/Common/libCommon.a")
+add_library(FEXCommonTools STATIC IMPORTED)
+set_target_properties(FEXCommonTools PROPERTIES IMPORTED_LOCATION "${FEX_BUILD}/Source/Tools/CommonTools/libCommonTools.a")
+add_library(LinuxEmulation STATIC IMPORTED)
+set_target_properties(LinuxEmulation PROPERTIES IMPORTED_LOCATION "${FEX_BUILD}/Source/Tools/LinuxEmulation/libLinuxEmulation.a")
 add_library(FEXCore SHARED IMPORTED)
 set_target_properties(FEXCore PROPERTIES IMPORTED_LOCATION "${FEX_BUILD}/FEXCore/Source/libFEXCore.so")
+add_library(FEXCoreStatic STATIC IMPORTED)
+set_target_properties(FEXCoreStatic PROPERTIES IMPORTED_LOCATION "${FEX_BUILD}/FEXCore/Source/libFEXCore.a")
 add_library(FEXCoreBase STATIC IMPORTED)
 set_target_properties(FEXCoreBase PROPERTIES IMPORTED_LOCATION "${FEX_BUILD}/FEXCore/Source/libFEXCore_Base.a")
 
 target_compile_features(${CMAKE_PROJECT_NAME} PRIVATE cxx_std_20)
+
+target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE ARCHITECTURE_arm64=1) # TODO: Implement 32bit if needed later with a check here
 
 # Specifies libraries CMake should link to your target library. You
 # can link libraries from various origins, such as libraries defined in this
@@ -69,7 +82,10 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
     # List libraries link to the target library
     android
     log
+    LinuxEmulation
     FEXTinyJson
     FEXCommon
+    FEXCommonTools
     FEXCoreBase
+    FEXCoreStatic
     FEXCore)

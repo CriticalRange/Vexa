@@ -68,11 +68,24 @@ namespace Vexa::Log {
             return;
         }
 
+        jobject sink = nullptr;
+        jmethodID methodId = nullptr;
         std::lock_guard<std::mutex> lock(g_log_sink_mutex);
         if (g_log_sink && g_on_native_log) {
+            sink = g_log_sink;
+            methodId = g_on_native_log;
             if (jLevel && jCategory && jMsg && jFields) {
-                env->CallVoidMethod(g_log_sink, g_on_native_log, jLevel, jCategory, jMsg,
-                                    jFields);
+                env->CallVoidMethod(
+                        sink,
+                        methodId,
+                        jLevel,
+                        jCategory,
+                        jMsg,
+                        jFields);
+                if (env->ExceptionCheck()) {
+                    env->ExceptionDescribe();
+                    env->ExceptionClear();
+                }
             }
         }
 

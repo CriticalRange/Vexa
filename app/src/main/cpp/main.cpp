@@ -9,7 +9,7 @@
 
 #include "common/preflight_paths.h"
 #include "logging/native_log.h"
-#include "runtime/preflight.h"
+#include "runtime/init/preflight.h"
 #include "runtime/launch.h"
 #include "utils/jni_scoped.h"
 
