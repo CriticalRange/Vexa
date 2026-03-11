@@ -142,7 +142,7 @@ class RuntimeService : Service() {
     override fun onCreate() {
         super.onCreate()
         // This runs in :runtime process
-        System.loadLibrary("FEXCore")
+        // Don't need FEXCore loadLibrary here, native-side handles it
         System.loadLibrary("vexa")
         RuntimeBridge.setNativeLogSink(nativeSink)
         emitLog(

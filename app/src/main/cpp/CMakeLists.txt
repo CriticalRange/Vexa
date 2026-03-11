@@ -46,11 +46,19 @@ endif()
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../../../../third_party/rapidjson/include
     ${FEX_ROOT}/FEXCore/include
+    ${FEX_ROOT}/Source
     ${FEX_ROOT}/External/fmt/include
+    ${FEX_ROOT}/External/robin-map/include
     ${FEX_BUILD}/include)
 
+add_library(FEXTinyJson STATIC IMPORTED)
+set_target_properties(FEXTinyJson PROPERTIES IMPORTED_LOCATION "${FEX_BUILD}/External/tiny-json/libtiny-json.a")
+add_library(FEXCommon STATIC IMPORTED)
+set_target_properties(FEXCommon PROPERTIES IMPORTED_LOCATION "${FEX_BUILD}/Source/Common/libCommon.a")
 add_library(FEXCore SHARED IMPORTED)
 set_target_properties(FEXCore PROPERTIES IMPORTED_LOCATION "${FEX_BUILD}/FEXCore/Source/libFEXCore.so")
+add_library(FEXCoreBase STATIC IMPORTED)
+set_target_properties(FEXCoreBase PROPERTIES IMPORTED_LOCATION "${FEX_BUILD}/FEXCore/Source/libFEXCore_Base.a")
 
 target_compile_features(${CMAKE_PROJECT_NAME} PRIVATE cxx_std_20)
 
@@ -61,4 +69,7 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
     # List libraries link to the target library
     android
     log
+    FEXTinyJson
+    FEXCommon
+    FEXCoreBase
     FEXCore)

@@ -22,7 +22,8 @@ android {
                 cppFlags += ""
                 arguments += listOf(
                     "-DFEX_ROOT=/home/critical/FEX",
-                    "-DFEX_BUILD=/home/critical/FEX/build-android-arm64-ninja"
+                    "-DFEX_BUILD=/home/critical/FEX/build-android-arm64-ninja",
+                    "-DANDROID_STL=c++_shared"
                 )
             }
         }
