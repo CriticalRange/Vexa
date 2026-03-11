@@ -2,7 +2,6 @@
 // Created by critical on 10.03.2026.
 //
 #include <jni.h>
-#include <dlfcn.h>
 #include <FEXCore/Config/Config.h>
 #include <FEXCore/Utils/LogManager.h>
 #include <FEXCore/Core/Context.h>
@@ -45,20 +44,15 @@ static void FexAssertHandler(const char *message) {
 }
 
 namespace Vexa::Runtime {
-    static void *g_fex_handle = nullptr;
+    static bool fex_started = false;
 
     LaunchResult StartRuntime(JNIEnv *env, const Vexa::Common::PreflightPaths &paths) {
-
-        if (g_fex_handle) {
+        if (fex_started) {
             return {0, "Already started", ""};
         }
+        VEXA_LOGI(env, "FEX", "FEXCore begins", "{}");
+        FEXCore::Config::Shutdown(); // safe defensive
 
-        VEXA_LOGI(env, "FEX", "dlopen libFEXCore begins", "{}");
-        g_fex_handle = dlopen("libFEXCore.so", RTLD_NOW);
-        if (!g_fex_handle) {
-            const char *err = dlerror();
-            return {7, "Failed to load libFEXCore.so", err ? err : "unknown"};
-        }
         LogMan::Throw::InstallHandler(FexAssertHandler);
         LogMan::Msg::InstallHandler(FexMsgHandler);
 
@@ -68,6 +62,11 @@ namespace Vexa::Runtime {
         FEX::Config::LoadConfig(/*ProgramName=*/{}, /*envp=*/nullptr,
                                                 FEX::Config::PortableInformation{});
         VEXA_LOGI(env, "FEX", "FEXCore config loaded", "{}");
+
+        FEXCore::Config::Set(FEXCore::Config::CONFIG_SILENTLOG,
+                             "0"); // Set silent logs to 0 for dev
+
+        FEXCore::Config::ReloadMetaLayer(); // Apply Config Changes
 
         // Context creation
         auto hostFeatures = FEX::FetchHostFeatures();
@@ -82,17 +81,18 @@ namespace Vexa::Runtime {
             return {10, "CreateNewContext failed", ""};
         }
         VEXA_LOGI(env, "FEX", "CreateNewContext OK", "{}");
+        fex_started = true;
 
         return {0, "OK", ""};
     }
 
     void StopRuntime() {
-        if (g_fex_handle) {
+        if (Vexa::Runtime::fex_started) {
             g_ctx.reset();
             LogMan::Msg::UnInstallHandler();
             LogMan::Throw::UnInstallHandler();
-            dlclose(g_fex_handle);
-            g_fex_handle = nullptr;
+            FEXCore::Config::Shutdown();
+            Vexa::Runtime::fex_started = false;
         }
     }
 }

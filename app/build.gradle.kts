@@ -4,6 +4,14 @@ plugins {
 }
 
 val rapidJsonDir = rootProject.file("third_party/rapidjson/include/rapidjson")
+val fexRoot = providers.environmentVariable("FEX_ROOT").orElse("/home/critical/FEX")
+val fexBuildDir = providers.gradleProperty("FEX_BUILD")
+    .orElse("/home/critical/FEX/build-android-arm64-ninja")
+val ndkToolchain =
+    providers.environmentVariable("NDK_TOOLCHAIN")
+        .orElse("/home/critical/Android/Sdk/ndk/29.0.14206865/build/cmake/android.toolchain.cmake")
+val buildThunks =
+    providers.environmentVariable("BUILD_THUNKS").orElse("OFF")
 
 val ensureThirdPartySources by tasks.registering {
     group = "build setup"
@@ -36,6 +44,54 @@ val ensureThirdPartySources by tasks.registering {
     }
 }
 
+val configureFexAndroid by
+tasks.registering(org.gradle.api.tasks.Exec::class) {
+    group = "build setup"
+    description = "Configures FEX Android build."
+    onlyIf { !file("${fexBuildDir.get()}/build.ninja").exists() }
+    workingDir = rootProject.rootDir
+    commandLine(
+        "cmake",
+        "-S", fexRoot.get(),
+        "-B", fexBuildDir.get(),
+        "-G", "Ninja",
+
+        "-DCMAKE_TOOLCHAIN_FILE=${ndkToolchain.get()}",
+        "-DANDROID_ABI=arm64-v8a",
+        "-DANDROID_PLATFORM=android-30",
+        "-DANDROID_STL=c++_shared",
+        "-DBUILD_FEXCONFIG=OFF",
+        "-DBUILD_FEX_LINUX_TESTS=OFF",
+        "-DBUILD_TESTING=OFF",
+        "-DBUILD_STEAM_SUPPORT=OFF",
+        "-DBUILD_THUNKS=${buildThunks.get()}",
+        "-DENABLE_GDB_SYMBOLS=OFF",
+        "-DENABLE_LTO=OFF",
+        "-DENABLE_CCACHE=OFF",
+        "-DENABLE_WERROR=OFF",
+        "-DENABLE_JEMALLOC=OFF",
+        "-DENABLE_JEMALLOC_GLIBC_ALLOC=OFF"
+    )
+}
+
+val buildFEXCore = tasks.register<org.gradle.api.tasks.Exec>("buildFEXCore") {
+    group = "build setup"
+    description = "Builds libFEXCore.so"
+    dependsOn(configureFexAndroid)
+    workingDir = rootProject.rootDir
+    val buildPath = fexBuildDir.get()
+    commandLine(
+        "cmake",
+        "--build", buildPath,
+        "--target", "FEXCore",
+        "-j"
+    )
+}
+
+kotlin {
+    jvmToolchain(11)
+}
+
 android {
     namespace = "com.critical.vexaemulator"
     compileSdk {
@@ -50,6 +106,10 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "1.0"
+
+        ndk {
+            abiFilters += "arm64-v8a"
+        }
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         externalNativeBuild {
@@ -83,8 +143,24 @@ android {
     }
 }
 
-tasks.named("preBuild") {
+tasks.named(
+    "preBuild",
+    org.gradle.api.DefaultTask::class
+) {
     dependsOn(ensureThirdPartySources)
+    dependsOn(configureFexAndroid)
+}
+
+tasks.matching {
+    it.name.startsWith("configureCMake")
+}.configureEach {
+    dependsOn(configureFexAndroid)
+}
+
+tasks.matching {
+    it.name.startsWith("buildCMake")
+}.configureEach {
+    dependsOn(buildFEXCore)
 }
 
 dependencies {
