@@ -5,7 +5,7 @@
 #include <FEXCore/Utils/LogManager.h>
 
 #include "../../logging/native_log.h"
-#include "logging_init.h"
+#include "logging.h"
 
 namespace {
     static void FexMsgHandler(LogMan::DebugLevels level, const char *message) {

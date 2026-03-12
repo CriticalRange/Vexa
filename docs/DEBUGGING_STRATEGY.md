@@ -124,6 +124,16 @@ Use the narrowest correct bucket:
 - `device-quirk`: OEM or device-specific failure outside normal expectations
 - `unknown`: evidence incomplete
 
+## Toolchain Guardrail
+
+- Keep Android native builds pinned to NDK 29 (`ndkVersion` + toolchain path).
+- If CMake/AGP falls back to NDK 28, libc++ may expose C++20 mode but still miss `std::atomic_ref`.
+- Symptom to recognize quickly:
+  - `error: no member named 'atomic_ref' in namespace 'std'`
+- First check when this appears:
+  - active NDK path in native compile command
+  - `android.ndkVersion` in app Gradle config
+
 ## What "Explicit Crash Reason" Means In Practice
 
 An explicit crash reason is not "it crashed".

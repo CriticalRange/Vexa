@@ -2,8 +2,8 @@
 // Created by critical on 11.03.2026.
 //
 
-#ifndef VEXA_EMULATOR_CORE_INIT_H
-#define VEXA_EMULATOR_CORE_INIT_H
+#ifndef VEXA_EMULATOR_CORE_H
+#define VEXA_EMULATOR_CORE_H
 
 #pragma once
 
@@ -18,4 +18,4 @@ namespace Vexa::Runtime::Init {
     SetupCore(JNIEnv *env, const Vexa::Common::PreflightPaths &paths, RuntimeState &state);
 }
 
-#endif //VEXA_EMULATOR_CORE_INIT_H
+#endif //VEXA_EMULATOR_CORE_H

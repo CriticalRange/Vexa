@@ -29,10 +29,12 @@ add_library(${CMAKE_PROJECT_NAME} SHARED
     # List C/C++ source files with relative paths to this CMakeLists.txt.
     logging/native_log.cpp
     runtime/init/preflight.cpp
-    runtime/init/logging_init.cpp
-    runtime/init/config_init.cpp
-    runtime/init/core_init.cpp
-    runtime/init/thread_init.cpp
+    runtime/init/logging.cpp
+    runtime/init/config.cpp
+    runtime/init/core.cpp
+    runtime/init/thread.cpp
+    runtime/init/thunk.cpp
+    runtime/init/syscalls.cpp
     runtime/launch.cpp
     wrapper/jni.cpp
     main.cpp)

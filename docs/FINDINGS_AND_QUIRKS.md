@@ -8,6 +8,8 @@
 ## Proven Findings
 
 - The project is better modeled as a compatibility runtime than as a native mobile port.
+- Toolchain consistency matters: `libvexa`, FEX configure, and FEX build must use the same NDK version.
+- NDK 28's libc++ in this environment has `std::atomic_ref` disabled; NDK 29 enables it and is required for current FEX/LinuxEmulation integration.
 - A usable rootfs/runtime environment is required for the current x86_64-on-Android path.
 - External storage is not a safe place to execute everything directly. Internal prepared copies and validation matter.
 - Prepared internal copies are required because Android external storage paths are not reliable execution locations for this runtime path.

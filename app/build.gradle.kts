@@ -9,6 +9,9 @@ val fexBuildDir = providers.gradleProperty("FEX_BUILD")
     .orElse("/home/critical/FEX/build-android-arm64-ninja")
 val ndkToolchain =
     providers.environmentVariable("NDK_TOOLCHAIN")
+        // NDK 28 and below have libc++ std::atomic_ref disabled in headers.
+        // FEX/LinuxEmulation paths include SHMStats.h, which relies on std::atomic_ref.
+        // NDK 29 Re-enables this so it's required.
         .orElse("/home/critical/Android/Sdk/ndk/29.0.14206865/build/cmake/android.toolchain.cmake")
 val buildThunks =
     providers.environmentVariable("BUILD_THUNKS").orElse("OFF")
@@ -99,7 +102,10 @@ android {
             minorApiLevel = 1
         }
     }
-
+    // Must match the toolchain used for FEX configure/build.
+    // If AGP resolves NDK 28 here, native compile can fail with:
+    // "no member named 'atomic_ref' in namespace 'std'".
+    ndkVersion = "29.0.14206865"
     defaultConfig {
         applicationId = "com.critical.vexaemulator"
         minSdk = 30

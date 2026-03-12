@@ -5,7 +5,7 @@
 #include <FEXCore/Config/Config.h>
 #include <Common/Config.h>
 
-#include "config_init.h"
+#include "config.h"
 
 namespace Vexa::Runtime::Init {
     LaunchResult SetupConfig(const Vexa::Common::PreflightPaths &paths) {

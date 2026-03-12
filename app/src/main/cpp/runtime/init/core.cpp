@@ -5,7 +5,7 @@
 #include <Common/HostFeatures.h>
 
 #include "../../logging/native_log.h"
-#include "core_init.h"
+#include "core.h"
 
 namespace Vexa::Runtime::Init {
     LaunchResult

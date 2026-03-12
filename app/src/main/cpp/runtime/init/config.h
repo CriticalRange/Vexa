@@ -2,8 +2,8 @@
 // Created by critical on 11.03.2026.
 //
 
-#ifndef VEXA_EMULATOR_CONFIG_INIT_H
-#define VEXA_EMULATOR_CONFIG_INIT_H
+#ifndef VEXA_EMULATOR_CONFIG_H
+#define VEXA_EMULATOR_CONFIG_H
 
 #pragma once
 
@@ -16,4 +16,4 @@ namespace Vexa::Runtime::Init {
     void ShutdownConfig();
 }
 
-#endif //VEXA_EMULATOR_CONFIG_INIT_H
+#endif //VEXA_EMULATOR_CONFIG_H
