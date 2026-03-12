@@ -60,6 +60,8 @@ tasks.registering(org.gradle.api.tasks.Exec::class) {
         "-G", "Ninja",
 
         "-DCMAKE_TOOLCHAIN_FILE=${ndkToolchain.get()}",
+        "-DCMAKE_BUILD_TYPE=RelWithDebInfo",
+        "-DENABLE_ASSERTIONS=ON",
         "-DANDROID_ABI=arm64-v8a",
         "-DANDROID_PLATFORM=android-30",
         "-DANDROID_STL=c++_shared",
@@ -122,6 +124,12 @@ android {
             cmake {
                 cppFlags += ""
             }
+        }
+    }
+
+    packaging {
+        jniLibs {
+            keepDebugSymbols += "**/*.so"
         }
     }
 

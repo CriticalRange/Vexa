@@ -11,6 +11,8 @@ cd "$BUILD_DIR"
 cmake "$FEX_ROOT" \
   -G Ninja \
   -DCMAKE_TOOLCHAIN_FILE="$NDK_TOOLCHAIN" \
+  -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+  -DENABLE_ASSERTIONS=ON \
   -DANDROID_ABI=arm64-v8a \
   -DANDROID_PLATFORM=android-30 \
   -DANDROID_STL=c++_shared \

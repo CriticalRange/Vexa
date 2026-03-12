@@ -19,6 +19,8 @@ namespace Vexa::Runtime::Init {
                                                 FEX::Config::PortableInformation{});
         FEXCore::Config::Set(FEXCore::Config::CONFIG_SILENTLOG,
                              "0"); // Set silent logs to 0 for dev
+        FEXCore::Config::Set(FEXCore::Config::CONFIG_OUTPUTLOG, "stderr");
+        // TODO: Attach this to Vexa Logger
         FEXCore::Config::ReloadMetaLayer(); // Apply Config Changes
 
         return {0, "OK", ""};

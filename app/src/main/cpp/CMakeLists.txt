@@ -28,6 +28,7 @@ project("vexa")
 add_library(${CMAKE_PROJECT_NAME} SHARED
     # List C/C++ source files with relative paths to this CMakeLists.txt.
     logging/native_log.cpp
+    logging/crash_signals.cpp
     runtime/init/preflight.cpp
     runtime/init/logging.cpp
     runtime/init/config.cpp

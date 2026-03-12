@@ -56,6 +56,20 @@ namespace Vexa::Runtime::Init {
                     ""
             };
         }
+        if (!state.signalDelegator) {
+            return {
+                    17,
+                    "Missing signal delegator",
+                    ""
+            };
+        }
+        if (!state.thunkHandler) {
+            return {
+                    18,
+                    "Missing thunk handler",
+                    ""
+            };
+        }
         state.parentThread = state.linuxSyscallHandler->TM.CreateThread(0, 0);
         if (!state.parentThread) {
             return {
@@ -64,6 +78,9 @@ namespace Vexa::Runtime::Init {
                     ""
             };
         }
+
+        state.linuxSyscallHandler->TM.TrackThread(state.parentThread);
+        state.linuxSyscallHandler->RegisterTLSState(state.parentThread);
         return {
                 0,
                 "OK",
@@ -73,9 +90,7 @@ namespace Vexa::Runtime::Init {
 
     void TeardownParentThread(RuntimeState &state) {
         if (!state.linuxSyscallHandler || !state.parentThread) return;
-        if (state.signalDelegator) {
-            state.signalDelegator->UninstallTLSState(state.parentThread);
-        };
+        state.linuxSyscallHandler->UninstallTLSState(state.parentThread);
         state.linuxSyscallHandler->TM.DestroyThread(state.parentThread);
         state.parentThread = nullptr;
     }

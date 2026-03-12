@@ -7,6 +7,7 @@
 #include <unistd.h>
 #include <sys/stat.h>
 
+#include "logging/crash_signals.h"
 #include "common/preflight_paths.h"
 #include "logging/native_log.h"
 #include "runtime/init/preflight.h"
@@ -28,6 +29,8 @@ Java_com_critical_vexaemulator_RuntimeBridge_nativeStartRuntime(JNIEnv *env, job
     Vexa::Utils::ScopedUtfChars thunkHost(env, thunkHostPath);
     Vexa::Utils::ScopedUtfChars thunkGuest(env, thunkGuestPath);
     Vexa::Utils::ScopedUtfChars artifactDir(env, artifactDirectory);
+
+    Vexa::Log::InstallSignalHandlers();
 
     if (!exec.ok() || !rootfs.ok() || !thunkHost.ok() || !thunkGuest.ok() || !working.ok() ||
         !artifactDir.ok()) {
@@ -77,5 +80,6 @@ extern "C"
 JNIEXPORT void JNICALL
 Java_com_critical_vexaemulator_RuntimeBridge_nativeStopRuntime(JNIEnv *env, jobject thiz) {
     VEXA_LOGI(env, "BOOT", "native stopRuntime is called", "{}");
+    Vexa::Log::UninstallSignalHandlers();
     Vexa::Runtime::StopRuntime();
 }
