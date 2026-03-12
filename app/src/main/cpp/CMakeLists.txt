@@ -36,6 +36,7 @@ add_library(${CMAKE_PROJECT_NAME} SHARED
     runtime/init/thread.cpp
     runtime/init/thunk.cpp
     runtime/init/syscalls.cpp
+    runtime/init/execute.cpp
     runtime/launch.cpp
     wrapper/jni.cpp
     main.cpp)
@@ -53,7 +54,9 @@ endif()
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../../../../third_party/rapidjson/include
     ${FEX_ROOT}/FEXCore/include
+    ${FEX_ROOT}/FEXHeaderUtils
     ${FEX_ROOT}/Source
+    ${FEX_ROOT}/Source/Tools/CommonTools
     ${FEX_ROOT}/Source/Tools/LinuxEmulation
     ${FEX_ROOT}/External/fmt/include
     ${FEX_ROOT}/External/robin-map/include

@@ -12,6 +12,7 @@
 #include "init/thread.h"
 #include "init/thunk.h"
 #include "init/syscalls.h"
+#include "init/execute.h"
 
 namespace Vexa::Runtime {
 
@@ -106,6 +107,17 @@ namespace Vexa::Runtime {
             return r;
         }
         VEXA_LOGI(env, "FEX", "SetupThreads OK", "{}");
+        r = Init::ExecuteRuntime(env, paths, g_state);
+        if (r.code) {
+            const std::string fields = Vexa::Log::AddFields({
+                                                                    Vexa::Log::F("code", r.code),
+                                                                    Vexa::Log::F("reason", r.reason)
+                                                            });
+            VEXA_LOGE(env, "FEX", "Failed Executing runtime!", fields.c_str());
+            CleanupAll();
+            return r;
+        }
+        VEXA_LOGI(env, "FEX", "ExecuteRuntime OK", "{}");
 
         g_state.fexStarted = true;
         VEXA_LOGI(env, "FEX", "FEX Started, sending OK", "{}");
