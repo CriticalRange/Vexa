@@ -1,10 +1,13 @@
 package com.critical.vexaemulator
 
+import android.app.ActivityManager
+import android.app.ApplicationExitInfo
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
 import android.content.pm.ActivityInfo
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
@@ -50,6 +53,7 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
     private var serviceMessenger: Messenger? = null
     private var runtimeBound = false
     private var pendingLaunchRequest: LaunchRequest? = null
+    private var lastReportedRuntimeExitKey: String? = null
     private var uiIncomingHandler = object : Handler(Looper.getMainLooper()) {
         override fun handleMessage(msg: Message) {
             when (msg.what) {
@@ -104,6 +108,95 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
         runCatching {
             serviceMessenger?.send(msg)
         }
+    }
+
+    private fun logLatestRuntimeExitInfo(tag: String) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
+
+        val am = getSystemService(ActivityManager::class.java) ?: return
+        val exits = runCatching {
+            am.getHistoricalProcessExitReasons(
+                packageName,
+                0,
+                20
+            )
+        }.getOrElse { e ->
+            VexaLogger.log(
+                LogLevel.ERROR,
+                LogCategory.FAILURE,
+                "ExitInfo query failed",
+                mapOf(
+                    "tag" to tag,
+                    "error" to (e.message ?: e.javaClass.simpleName)
+                )
+            )
+            return
+        }
+
+        val latestRuntimeProcess = exits.firstOrNull {
+            it.processName == "com.critical.vexaemulator:runtime"
+        }
+        if (latestRuntimeProcess == null) {
+            VexaLogger.log(
+                LogLevel.WARN,
+                LogCategory.FAILURE,
+                "No runtime exit info yet",
+                mapOf(
+                    "tag" to tag,
+                    "totalExits" to exits.size.toString()
+                )
+            )
+            return
+        }
+
+        val exitKey = buildString {
+            append(latestRuntimeProcess.timestamp)
+            append(":")
+            append(latestRuntimeProcess.pid)
+            append(":")
+            append(latestRuntimeProcess.reason)
+            append(":")
+            append(latestRuntimeProcess.status)
+            append(":")
+        }
+        if (exitKey == lastReportedRuntimeExitKey) {
+            return
+        }
+        lastReportedRuntimeExitKey = exitKey
+
+        val reasonText = when (latestRuntimeProcess.reason) {
+            ApplicationExitInfo.REASON_SIGNALED -> "SIGNALED"
+            ApplicationExitInfo.REASON_CRASH -> "CRASH"
+            ApplicationExitInfo.REASON_CRASH_NATIVE -> "CRASH_NATIVE"
+            ApplicationExitInfo.REASON_LOW_MEMORY -> "LOW_MEMORY"
+            ApplicationExitInfo.REASON_ANR -> "ANR"
+            else -> latestRuntimeProcess.reason.toString()
+        }
+
+        val traceSnippet = runCatching {
+            latestRuntimeProcess.traceInputStream?.bufferedReader()?.use {
+                it.readText().take(1200)
+            }
+        }.getOrNull().orEmpty()
+
+        if (latestRuntimeProcess.status.toString() == "0") {
+            return
+        }
+
+        VexaLogger.log(
+            level = LogLevel.ERROR,
+            category = LogCategory.FAILURE,
+            message = "Runtime process exit captured",
+            fields = mapOf(
+                "process" to latestRuntimeProcess.processName.orEmpty(),
+                "reason" to reasonText,
+                "status" to latestRuntimeProcess.status.toString(),
+                "importance" to latestRuntimeProcess.importance.toString(),
+                "timestamp" to latestRuntimeProcess.timestamp.toString(),
+                "description" to (latestRuntimeProcess.description ?: ""),
+                "trace" to traceSnippet
+            )
+        )
     }
 
     private fun sendStartRuntime(request: LaunchRequest) {
@@ -201,6 +294,15 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
         override fun onServiceDisconnected(name: ComponentName?) {
             runtimeBound = false
             serviceMessenger = null
+            Handler(Looper.getMainLooper()).post {
+                logLatestRuntimeExitInfo("t0")
+            }
+            Handler(Looper.getMainLooper()).postDelayed({
+                logLatestRuntimeExitInfo("t+500ms")
+            }, 500)
+            Handler(Looper.getMainLooper()).postDelayed({
+                logLatestRuntimeExitInfo("t+1500ms")
+            }, 1500)
             VexaLogger.log(
                 level = LogLevel.WARN,
                 category = LogCategory.BOOT,

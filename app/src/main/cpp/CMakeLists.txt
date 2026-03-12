@@ -59,6 +59,16 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     ${FEX_ROOT}/External/robin-map/include
     ${FEX_BUILD}/include)
 
+add_library(FEXJemallocLibs STATIC IMPORTED)
+set_target_properties(FEXJemallocLibs PROPERTIES IMPORTED_LOCATION "${FEX_BUILD}/FEXCore/Source/libJemallocLibs.a")
+add_library(FEXFmt STATIC IMPORTED)
+set_target_properties(FEXFmt PROPERTIES IMPORTED_LOCATION "${FEX_BUILD}/External/fmt/libfmt.a")
+add_library(FEXXXHash STATIC IMPORTED)
+set_target_properties(FEXXXHash PROPERTIES IMPORTED_LOCATION "${FEX_BUILD}/External/xxhash/cmake_unofficial/libxxhash.a")
+add_library(FEXCephes STATIC IMPORTED)
+set_target_properties(FEXCephes PROPERTIES IMPORTED_LOCATION "${FEX_BUILD}/External/cephes/libcephes_128bit.a")
+add_library(FEXSoftFloat STATIC IMPORTED)
+set_target_properties(FEXSoftFloat PROPERTIES IMPORTED_LOCATION "${FEX_BUILD}/External/SoftFloat-3e/libsoftfloat_3e.a")
 add_library(FEXTinyJson STATIC IMPORTED)
 set_target_properties(FEXTinyJson PROPERTIES IMPORTED_LOCATION "${FEX_BUILD}/External/tiny-json/libtiny-json.a")
 add_library(FEXCommon STATIC IMPORTED)
@@ -69,14 +79,18 @@ add_library(LinuxEmulation STATIC IMPORTED)
 set_target_properties(LinuxEmulation PROPERTIES IMPORTED_LOCATION "${FEX_BUILD}/Source/Tools/LinuxEmulation/libLinuxEmulation.a")
 add_library(FEXCore SHARED IMPORTED)
 set_target_properties(FEXCore PROPERTIES IMPORTED_LOCATION "${FEX_BUILD}/FEXCore/Source/libFEXCore.so")
-add_library(FEXCoreStatic STATIC IMPORTED)
-set_target_properties(FEXCoreStatic PROPERTIES IMPORTED_LOCATION "${FEX_BUILD}/FEXCore/Source/libFEXCore.a")
-add_library(FEXCoreBase STATIC IMPORTED)
+add_library(FEXCoreBase SHARED IMPORTED)
 set_target_properties(FEXCoreBase PROPERTIES IMPORTED_LOCATION "${FEX_BUILD}/FEXCore/Source/libFEXCore_Base.a")
+add_library(FEXCoreStatic SHARED IMPORTED)
+set_target_properties(FEXCoreStatic PROPERTIES IMPORTED_LOCATION "${FEX_BUILD}/FEXCore/Source/libFEXCore.a")
 
 target_compile_features(${CMAKE_PROJECT_NAME} PRIVATE cxx_std_20)
 
-target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE ARCHITECTURE_arm64=1) # TODO: Implement 32bit if needed later with a check here
+target_compile_definitions(${CMAKE_PROJECT_NAME}
+PRIVATE
+ARCHITECTURE_arm64=1 # TODO: Implement 32bit if needed later with a check here
+ASSERTIONS_ENABLED=1
+)
 
 # Specifies libraries CMake should link to your target library. You
 # can link libraries from various origins, such as libraries defined in this
@@ -84,11 +98,19 @@ target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE ARCHITECTURE_arm64=1) #
 target_link_libraries(${CMAKE_PROJECT_NAME}
     # List libraries link to the target library
     android
-    log
-    LinuxEmulation
-    FEXTinyJson
-    FEXCommon
-    FEXCommonTools
-    FEXCoreBase
-    FEXCoreStatic
-    FEXCore)
+          log
+          FEXCoreStatic
+          FEXCommon
+          FEXJemallocLibs
+          LinuxEmulation
+          FEXCommonTools
+          FEXTinyJson
+          FEXCoreBase
+          FEXFmt
+          FEXXXHash
+          FEXCephes
+          FEXSoftFloat
+          dl
+          atomic
+          m
+    )
