@@ -73,12 +73,25 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
                 }
 
                 RuntimeIpc.MSG_LOG_EVENT -> {
-                    RuntimeBridge.logFromNative(
-                        level = msg.data.getString(RuntimeIpc.KEY_LEVEL).orEmpty(),
-                        category = msg.data.getString(RuntimeIpc.KEY_CATEGORY).orEmpty(),
-                        message = msg.data.getString(RuntimeIpc.KEY_MESSAGE).orEmpty(),
-                        fieldsJson = msg.data.getString(RuntimeIpc.KEY_FIELDS_JSON).orEmpty(),
-                    )
+                    if (msg.what == RuntimeIpc.MSG_LOG_EVENT) {
+                        val category = msg.data.getString(RuntimeIpc.KEY_CATEGORY).orEmpty()
+                        val message = msg.data.getString(RuntimeIpc.KEY_MESSAGE).orEmpty()
+                        val fieldsJson = msg.data.getString(RuntimeIpc.KEY_FIELDS_JSON).orEmpty()
+
+                        if (category == "BOOT" && message.contains("RuntimeService created")) {
+                            runCatching {
+                                val obj = org.json.JSONObject(fieldsJson)
+                                val pid = obj.optString("runtimePid").toIntOrNull()
+                                if (pid != null) lastRuntimePid = pid
+                            }
+                        }
+                        RuntimeBridge.logFromNative(
+                            level = msg.data.getString(RuntimeIpc.KEY_LEVEL).orEmpty(),
+                            category = msg.data.getString(RuntimeIpc.KEY_CATEGORY).orEmpty(),
+                            message = msg.data.getString(RuntimeIpc.KEY_MESSAGE).orEmpty(),
+                            fieldsJson = msg.data.getString(RuntimeIpc.KEY_FIELDS_JSON).orEmpty(),
+                        )
+                    }
                 }
 
                 else -> super.handleMessage(msg)
@@ -91,6 +104,9 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
     private var showLoading by mutableStateOf(true)
     private var showDebugMenu by mutableStateOf(true) // For now, it's true; will be changed
     private var hideFilters by mutableStateOf(true)
+    private var lastRuntimePid: Int? = null
+    private var runtimeConnectedAtMs: Long = 0L
+    private var lastReportedExitKey: String? = null
 
     private fun sendRegister() {
         val msg = Message.obtain(null, RuntimeIpc.MSG_REGISTER_CLIENT).apply {
@@ -114,10 +130,11 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
 
         val am = getSystemService(ActivityManager::class.java) ?: return
+        val pid = lastRuntimePid ?: 0
         val exits = runCatching {
             am.getHistoricalProcessExitReasons(
                 packageName,
-                0,
+                pid,
                 20
             )
         }.getOrElse { e ->
@@ -127,6 +144,7 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
                 "ExitInfo query failed",
                 mapOf(
                     "tag" to tag,
+                    "pidFilter" to pid.toString(),
                     "error" to (e.message ?: e.javaClass.simpleName)
                 )
             )
@@ -134,31 +152,24 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
         }
 
         val latestRuntimeProcess = exits.firstOrNull {
-            it.processName == "com.critical.vexaemulator:runtime"
-        }
-        if (latestRuntimeProcess == null) {
+            it.processName == "com.critical.vexaemulator:runtime" && it.timestamp >= runtimeConnectedAtMs && (it.reason == ApplicationExitInfo.REASON_SIGNALED) || it.reason == ApplicationExitInfo.REASON_CRASH || it.reason == ApplicationExitInfo.REASON_CRASH_NATIVE
+        } ?: run {
             VexaLogger.log(
                 LogLevel.WARN,
                 LogCategory.FAILURE,
                 "No runtime exit info yet",
                 mapOf(
                     "tag" to tag,
+                    "pidFilter" to pid.toString(),
+                    "connectedAtMs" to runtimeConnectedAtMs.toString(),
                     "totalExits" to exits.size.toString()
                 )
             )
             return
         }
 
-        val exitKey = buildString {
-            append(latestRuntimeProcess.timestamp)
-            append(":")
-            append(latestRuntimeProcess.pid)
-            append(":")
-            append(latestRuntimeProcess.reason)
-            append(":")
-            append(latestRuntimeProcess.status)
-            append(":")
-        }
+        val exitKey =
+            "${latestRuntimeProcess.pid}:${latestRuntimeProcess.timestamp}:${latestRuntimeProcess.reason}:${latestRuntimeProcess.status}"
         if (exitKey == lastReportedRuntimeExitKey) {
             return
         }
@@ -188,13 +199,14 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
             category = LogCategory.FAILURE,
             message = "Runtime process exit captured",
             fields = mapOf(
-                "process" to latestRuntimeProcess.processName.orEmpty(),
-                "reason" to reasonText,
+                "tag" to tag,
+                "pid" to latestRuntimeProcess.pid.toString(),
+                "process" to (latestRuntimeProcess.processName ?: ""),
+                "reason" to latestRuntimeProcess.reason.toString(),
                 "status" to latestRuntimeProcess.status.toString(),
                 "importance" to latestRuntimeProcess.importance.toString(),
                 "timestamp" to latestRuntimeProcess.timestamp.toString(),
-                "description" to (latestRuntimeProcess.description ?: ""),
-                "trace" to traceSnippet
+                "description" to (latestRuntimeProcess.description ?: "")
             )
         )
     }
@@ -273,6 +285,7 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
             serviceMessenger = Messenger(service)
             runtimeBound = true
+            runtimeConnectedAtMs = System.currentTimeMillis()
             sendRegister()
 
             pendingLaunchRequest?.let {
@@ -294,6 +307,11 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
         override fun onServiceDisconnected(name: ComponentName?) {
             runtimeBound = false
             serviceMessenger = null
+            VexaLogger.log(
+                level = LogLevel.WARN,
+                category = LogCategory.BOOT,
+                message = "Runtime service disconnected"
+            )
             Handler(Looper.getMainLooper()).post {
                 logLatestRuntimeExitInfo("t0")
             }
@@ -303,11 +321,24 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
             Handler(Looper.getMainLooper()).postDelayed({
                 logLatestRuntimeExitInfo("t+1500ms")
             }, 1500)
+        }
+
+        override fun onBindingDied(name: ComponentName?) {
+            runtimeBound = false
+            serviceMessenger = null
             VexaLogger.log(
-                level = LogLevel.WARN,
-                category = LogCategory.BOOT,
-                message = "Runtime service disconnected"
+                LogLevel.ERROR,
+                LogCategory.BOOT,
+                "Runtime service binding died"
             )
+
+            Handler(Looper.getMainLooper()).post {
+                logLatestRuntimeExitInfo("binding_died_t0")
+            }
+            Handler(Looper.getMainLooper()).postDelayed({
+                logLatestRuntimeExitInfo("binding_died_t+500ms")
+            }, 500)
+            super.onBindingDied(name)
         }
     }
 

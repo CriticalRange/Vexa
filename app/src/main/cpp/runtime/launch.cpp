@@ -56,6 +56,12 @@ namespace Vexa::Runtime {
             return r;
         }
         VEXA_LOGI(env, "FEX", "SetupConfig OK", "{}");
+
+        if (!Init::InitFexFileLogSink(paths.artifactDir + "/fex_logman.log")) {
+            VEXA_LOGE(env, "FEX", "InitFexFileLogSink failed", "{}");
+        }
+        LogMan::Msg::IFmt("[VEXA_CANARY] file-sink-opened");
+
         r = Init::SetupCore(env, paths, g_state);
         if (r.code) {
             const std::string fields = Vexa::Log::AddFields({
@@ -102,6 +108,7 @@ namespace Vexa::Runtime {
         VEXA_LOGI(env, "FEX", "SetupThreads OK", "{}");
 
         g_state.fexStarted = true;
+        VEXA_LOGI(env, "FEX", "FEX Started, sending OK", "{}");
         return {0, "OK", ""};
     }
 

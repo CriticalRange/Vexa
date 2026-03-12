@@ -4,13 +4,23 @@
 
 #include <FEXCore/Config/Config.h>
 #include <Common/Config.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 #include "config.h"
+
 
 namespace Vexa::Runtime::Init {
     LaunchResult SetupConfig(const Vexa::Common::PreflightPaths &paths) {
         const char *programName =
                 paths.executable.empty() ? "unknown" : paths.executable.c_str();
+        const std::string stderrPath = paths.artifactDir + "/fex_stderr.log";
+        int fd = ::open(stderrPath.c_str(), O_CREAT | O_WRONLY | O_APPEND, 0644);
+        if (fd >= 0) {
+            (void) ::dup2(fd, STDERR_FILENO);
+            ::close(fd);
+        }
+
 
         FEXCore::Config::Shutdown(); // safe defensive
 

@@ -8,6 +8,10 @@
 #pragma once
 
 namespace Vexa::Runtime::Init {
+    bool InitFexFileLogSink(const std::string &logPath);
+
+    void CloseFexFileLogSink();
+
     void InstallLogHandlers();
 
     void UninstallLogHandlers();
