@@ -7,6 +7,8 @@
 
 #pragma once
 
+#include <string>
+
 namespace Vexa::Runtime::Init {
     bool InitFexFileLogSink(const std::string &logPath);
 

@@ -4,25 +4,20 @@
 
 #include <Tools/LinuxEmulation/Thunks.h>
 
+#include "../../common/status.h"
 #include "thunk.h"
 
 namespace Vexa::Runtime::Init {
-    LaunchResult SetupThunks(JNIEnv *env, RuntimeState &state) {
+    Vexa::Common::Result SetupThunks(JNIEnv *env, Resources &state) {
         state.thunkHandler = FEX::HLE::CreateThunkHandler();
         if (!state.thunkHandler.get()) {
-            return {
-                    13,
-                    "ThunkHandler failed",
-                    ""
-            };
+            return {Vexa::Common::Code::CreateThunkHandlerFailed, Vexa::Common::Phase::Init,
+                    "Create Thunk Handler failed"};
         }
 
         state.ctx->SetThunkHandler(state.thunkHandler.get());
 
-        return {
-                0,
-                "OK",
-                ""
-        };
+        return {Vexa::Common::Code::Ok, Vexa::Common::Phase::Init,
+                "Thunk handler initialized"};
     }
 }

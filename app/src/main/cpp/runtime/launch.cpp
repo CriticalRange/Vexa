@@ -1,14 +1,12 @@
 //
 // Created by critical on 10.03.2026.
 //
-#include <jni.h>
 
 #include "../logging/native_log.h"
 #include "launch.h"
 #include "init/config.h"
 #include "init/core.h"
 #include "init/logging.h"
-#include "init/preflight.h"
 #include "init/thread.h"
 #include "init/thunk.h"
 #include "init/syscalls.h"
@@ -16,7 +14,7 @@
 
 namespace Vexa::Runtime {
 
-    static RuntimeState g_state{};
+    static Resources g_state{};
 
     static void CleanupAll() {
         if (g_state.parentThread) {
@@ -38,16 +36,17 @@ namespace Vexa::Runtime {
         Init::ShutdownConfig();
     }
 
-    LaunchResult StartRuntime(JNIEnv *env, const Vexa::Common::PreflightPaths &paths) {
+    Vexa::Common::Result StartRuntime(JNIEnv *env, const Vexa::Common::Paths &paths) {
         if (g_state.fexStarted) {
-            return {0, "Already started", ""};
+            return {Vexa::Common::Code::AlreadyStarted, Vexa::Common::Phase::Init,
+                    "Runtime already started"};
         }
         VEXA_LOGI(env, "FEX", "FEXCore initialized", "{}");
 
         Init::InstallLogHandlers();
 
-        auto r = Init::SetupConfig(paths);
-        if (r.code) {
+        auto r = Init::SetupConfig(env, paths);
+        if (!r.Ok()) {
             const std::string fields = Vexa::Log::AddFields({
                                                                     Vexa::Log::F("code", r.code),
                                                                     Vexa::Log::F("reason", r.reason)
@@ -64,7 +63,7 @@ namespace Vexa::Runtime {
         LogMan::Msg::IFmt("[VEXA_CANARY] file-sink-opened");
 
         r = Init::SetupCore(env, paths, g_state);
-        if (r.code) {
+        if (!r.Ok()) {
             const std::string fields = Vexa::Log::AddFields({
                                                                     Vexa::Log::F("code", r.code),
                                                                     Vexa::Log::F("reason", r.reason)
@@ -75,7 +74,7 @@ namespace Vexa::Runtime {
         }
         VEXA_LOGI(env, "FEX", "SetupCore OK", "{}");
         r = Init::SetupThunks(env, g_state);
-        if (r.code) {
+        if (!r.Ok()) {
             const std::string fields = Vexa::Log::AddFields({
                                                                     Vexa::Log::F("code", r.code),
                                                                     Vexa::Log::F("reason", r.reason)
@@ -86,7 +85,7 @@ namespace Vexa::Runtime {
         }
         VEXA_LOGI(env, "FEX", "SetupThunks OK", "{}");
         r = Init::SetupSyscalls(env, g_state);
-        if (r.code) {
+        if (!r.Ok()) {
             const std::string fields = Vexa::Log::AddFields({
                                                                     Vexa::Log::F("code", r.code),
                                                                     Vexa::Log::F("reason", r.reason)
@@ -97,7 +96,7 @@ namespace Vexa::Runtime {
         }
         VEXA_LOGI(env, "FEX", "SetupSyscalls OK", "{}");
         r = Init::SetupThreads(g_state);
-        if (r.code) {
+        if (!r.Ok()) {
             const std::string fields = Vexa::Log::AddFields({
                                                                     Vexa::Log::F("code", r.code),
                                                                     Vexa::Log::F("reason", r.reason)
@@ -108,7 +107,7 @@ namespace Vexa::Runtime {
         }
         VEXA_LOGI(env, "FEX", "SetupThreads OK", "{}");
         r = Init::ExecuteRuntime(env, paths, g_state);
-        if (r.code) {
+        if (!r.Ok()) {
             const std::string fields = Vexa::Log::AddFields({
                                                                     Vexa::Log::F("code", r.code),
                                                                     Vexa::Log::F("reason", r.reason)
@@ -121,7 +120,8 @@ namespace Vexa::Runtime {
 
         g_state.fexStarted = true;
         VEXA_LOGI(env, "FEX", "FEX Started, sending OK", "{}");
-        return {0, "OK", ""};
+        return {Vexa::Common::Code::Ok, Vexa::Common::Phase::Init,
+                "Application launched successfully!"};
     }
 
     void StopRuntime() {

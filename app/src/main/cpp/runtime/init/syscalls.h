@@ -9,15 +9,15 @@
 
 #include <jni.h>
 
-#include "../launch.h"
-#include "runtime_state.h"
+#include "../../common/status.h"
+#include "resources.h"
 
 namespace Vexa::Runtime::Init {
-    LaunchResult SetupSyscalls(JNIEnv *env, RuntimeState &state);
+    Vexa::Common::Result SetupSyscalls(JNIEnv *env, Resources &state);
 
-    LaunchResult SetupParentThread(RuntimeState &state);
+    Vexa::Common::Result SetupParentThread(Resources &state);
 
-    void TeardownParentThread(RuntimeState &state);
+    void TeardownParentThread(Resources &state);
 }
 
 #endif //VEXA_EMULATOR_SYSCALLS_H

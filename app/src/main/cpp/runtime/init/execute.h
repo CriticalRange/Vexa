@@ -7,13 +7,13 @@
 
 #pragma once
 
-#include "../launch.h"
-#include "runtime_state.h"
-#include "../../common/preflight_paths.h"
+#include "resources.h"
+#include "../../common/paths.h"
+#include "../../common/status.h"
 
 namespace Vexa::Runtime::Init {
-    LaunchResult
-    ExecuteRuntime(JNIEnv *env, const Vexa::Common::PreflightPaths &paths, RuntimeState &state);
+    Vexa::Common::Result
+    ExecuteRuntime(JNIEnv *env, const Vexa::Common::Paths &paths, Resources &state);
 }
 
 #endif //VEXA_EMULATOR_EXECUTE_H

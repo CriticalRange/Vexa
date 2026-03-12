@@ -7,13 +7,11 @@
 
 #pragma once
 
-#include <jni.h>
-
-#include "../launch.h"
-#include "runtime_state.h"
+#include "../../common/status.h"
+#include "resources.h"
 
 namespace Vexa::Runtime::Init {
-    LaunchResult SetupThreads(RuntimeState &state);
+    Vexa::Common::Result SetupThreads(Resources &state);
 }
 
 #endif //VEXA_EMULATOR_THREAD_H

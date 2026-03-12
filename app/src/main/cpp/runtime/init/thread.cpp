@@ -8,13 +8,10 @@
 #include "syscalls.h"
 
 namespace Vexa::Runtime::Init {
-    LaunchResult SetupThreads(RuntimeState &state) {
+    Vexa::Common::Result SetupThreads(Resources &state) {
         if (!state.linuxSyscallHandler) {
-            return {
-                    15,
-                    "Syscall handler missing before thread setup",
-                    ""
-            };
+            return {Vexa::Common::Code::MissingSyscallHandler, Vexa::Common::Phase::Init,
+                    "Missing Syscall handler before thread setup"};
         }
 
         return SetupParentThread(state);

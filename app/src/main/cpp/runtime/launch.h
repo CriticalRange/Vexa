@@ -8,18 +8,13 @@
 #pragma once
 
 #include "jni.h"
-#include "../common/preflight_paths.h"
+#include "../common/status.h"
+#include "../common/paths.h"
 
 namespace Vexa::Runtime {
-    struct LaunchResult {
-        int code;
 
-        std::string reason;
-        std::string detail;
-    };
-
-    LaunchResult
-    StartRuntime(JNIEnv *env, const Vexa::Common::PreflightPaths &preflightPaths);
+    Vexa::Common::Result
+    StartRuntime(JNIEnv *env, const Vexa::Common::Paths &preflightPaths);
 
     void StopRuntime();
 }

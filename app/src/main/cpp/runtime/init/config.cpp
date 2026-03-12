@@ -7,11 +7,11 @@
 #include <fcntl.h>
 #include <unistd.h>
 
+#include "../../logging/native_log.h"
 #include "config.h"
 
-
 namespace Vexa::Runtime::Init {
-    LaunchResult SetupConfig(const Vexa::Common::PreflightPaths &paths) {
+    Vexa::Common::Result SetupConfig(JNIEnv *env, const Vexa::Common::Paths &paths) {
         const char *programName =
                 paths.executable.empty() ? "unknown" : paths.executable.c_str();
         const std::string stderrPath = paths.artifactDir + "/fex_stderr.log";
@@ -20,8 +20,6 @@ namespace Vexa::Runtime::Init {
             (void) ::dup2(fd, STDERR_FILENO);
             ::close(fd);
         }
-
-
         FEXCore::Config::Shutdown(); // safe defensive
 
         // Initializing FEX runtime here.
@@ -30,10 +28,20 @@ namespace Vexa::Runtime::Init {
         FEXCore::Config::Set(FEXCore::Config::CONFIG_SILENTLOG,
                              "0"); // Set silent logs to 0 for dev
         FEXCore::Config::Set(FEXCore::Config::CONFIG_OUTPUTLOG, "stderr");
+        const bool silentLogSet = FEXCore::Config::Exists(FEXCore::Config::CONFIG_SILENTLOG);
+        const bool outputLogSet = FEXCore::Config::Exists(FEXCore::Config::CONFIG_OUTPUTLOG);
+        if (!silentLogSet) {
+            VEXA_LOGW(env, "FEX", "SilentLog config doesn't exist. Expect less logs.", "{}");
+        }
+        if (!outputLogSet) {
+            VEXA_LOGW(env, "FEX", "OutputLog config doesn't exist. Logs will not be filed.",
+                      "{}");
+        }
         // TODO: Attach this to Vexa Logger
         FEXCore::Config::ReloadMetaLayer(); // Apply Config Changes
 
-        return {0, "OK", ""};
+        return {Vexa::Common::Code::Ok, Vexa::Common::Phase::Init,
+                "Config initialized"};
     }
 
     void ShutdownConfig() {

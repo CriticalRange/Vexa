@@ -2,15 +2,15 @@
 // Created by critical on 10.03.2026.
 //
 
-#ifndef VEXA_EMULATOR_PREFLIGHT_PATHS_H
-#define VEXA_EMULATOR_PREFLIGHT_PATHS_H
+#ifndef VEXA_EMULATOR_PATHS_H
+#define VEXA_EMULATOR_PATHS_H
 
 #pragma once
 
 #include <string>
 
 namespace Vexa::Common {
-    struct PreflightPaths {
+    struct Paths {
         std::string executable;
         std::string rootfs;
         std::string thunkHost;
@@ -20,4 +20,4 @@ namespace Vexa::Common {
     };
 }
 
-#endif //VEXA_EMULATOR_PREFLIGHT_PATHS_H
+#endif //VEXA_EMULATOR_PATHS_H

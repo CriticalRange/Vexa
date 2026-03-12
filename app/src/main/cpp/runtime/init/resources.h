@@ -2,8 +2,8 @@
 // Created by critical on 11.03.2026.
 //
 
-#ifndef VEXA_EMULATOR_RUNTIME_STATE_H
-#define VEXA_EMULATOR_RUNTIME_STATE_H
+#ifndef VEXA_EMULATOR_RESOURCES_H
+#define VEXA_EMULATOR_RESOURCES_H
 
 #pragma once
 
@@ -21,7 +21,7 @@ namespace FEX::HLE {
 }
 
 namespace Vexa::Runtime {
-    struct RuntimeState {
+    struct Resources {
         bool fexStarted{false};
         fextl::unique_ptr<FEXCore::Context::Context> ctx{};
         fextl::unique_ptr<FEX::HLE::SignalDelegator> signalDelegator{};
@@ -33,4 +33,4 @@ namespace Vexa::Runtime {
     };
 } // namespace Vexa::Runtime
 
-#endif //VEXA_EMULATOR_RUNTIME_STATE_H
+#endif //VEXA_EMULATOR_RESOURCES_H

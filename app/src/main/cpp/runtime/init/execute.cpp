@@ -8,18 +8,16 @@
 #include <Tools/LinuxEmulation/VDSO_Emulation.h>
 
 #include "../../logging/native_log.h"
+#include "../../common/status.h"
 #include "execute.h"
 
 namespace Vexa::Runtime::Init {
-    LaunchResult
-    ExecuteRuntime(JNIEnv *env, const Vexa::Common::PreflightPaths &paths, RuntimeState &state) {
+    Vexa::Common::Result
+    ExecuteRuntime(JNIEnv *env, const Vexa::Common::Paths &paths, Resources &state) {
         if (!state.ctx || !state.parentThread || !state.linuxSyscallHandler ||
             !state.thunkHandler || !state.signalDelegator) {
-            return {
-                    20,
-                    "ExecuteRuntime prerequisites missing",
-                    ""
-            };
+            return {Vexa::Common::Code::ExecutePrereqMissing, Vexa::Common::Phase::Init,
+                    "Execute prerequisites missing. this can be context, syscall, thread, thunk or signal handling."};
         }
         // Argv template: argv[0] = executable
         const fextl::string binary{paths.executable.c_str()};
@@ -41,11 +39,8 @@ namespace Vexa::Runtime::Init {
         );
 
         if (!loader.ELFWasLoaded()) {
-            return {
-                    21,
-                    "ELF Loader failed",
-                    paths.executable
-            };
+            return {Vexa::Common::Code::ElfLoaderFailed, Vexa::Common::Phase::Init,
+                    "Elf Loader failed."};
         }
         VEXA_LOGI(env, "FEX", "ELF Loader successful", "{}");
         state.linuxSyscallHandler->SetCodeLoader(&loader);
@@ -68,11 +63,8 @@ namespace Vexa::Runtime::Init {
         if (!loader.MapMemory(state.linuxSyscallHandler, state.parentThread->Thread)) {
             FEX::VDSO::UnloadVDSOMapping(state.parentThread->Thread, state.linuxSyscallHandler,
                                          vdso);
-            return {
-                    22,
-                    "MapMemory failed",
-                    paths.executable
-            };
+            return {Vexa::Common::Code::MapMemoryFailed, Vexa::Common::Phase::Init,
+                    "Map memory failed."};
         }
         VEXA_LOGI(env, "FEX", "MapMemory loaded", "{}");
 
@@ -97,16 +89,7 @@ namespace Vexa::Runtime::Init {
                                      vdso);
         VEXA_LOGI(env, "FEX", "VDSO Mappings unloaded (not needed anymore)", "{}");
 
-        return {
-                0,
-                "OK",
-                ""
-        };
-
-        return {
-                0,
-                "OK",
-                ""
-        };
+        return {Vexa::Common::Code::Ok, Vexa::Common::Phase::Init,
+                "Execution OK"};
     }
 } //namespace Vexa::Runtime::Init

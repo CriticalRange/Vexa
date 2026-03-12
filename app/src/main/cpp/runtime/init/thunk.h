@@ -9,11 +9,11 @@
 
 #include <jni.h>
 
-#include "../launch.h"
-#include "runtime_state.h"
+#include "../../common/status.h"
+#include "resources.h"
 
 namespace Vexa::Runtime::Init {
-    LaunchResult SetupThunks(JNIEnv *env, RuntimeState &state);
+    Vexa::Common::Result SetupThunks(JNIEnv *env, Resources &state);
 }
 
 #endif //VEXA_EMULATOR_THUNK_H

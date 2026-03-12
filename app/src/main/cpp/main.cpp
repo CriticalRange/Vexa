@@ -2,13 +2,10 @@
 // Created by critical on 9.03.2026.
 //
 #include <jni.h>
-#include <android/log.h>
-#include <dlfcn.h>
-#include <unistd.h>
-#include <sys/stat.h>
 
 #include "logging/crash_signals.h"
-#include "common/preflight_paths.h"
+#include "common/paths.h"
+#include "common/status.h"
 #include "logging/native_log.h"
 #include "runtime/init/preflight.h"
 #include "runtime/launch.h"
@@ -35,10 +32,10 @@ Java_com_critical_vexaemulator_RuntimeBridge_nativeStartRuntime(JNIEnv *env, job
     if (!exec.ok() || !rootfs.ok() || !thunkHost.ok() || !thunkGuest.ok() || !working.ok() ||
         !artifactDir.ok()) {
         VEXA_LOGE(env, "BOOT", "JNI string conversion failed", "{}");
-        return static_cast<jint>(Vexa::Runtime::PreflightCode::InternalError);
+        return static_cast<jint>(Vexa::Common::ToInt(Vexa::Common::Code::InternalError));
     }
 
-    Vexa::Common::PreflightPaths paths{
+    Vexa::Common::Paths paths{
             exec.get(),
             rootfs.get(),
             thunkHost.get(),
@@ -49,7 +46,7 @@ Java_com_critical_vexaemulator_RuntimeBridge_nativeStartRuntime(JNIEnv *env, job
 
     // Runs preflight
     auto preflight = Vexa::Runtime::RunPreflight(paths);
-    if (preflight.code != Vexa::Runtime::PreflightCode::Ok) {
+    if (!preflight.Ok()) {
         auto fields = Vexa::Log::AddFields({
                                                    Vexa::Log::F("reason", preflight.reason),
                                                    Vexa::Log::F("detail", preflight.detail)
@@ -59,7 +56,7 @@ Java_com_critical_vexaemulator_RuntimeBridge_nativeStartRuntime(JNIEnv *env, job
     }
     // Launches FEX Runtime
     auto launch = Vexa::Runtime::StartRuntime(env, paths);
-    if (launch.code != 0) {
+    if (!launch.Ok()) {
         auto fields = Vexa::Log::AddFields({
                                                    Vexa::Log::F("reason", launch.reason),
                                                    Vexa::Log::F("detail", launch.detail)
