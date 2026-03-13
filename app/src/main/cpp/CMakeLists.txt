@@ -30,9 +30,10 @@ add_library(${CMAKE_PROJECT_NAME} SHARED
     common/path_checks.cpp
     logging/native_log.cpp
     logging/crash_signals.cpp
+    runtime/init/client.cpp
+    runtime/init/config.cpp
     runtime/init/preflight.cpp
     runtime/init/logging.cpp
-    runtime/init/config.cpp
     runtime/init/core.cpp
     runtime/init/thread.cpp
     runtime/init/thunk.cpp

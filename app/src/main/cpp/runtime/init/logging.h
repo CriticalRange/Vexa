@@ -17,6 +17,8 @@ namespace Vexa::Runtime::Init {
     void InstallLogHandlers();
 
     void UninstallLogHandlers();
+
+    int GetFexFileLogSinkFd();
 }
 
 #endif //VEXA_EMULATOR_LOGGING_H

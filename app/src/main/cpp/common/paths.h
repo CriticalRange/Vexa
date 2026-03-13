@@ -17,6 +17,8 @@ namespace Vexa::Common {
         std::string thunkGuest;
         std::string workingDir;
         std::string artifactDir;
+
+        int execFd{-1}; // -1 here means path-based launch (current behavior for now)
     };
 }
 

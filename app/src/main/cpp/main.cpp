@@ -11,6 +11,8 @@
 #include "runtime/launch.h"
 #include "utils/jni_scoped.h"
 
+extern char **environ;
+
 extern "C"
 JNIEXPORT jint JNICALL
 Java_com_critical_vexaemulator_RuntimeBridge_nativeStartRuntime(JNIEnv *env, jobject thiz,
@@ -55,7 +57,7 @@ Java_com_critical_vexaemulator_RuntimeBridge_nativeStartRuntime(JNIEnv *env, job
         return static_cast<jint>(preflight.code);
     }
     // Launches FEX Runtime
-    auto launch = Vexa::Runtime::StartRuntime(env, paths);
+    auto launch = Vexa::Runtime::StartRuntime(env, paths, environ);
     if (!launch.Ok()) {
         auto fields = Vexa::Log::AddFields({
                                                    Vexa::Log::F("reason", launch.reason),

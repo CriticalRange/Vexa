@@ -88,4 +88,9 @@ namespace Vexa::Runtime::Init {
         LogMan::Throw::UnInstallHandler();
         CloseFexLogFile();
     }
+
+    int GetFexFileLogSinkFd() {
+        std::scoped_lock lk(g_fex_log_mu);
+        return g_fex_log_fd;
+    }
 }

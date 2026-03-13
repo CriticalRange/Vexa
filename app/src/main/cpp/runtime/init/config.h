@@ -12,7 +12,8 @@
 #include "../../common/status.h"
 
 namespace Vexa::Runtime::Init {
-    Vexa::Common::Result SetupConfig(JNIEnv *env, const Vexa::Common::Paths &paths);
+    Vexa::Common::Result
+    SetupConfig(JNIEnv *env, const Vexa::Common::Paths &paths, char **envp);
 
     void ShutdownConfig();
 }

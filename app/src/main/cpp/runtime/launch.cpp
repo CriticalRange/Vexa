@@ -11,6 +11,7 @@
 #include "init/thunk.h"
 #include "init/syscalls.h"
 #include "init/execute.h"
+#include "init/client.h"
 
 namespace Vexa::Runtime {
 
@@ -36,7 +37,8 @@ namespace Vexa::Runtime {
         Init::ShutdownConfig();
     }
 
-    Vexa::Common::Result StartRuntime(JNIEnv *env, const Vexa::Common::Paths &paths) {
+    Vexa::Common::Result
+    StartRuntime(JNIEnv *env, const Vexa::Common::Paths &paths, char **envp) {
         if (g_state.fexStarted) {
             return {Vexa::Common::Code::AlreadyStarted, Vexa::Common::Phase::Init,
                     "Runtime already started"};
@@ -45,7 +47,7 @@ namespace Vexa::Runtime {
 
         Init::InstallLogHandlers();
 
-        auto r = Init::SetupConfig(env, paths);
+        auto r = Init::SetupConfig(env, paths, envp);
         if (!r.Ok()) {
             const std::string fields = Vexa::Log::AddFields({
                                                                     Vexa::Log::F("code", r.code),
@@ -61,6 +63,18 @@ namespace Vexa::Runtime {
             VEXA_LOGE(env, "FEX", "InitFexFileLogSink failed", "{}");
         }
         LogMan::Msg::IFmt("[VEXA_CANARY] file-sink-opened");
+
+        r = Init::SetupClient(env, paths);
+        if (!r.Ok()) {
+            const std::string fields = Vexa::Log::AddFields({
+                                                                    Vexa::Log::F("code", r.code),
+                                                                    Vexa::Log::F("reason", r.reason)
+                                                            });
+            VEXA_LOGE(env, "FEX", "Failed setting up FEX Server client", fields.c_str());
+            CleanupAll();
+            return r;
+        }
+        VEXA_LOGI(env, "FEX", "SetupClient OK", "{}");
 
         r = Init::SetupCore(env, paths, g_state);
         if (!r.Ok()) {
@@ -95,6 +109,10 @@ namespace Vexa::Runtime {
             return r;
         }
         VEXA_LOGI(env, "FEX", "SetupSyscalls OK", "{}");
+
+        Init::TrackClientFDs(env, g_state);
+        VEXA_LOGI(env, "FEX", "Track FEX Server FDs OK", "{}");
+
         r = Init::SetupThreads(g_state);
         if (!r.Ok()) {
             const std::string fields = Vexa::Log::AddFields({

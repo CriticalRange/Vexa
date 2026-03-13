@@ -4,18 +4,58 @@
 
 #include <Linux/Utils/ELFContainer.h>
 #include <FEXCore/Config/Config.h>
+#include <Tools/CommonTools/PortabilityInfo.h>
 #include <Common/Config.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <limits.h>
+#include <stdlib.h>
 
 #include "../../logging/native_log.h"
 #include "config.h"
 
 namespace Vexa::Runtime::Init {
-    Vexa::Common::Result SetupConfig(JNIEnv *env, const Vexa::Common::Paths &paths) {
+    namespace {
+        std::string GetFilename(const std::string &path) {
+            const auto pos = path.find_last_of("/\\");
+            return (pos == std::string::npos) ? path : path.substr(pos + 1);
+        }
+
+        std::string CanonicalOrOriginal(const std::string &path) {
+            if (path.empty()) return {};
+            char resolved[PATH_MAX]{};
+            if (char *rp = ::realpath(path.c_str(), resolved); rp) {
+                return std::string(rp);
+            }
+            return path;
+        }
+    }
+
+    Vexa::Common::Result
+    SetupConfig(JNIEnv *env, const Vexa::Common::Paths &paths, char **envp) {
         const char *programName =
                 paths.executable.empty() ? "unknown" : paths.executable.c_str();
         const std::string stderrPath = paths.artifactDir + "/fex_stderr.log";
+        const auto portableInfo = FEX::ReadPortabilityInformation();
+
+        const bool fdBacked = paths.execFd != -1;
+
+        const std::string appConfigName = fdBacked
+                                          ? "<Anonymous>"
+                                          : GetFilename(paths.executable);
+
+        const std::string appFilename = fdBacked
+                                        ? "<Anonymous>"
+                                        : CanonicalOrOriginal(paths.executable);
+
+        const std::string programNameForConfig = appConfigName.empty() ? "Unknown" : appConfigName;
+        VEXA_LOGI(env, "FEX", "Setting up executable names",
+                  Vexa::Log::AddFields({
+                                               Vexa::Log::F("appConfigName", appConfigName),
+                                               Vexa::Log::F("appFilename", appFilename),
+                                               Vexa::Log::F("programNameForConfig",
+                                                            programNameForConfig)
+                                       }).c_str());
 
         const auto elfType = ELFLoader::ELFContainer::GetELFType(paths.executable.c_str());
         if (elfType == ELFLoader::ELFContainer::TYPE_NONE) {
@@ -42,13 +82,16 @@ namespace Vexa::Runtime::Init {
         FEXCore::Config::Shutdown(); // safe defensive
 
         // Initializing FEX runtime here.
-        FEX::Config::LoadConfig(/*ProgramName=*/fextl::string{programName}, /*envp=*/nullptr,
-                                                FEX::Config::PortableInformation{});
+        FEX::Config::LoadConfig(
+                /*ProgramName=*/fextl::string{programNameForConfig},
+                /*envp=*/envp,
+                                portableInfo);
         FEXCore::Config::Set(FEXCore::Config::CONFIG_ROOTFS, paths.rootfs);
         FEXCore::Config::Set(FEXCore::Config::CONFIG_THUNKHOSTLIBS, paths.thunkHost);
         FEXCore::Config::Set(FEXCore::Config::CONFIG_THUNKGUESTLIBS, paths.thunkGuest);
-        FEXCore::Config::Set(FEXCore::Config::CONFIG_APP_FILENAME, paths.executable);
-        FEXCore::Config::Set(FEXCore::Config::CONFIG_APP_CONFIG_NAME, paths.executable);
+        FEXCore::Config::Set(FEXCore::Config::CONFIG_APP_FILENAME, appFilename);
+        FEXCore::Config::Set(FEXCore::Config::CONFIG_APP_CONFIG_NAME,
+                             appConfigName.empty() ? "Unknown" : appConfigName);
         FEXCore::Config::Set(FEXCore::Config::CONFIG_SILENTLOG,
                              "0"); // Set silent logs to 0 for dev
         FEXCore::Config::Set(FEXCore::Config::CONFIG_OUTPUTLOG, "stderr");
