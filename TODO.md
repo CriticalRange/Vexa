@@ -20,6 +20,24 @@
   code and diagnostics.
 - [ ] Add initial thread lifecycle bring-up (`CreateThread` + `ExecuteThread`) behind preflight
   success, with guarded logging around enter/exit and crash boundaries.
+- [ ] Add a runtime snapshot API (read-only state/progress object) that exposes preflight/init/execute
+  stage completion flags and last failure `Code/Phase/Reason`, so Kotlin/UI and dependent subsystems
+  can gate behavior without parsing logs.
+- [ ] Design and implement supervisor/worker split: keep `RuntimeService` as supervisor in `:runtime`
+  and move native/FEX execution to a dedicated worker process (for example `:runtime_worker`), with
+  Binder/Messenger forwarding and worker-death recovery.
+- [ ] Add cross-process surface transport for worker mode: define explicit IPC for `Surface` handoff
+  (Parcelable/Binder path), ownership lifecycle, and teardown semantics so worker-render path can
+  consume the UI-created surface safely.
+- [ ] Add latency budget and transport plan for high-frequency input in worker mode
+  (`UI -> supervisor -> worker`), with criteria for when to keep Binder and when to switch to
+  shared memory or socket-based fast path.
+- [ ] Add worker-process file/FD permission validation for game/rootfs/thunk/artifact paths and any
+  URI-backed inputs: ensure grants are applied before worker start and log explicit permission-denied
+  diagnostics with failing path.
+- [ ] Track and patch FEX `/proc/pid/cmdline` remap behavior on Android app UIDs:
+  `prctl(PR_SET_MM, PR_SET_MM_MAP, ...)` fails without privileged caps (expected, non-fatal).
+  Action: downgrade to warn-once or skip on Android, and keep launch flow unaffected.
 
 ## Later: Additional Categories
 

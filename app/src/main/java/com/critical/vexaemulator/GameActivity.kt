@@ -47,6 +47,8 @@ import com.critical.vexaemulator.ui.GameLoadingOverlay
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
+private const val WORKER_PROCESS = "com.critical.vexaemulator:runtime_worker"
+
 class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
     private lateinit var gameSurfaceView: SurfaceView
 
@@ -152,7 +154,11 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
         }
 
         val latestRuntimeProcess = exits.firstOrNull {
-            it.processName == "com.critical.vexaemulator:runtime" && it.timestamp >= runtimeConnectedAtMs && (it.reason == ApplicationExitInfo.REASON_SIGNALED) || it.reason == ApplicationExitInfo.REASON_CRASH || it.reason == ApplicationExitInfo.REASON_CRASH_NATIVE
+            it.processName == WORKER_PROCESS &&
+                    it.timestamp >= runtimeConnectedAtMs &&
+                    (it.reason == ApplicationExitInfo.REASON_SIGNALED ||
+                            it.reason == ApplicationExitInfo.REASON_CRASH ||
+                            it.reason == ApplicationExitInfo.REASON_CRASH_NATIVE)
         } ?: run {
             VexaLogger.log(
                 LogLevel.WARN,

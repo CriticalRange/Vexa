@@ -192,7 +192,7 @@ fun GameDebugPanel(
             ) {
                 items(
                     items = filteredEntries,
-                    key = { "${it.timestampMs}-${it.category}-${it.message}" }
+                    key = { "${it.id}-${it.timestampMs}-${it.category}-${it.message}" }
                 ) { entry ->
                     LogEntryRow(entry = entry)
                 }

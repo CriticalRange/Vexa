@@ -32,6 +32,11 @@
             android:name=".runtime.RuntimeService"
             android:exported="false"
             android:process=":runtime" />
+
+        <service
+            android:name=".runtime.RuntimeWorkerService"
+            android:exported="false"
+            android:process=":runtime_worker" />
     </application>
 
 </manifest>

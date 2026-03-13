@@ -7,6 +7,7 @@
 
 #include "syscalls.h"
 #include "resources.h"
+#include "../../logging/native_log.h"
 
 namespace FEX::HLE::x64 {
     fextl::unique_ptr<FEXCore::HLE::SyscallHandler> CreateHandler(
@@ -35,6 +36,14 @@ namespace Vexa::Runtime::Init {
         state.linuxSyscallHandler = linuxSyscallHandler;
         state.syscallHandler = std::move(sysHandler);
         state.ctx->SetSyscallHandler(state.syscallHandler.get());
+
+        VEXA_LOGI(env, "FEX",
+                  "Syscall ABI",
+                  Vexa::Log::AddFields({
+                                               Vexa::Log::F("OS_ABI",
+                                                            static_cast<int>(state.syscallHandler->GetOSABI()))
+                                       }).c_str()
+        );
         return {Vexa::Common::Code::Ok, Vexa::Common::Phase::Init,
                 "Syscall Handler initialized OK"};
     }

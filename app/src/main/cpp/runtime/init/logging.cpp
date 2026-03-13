@@ -28,7 +28,7 @@ namespace {
             ::close(g_fex_log_fd);
             g_fex_log_fd = -1;
         }
-        g_fex_log_fd = ::open(logPath.c_str(), O_CREAT | O_WRONLY | O_APPEND, 0644);
+        g_fex_log_fd = ::open(logPath.c_str(), O_CREAT | O_WRONLY | O_TRUNC, 0644);
         return g_fex_log_fd >= 0;
     }
 
