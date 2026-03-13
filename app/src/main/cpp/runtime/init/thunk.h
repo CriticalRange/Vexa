@@ -5,8 +5,6 @@
 #ifndef VEXA_EMULATOR_THUNK_H
 #define VEXA_EMULATOR_THUNK_H
 
-#pragma once
-
 #include <jni.h>
 
 #include "../../common/status.h"

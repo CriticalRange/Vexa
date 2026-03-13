@@ -1,7 +1,9 @@
 //
 // Created by critical on 10.03.2026.
 //
-#pragma once
+
+#ifndef VEXA_EMULATOR_NATIVE_LOG_H
+#define VEXA_EMULATOR_NATIVE_LOG_H
 
 #include <jni.h>
 #include <initializer_list>
@@ -46,3 +48,5 @@ namespace Vexa::Log {
 #define VEXA_LOGF(env, category, msg, fieldsJson) Vexa::Log::VexaNativeLog((env), "FATAL", (category), (msg), (fieldsJson))
 
 } // namespace Vexa::Log
+
+#endif //VEXA_EMULATOR_NATIVE_LOG_H

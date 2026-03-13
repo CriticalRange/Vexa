@@ -38,6 +38,9 @@
 - [ ] Track and patch FEX `/proc/pid/cmdline` remap behavior on Android app UIDs:
   `prctl(PR_SET_MM, PR_SET_MM_MAP, ...)` fails without privileged caps (expected, non-fatal).
   Action: downgrade to warn-once or skip on Android, and keep launch flow unaffected.
+- [ ] Add allocator parity follow-up for 32-bit mode: after `SetupHooks()` +
+  `CreatePassthroughAllocator()`, mirror interpreter behavior that drains pre-reserved host allocator
+  space (the malloc loop) before guest execution.
 
 ## Later: Additional Categories
 

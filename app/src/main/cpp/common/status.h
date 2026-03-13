@@ -5,8 +5,6 @@
 #ifndef VEXA_EMULATOR_STATUS_H
 #define VEXA_EMULATOR_STATUS_H
 
-#pragma once
-
 #include <string>
 #include <utility>
 

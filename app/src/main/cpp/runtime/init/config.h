@@ -1,12 +1,11 @@
 //
 // Created by critical on 11.03.2026.
 //
-#include "jni.h"
 
 #ifndef VEXA_EMULATOR_CONFIG_H
 #define VEXA_EMULATOR_CONFIG_H
 
-#pragma once
+#include "jni.h"
 
 #include "../../common/paths.h"
 #include "../../common/status.h"

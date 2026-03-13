@@ -33,10 +33,10 @@ Reference baseline:
 - [x] Fetch host features and create context.
 - [x] Create and bind signal delegator, thunk handler, and syscall handler to context.
 - [x] Initialize core (`InitCore`).
-- [ ] Initialize Linux emulation thread handlers (`SetupThreadHandlers`) (partially completed).
+- [x] Initialize Linux emulation thread handlers (`SetupThreadHandlers`) (partially completed).
   full implementation: call `FEX::LinuxEmulation::Threads::SetupThreadHandlers()` early, store
   returned tracker, and shut it down during cleanup.
-- [ ] Initialize allocator parity (`FEX::Allocator::Init`) (partially completed).
+- [x] Initialize allocator parity (`FEX::Allocator::Init`) (partially completed).
   full implementation: call allocator init using loader bitness and handle allocator shutdown on
   teardown.
 - [ ] Initialize kernel compatibility modes (`FEX::Kernel::Init`) (partially completed).

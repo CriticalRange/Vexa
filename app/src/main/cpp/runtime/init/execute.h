@@ -5,8 +5,6 @@
 #ifndef VEXA_EMULATOR_EXECUTE_H
 #define VEXA_EMULATOR_EXECUTE_H
 
-#pragma once
-
 #include "resources.h"
 #include "../../common/paths.h"
 #include "../../common/status.h"

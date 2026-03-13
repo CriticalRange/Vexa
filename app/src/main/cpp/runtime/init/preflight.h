@@ -1,8 +1,6 @@
 #ifndef VEXA_EMULATOR_PREFLIGHT_H
 #define VEXA_EMULATOR_PREFLIGHT_H
 
-#pragma once
-
 #include "../../common/paths.h"
 #include "../../common/status.h"
 

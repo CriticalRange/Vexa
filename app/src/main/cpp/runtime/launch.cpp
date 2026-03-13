@@ -12,6 +12,7 @@
 #include "init/syscalls.h"
 #include "init/execute.h"
 #include "init/client.h"
+#include "init/allocator.h"
 
 namespace Vexa::Runtime {
 
@@ -21,6 +22,8 @@ namespace Vexa::Runtime {
         if (g_state.parentThread) {
             Init::TeardownParentThread(g_state);
         }
+        Init::TeardownThreadHandlers(g_state);
+        Init::ShutdownAllocator();
         if (g_state.ctx) {
             g_state.ctx->SetSyscallHandler(nullptr);
             g_state.ctx->SetThunkHandler(nullptr);
@@ -75,7 +78,28 @@ namespace Vexa::Runtime {
             return r;
         }
         VEXA_LOGI(env, "FEX", "SetupClient OK", "{}");
-
+        r = Init::SetupAllocator(env);
+        if (!r.Ok()) {
+            const std::string fields = Vexa::Log::AddFields({
+                                                                    Vexa::Log::F("code", r.code),
+                                                                    Vexa::Log::F("reason", r.reason)
+                                                            });
+            VEXA_LOGE(env, "FEX", "Failed setting up the allocator", fields.c_str());
+            CleanupAll();
+            return r;
+        }
+        VEXA_LOGI(env, "FEX", "SetupAllocator OK", "{}");
+        r = Init::SetupThreadHandlers(g_state);
+        if (!r.Ok()) {
+            const std::string fields = Vexa::Log::AddFields({
+                                                                    Vexa::Log::F("code", r.code),
+                                                                    Vexa::Log::F("reason", r.reason)
+                                                            });
+            VEXA_LOGE(env, "FEX", "Failed setting up thread handlers", fields.c_str());
+            CleanupAll();
+            return r;
+        }
+        VEXA_LOGI(env, "FEX", "SetupThreadHandlers OK", "{}");
         r = Init::SetupCore(env, paths, g_state);
         if (!r.Ok()) {
             const std::string fields = Vexa::Log::AddFields({

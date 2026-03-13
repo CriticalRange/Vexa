@@ -5,8 +5,6 @@
 #ifndef VEXA_EMULATOR_PATH_CHECKS_H
 #define VEXA_EMULATOR_PATH_CHECKS_H
 
-#pragma once
-
 #include <string>
 
 namespace Vexa::Common {

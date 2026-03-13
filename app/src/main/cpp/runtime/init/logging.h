@@ -5,8 +5,6 @@
 #ifndef VEXA_EMULATOR_LOGGING_H
 #define VEXA_EMULATOR_LOGGING_H
 
-#pragma once
-
 #include <string>
 
 namespace Vexa::Runtime::Init {

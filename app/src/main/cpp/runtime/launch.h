@@ -5,8 +5,6 @@
 #ifndef VEXA_EMULATOR_LAUNCH_H
 #define VEXA_EMULATOR_LAUNCH_H
 
-#pragma once
-
 #include "jni.h"
 #include "../common/status.h"
 #include "../common/paths.h"

@@ -5,8 +5,6 @@
 #ifndef VEXA_EMULATOR_CORE_H
 #define VEXA_EMULATOR_CORE_H
 
-#pragma once
-
 #include <jni.h>
 
 #include "../../common/paths.h"

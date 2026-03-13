@@ -5,8 +5,6 @@
 #ifndef VEXA_EMULATOR_SYSCALLS_H
 #define VEXA_EMULATOR_SYSCALLS_H
 
-#pragma once
-
 #include <jni.h>
 
 #include "../../common/status.h"

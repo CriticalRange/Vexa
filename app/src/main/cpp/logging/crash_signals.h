@@ -5,7 +5,6 @@
 #ifndef VEXA_EMULATOR_CRASH_SIGNALS_H
 #define VEXA_EMULATOR_CRASH_SIGNALS_H
 
-#pragma once
 namespace Vexa::Log {
     void InstallSignalHandlers();
 

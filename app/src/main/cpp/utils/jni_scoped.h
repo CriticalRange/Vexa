@@ -5,8 +5,6 @@
 #ifndef VEXA_EMULATOR_JNI_SCOPED_H
 #define VEXA_EMULATOR_JNI_SCOPED_H
 
-#pragma once
-
 #include <jni.h>
 #include <string>
 
