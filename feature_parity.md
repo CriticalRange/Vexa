@@ -39,7 +39,7 @@ Reference baseline:
 - [x] Initialize allocator parity (`FEX::Allocator::Init`) (partially completed).
   full implementation: call allocator init using loader bitness and handle allocator shutdown on
   teardown.
-- [ ] Initialize kernel compatibility modes (`FEX::Kernel::Init`) (partially completed).
+- [x] Initialize kernel compatibility modes (`FEX::Kernel::Init`) (partially completed).
   full implementation: call `FEX::Kernel::Init(loader.Is64BitMode(), ctx.get())` after context
   creation.
 - [ ] Initialize telemetry and profiler (`Telemetry::Initialize`, `Profiler::Init`).

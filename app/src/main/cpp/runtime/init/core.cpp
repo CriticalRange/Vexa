@@ -5,6 +5,7 @@
 #include <Common/HostFeatures.h>
 
 #include "../../logging/native_log.h"
+#include "kernel.h"
 #include "core.h"
 
 namespace Vexa::Runtime::Init {
@@ -18,6 +19,10 @@ namespace Vexa::Runtime::Init {
         if (!state.ctx) {
             return {Vexa::Common::Code::CreateContextFailed, Vexa::Common::Phase::Init,
                     "CreateNewContext failed"};
+        }
+        auto kernelResult = SetupKernelModes(env, state);
+        if (!kernelResult.Ok()) {
+            return kernelResult;
         }
         state.signalDelegator = FEX::HLE::CreateSignalDelegator(
                 state.ctx.get(),
