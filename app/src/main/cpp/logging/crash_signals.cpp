@@ -5,6 +5,7 @@
 #include "crash_signals.h"
 
 #include <signal.h>
+#include <ucontext.h>
 #include <string.h>
 #include <sys/syscall.h>
 #include <unistd.h>
@@ -15,6 +16,33 @@ namespace {
 
     static inline void WriteLit(const char *s, size_t n) {
         (void) !write(STDERR_FILENO, s, n);
+    }
+
+    static inline void WriteHex64(uint64_t v) {
+        char b[18] = "0x000000000000000";
+        for (int i = 17; i >= 2; --i) {
+            b[i] = "0123456789abcdef"[v & 0xF];
+            v >>= 4;
+        }
+        WriteLit(b, sizeof(b) - 1);
+    }
+
+    static inline void WriteU32(unsigned v) {
+        char buf[16];
+        int i = 0;
+        if (v == 0) {
+            WriteLit("0", 1);
+            return;
+        }
+
+        while (v && i < static_cast<int>(sizeof(buf))) {
+            buf[i++] = "0123456789"[v % 10U];
+            v /= 10U;
+        }
+
+        while (i--) {
+            (void) !write(STDERR_FILENO, &buf[i], 1);
+        }
     }
 
     template<size_t N>
@@ -53,7 +81,34 @@ namespace {
                 WriteLit("UNKNOWN\n");
                 break;
         }
-        (void) info; // we can dump si_code/si_addr with custom int-to-string here
+        if (info) {
+            WriteLit("[VEXA][CRASH] si_code=");
+            WriteU32((unsigned) info->si_code);
+            if (sig == SIGSEGV || sig == SIGBUS) {
+                WriteLit(" fault_addr=");
+                WriteHex64((uint64_t) (uintptr_t) info->si_addr);
+            }
+            if (sig == SIGSYS) {
+                WriteLit(" si_syscall=");
+                WriteU32((unsigned) info->si_syscall);
+                WriteHex64((uint64_t) (uintptr_t) info->si_addr);
+                WriteLit(" si_arch=0x");
+                WriteHex64((uint64_t) (uint32_t) info->si_arch);
+            }
+            WriteLit("\n");
+        }
+#if defined(__aarch64__)
+        auto *uc = reinterpret_cast<ucontext_t *>(uctx);
+        if (uc) {
+            WriteLit("[VEXA][CRASH] host_pc=");
+            WriteHex64(uc->uc_mcontext.pc);
+            WriteLit(" host_lr=");
+            WriteHex64(uc->uc_mcontext.regs[30]);
+            WriteLit(" host_sp=");
+            WriteHex64(uc->uc_mcontext.sp);
+            WriteLit("\n");
+        }
+#endif
         ReRaise(sig); // Re-raising so debuggerd/tombstone can log crash and handle it like normal
     }
 } // namespace

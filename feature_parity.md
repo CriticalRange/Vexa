@@ -81,12 +81,78 @@ Reference baseline:
 - [x] Shutdown config and uninstall log handlers.
 - [ ] Stop thread manager (`TM.Stop`) before teardown.
 - [ ] Free loader sections (`Loader.FreeSections`) after execution path ends.
-- [ ] Shutdown allocator and Linux emulation thread handler tracker.
+- [x] Shutdown allocator and Linux emulation thread handler tracker.
 
 ## 6) Optional/Debug Parity
 
 - [ ] GDB server integration (`GdbServer` config path).
 - [ ] Startup sleep/stall diagnostics parity.
+
+## 7) Wrapper Parity Matrix (Android-Aware, Source of Truth)
+
+Legend: `[x] done`, `[-] partial`, `[ ] pending`.
+
+### 7.1 Interpreter Bootstrap + Config
+
+- [x] LogMan handlers are installed before startup work (`InstallLogHandlers`).
+- [x] `LoadConfig` uses real `envp` and `ReadPortabilityInformation`.
+- [x] Meta layer reload + app/rootfs/thunk config keys are written.
+- [x] Canonical app naming parity (`APP_FILENAME`, `APP_CONFIG_NAME`, `<Anonymous>` on FD-backed).
+- [x] FEX server client setup is called before runtime bring-up.
+- [-] Upstream `FEX::Logging::Init()` parity is partial.
+  full implementation: mirror full upstream output routing path (`stderr` / `server` / file modes) and keep `OutputFD` semantics equivalent.
+- [ ] Host environment list parity (`HostEnvironment.All()` + `putenv` loop).
+- [ ] Startup policy hooks parity (`STALLPROCESS`, `STARTUPSLEEP`, `STARTUPSLEEPPROCNAME`).
+- [ ] Host kernel version warning parity (`CalculateHostKernelVersion` check).
+- [ ] GCS/shadow-stack safety parity (`FEX::Kernel::GCS::CheckForGCS`) with Android-safe behavior.
+
+### 7.2 Core + Kernel + Allocator Bring-up
+
+- [x] Host features fetch + context creation.
+- [x] Kernel compatibility shim is called after context creation.
+- [x] Signal delegator creation + context bind.
+- [x] `InitCore` is called and failure-gated.
+- [x] Thread handler tracker setup/teardown parity (`SetupThreadHandlers` / `Shutdown`).
+- [x] Allocator init + shutdown parity is wired in launch cleanup.
+- [-] 32-bit allocator parity is partial.
+  full implementation: add upstream reserve-drain loop after allocator hooks in 32-bit mode.
+
+### 7.3 Syscalls / Thread / Thunk / FD Ownership
+
+- [x] Thunk handler and syscall handler are created and bound.
+- [x] Parent thread is created/tracked and TLS registration is done through Linux syscall handler.
+- [x] FEX-owned FD tracking is present for server FD and file log sink FD.
+- [-] Protected-FD hardening is partial for Android.
+  full implementation: validate `/proc/self/fd`-based protections stay active and add explicit close/close_range mitigation path when unavailable.
+- [ ] Full x32 syscall path parity (branch on loader bitness + x32 handler + allocator handoff).
+- [ ] Seccomp FD restore parity (`DeserializeSeccompFD`).
+
+### 7.4 ELF Load + Execute Path
+
+- [x] ELF type validation + `ELFCodeLoader` bring-up.
+- [x] `SetCodeLoader`, VDSO load, thunk definition append, and VDSO symbol setup.
+- [x] `MapMemory`, BRK setup, RIP/RSP setup, `ExecuteThread`, VDSO unload, loader FD close.
+- [-] Argument/env forwarding parity is partial.
+  full implementation: pass full argv/parsed-argv/envp vectors (currently reduced path in wrapper execute flow).
+- [ ] Code cache parity (`SetCodeMapWriter` + `PopulateCodeCache`) under config gate.
+- [ ] `AT_EXECFD` / `FEX_EXECVEFD` launch-mode parity.
+- [ ] Shebang interpreter rewrite parity (`InterpreterHandler` behavior).
+
+### 7.5 Teardown + Lifecycle Parity
+
+- [x] Parent thread teardown, context handler reset, allocator shutdown, log handler uninstall, config shutdown.
+- [ ] Thread manager stop parity (`TM.Stop()` before final teardown).
+- [ ] Loader section free parity (`Loader.FreeSections()`).
+- [ ] Telemetry/profiler parity (`Telemetry::Initialize/Shutdown`, `Profiler::Init/Shutdown`).
+- [ ] `DisableSBRKAllocations` / `ReenableSBRKAllocations` parity.
+
+### 7.6 Android Compatibility Rules
+
+- [x] Kernel compatibility mode calls are non-fatal and logged with errno fields.
+- [x] `EINVAL` on `PR_GET/SET_MEM_MODEL`, `PR_GET/SET_COMPAT_INPUT`, and `PR_ARM64_SET_UNALIGN_ATOMIC` is treated as expected unsupported-kernel behavior.
+- [ ] Add explicit errno string fields in kernel logs (for example `EINVAL`, `EPERM`) in addition to numeric code.
+- [ ] Add one-line capability summary field (`kernelCompatUnsupported=true/false`) for easier UI/log filtering.
+- [ ] Keep `/proc/pid/cmdline` remap limitations documented: Android app UIDs cannot use privileged `PR_SET_MM` paths (warn-only policy).
 
 ## Current Priority (for `Close closing FEX FD ...`)
 
