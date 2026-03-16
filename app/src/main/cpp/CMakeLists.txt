@@ -42,6 +42,7 @@ add_library(${CMAKE_PROJECT_NAME} SHARED
     runtime/init/syscalls.cpp
     runtime/init/execute.cpp
     runtime/launch.cpp
+    runtime/surface_bridge.cpp
     wrapper/jni.cpp
     main.cpp)
 

@@ -15,6 +15,7 @@ import android.os.Looper
 import android.os.Message
 import android.os.Messenger
 import android.os.Process
+import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.WindowManager
@@ -246,12 +247,15 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
         }
     }
 
-    private fun sendSurfaceCreated() {
+    private fun sendSurfaceCreated(surface: Surface) {
         val msg = Message.obtain(
             null,
             RuntimeIpc.MSG_SURFACE_CREATED
         ).apply {
             replyTo = uiMessenger
+            data = Bundle().apply {
+                putParcelable(RuntimeIpc.KEY_SURFACE, surface)
+            }
         }
         runCatching {
             serviceMessenger?.send(msg)
@@ -435,11 +439,11 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
             message = "Game Surface is being created..."
         )
         val request = LaunchRequest(
-            executablePath = "/data/user/0/com.critical.vexaemulator/files/game/HytaleClient",
+            executablePath = "/data/user/0/com.critical.vexaemulator/files/game/Client/HytaleClient",
             rootfsPath = "/data/user/0/com.critical.vexaemulator/files/rootfs",
             thunkHostPath = "/data/user/0/com.critical.vexaemulator/files/thunks/host",
             thunkGuestPath = "/data/user/0/com.critical.vexaemulator/files/thunks/guest",
-            workingDirectory = "/data/user/0/com.critical.vexaemulator/files/",
+            workingDirectory = "/data/user/0/com.critical.vexaemulator/files/game/Client",
             artifactDirectory = "/data/user/0/com.critical.vexaemulator/files/artifacts/"
         )
         if (!runtimeBound || serviceMessenger == null) {
@@ -456,6 +460,7 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
         }
         sendStartRuntime(request)
         // TODO: Add a retry mechanism or exit later
+        sendSurfaceCreated(holder.surface)
         VexaLogger.log(
             level = LogLevel.INFO,
             category = LogCategory.SURFACE,

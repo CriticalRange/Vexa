@@ -2,32 +2,53 @@ package com.critical.vexaemulator.runtime
 
 import android.app.Service
 import android.content.Intent
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.Message
 import android.os.Messenger
+import android.view.Surface
 import com.critical.vexaemulator.RuntimeBridge
 import java.util.concurrent.Executors
 
 class RuntimeWorkerService : Service() {
-    private val workerExecutor =
-        Executors.newSingleThreadExecutor()
-    private var supervisorMessenger: Messenger? =
-        null
+    private val workerExecutor = Executors.newSingleThreadExecutor()
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var supervisorMessenger: Messenger? = null
+    private var currentSurface: Surface? = null
+
+    private fun getSurfaceCompat(bundle: Bundle): Surface? {
+        bundle.classLoader = Surface::class.java.classLoader
+        return if (Build.VERSION.SDK_INT >= 33) {
+            bundle.getParcelable(RuntimeIpc.KEY_SURFACE, Surface::class.java)
+        } else {
+            @Suppress("DEPRECATION")
+            bundle.getParcelable(RuntimeIpc.KEY_SURFACE)
+        }
+    }
 
     private fun sendToSupervisor(
         what: Int, fill:
         (Bundle.() -> Unit)? = null
     ) {
         val target = supervisorMessenger ?: return
+        val binder = target.binder
+        if (binder == null || !binder.isBinderAlive) {
+            supervisorMessenger = null
+            return
+        }
         val out = Message.obtain(null, what).apply {
             data = Bundle().apply {
                 fill?.invoke(this)
             }
         }
-        runCatching { target.send(out) }
+        try {
+            target.send(out)
+        } catch (_: Throwable) {
+            supervisorMessenger = null
+        }
     }
 
     private val nativeSink = object : NativeLogSink() {
@@ -36,24 +57,25 @@ class RuntimeWorkerService : Service() {
             category: String, message: String, fieldsJson:
             String
         ) {
-
-            sendToSupervisor(RuntimeIpc.MSG_LOG_EVENT) {
-                putString(
-                    RuntimeIpc.KEY_LEVEL,
-                    level
-                )
-                putString(
-                    RuntimeIpc.KEY_CATEGORY,
-                    category
-                )
-                putString(
-                    RuntimeIpc.KEY_MESSAGE,
-                    message
-                )
-                putString(
-                    RuntimeIpc.KEY_FIELDS_JSON,
-                    fieldsJson
-                )
+            mainHandler.post {
+                sendToSupervisor(RuntimeIpc.MSG_LOG_EVENT) {
+                    putString(
+                        RuntimeIpc.KEY_LEVEL,
+                        level
+                    )
+                    putString(
+                        RuntimeIpc.KEY_CATEGORY,
+                        category
+                    )
+                    putString(
+                        RuntimeIpc.KEY_MESSAGE,
+                        message
+                    )
+                    putString(
+                        RuntimeIpc.KEY_FIELDS_JSON,
+                        fieldsJson
+                    )
+                }
             }
         }
     }
@@ -96,6 +118,13 @@ class RuntimeWorkerService : Service() {
                     }
                 }
 
+                RuntimeIpc.MSG_WORKER_SET_SURFACE -> {
+                    val surface = getSurfaceCompat(msg.data)
+                    currentSurface?.release()
+                    currentSurface = surface
+                    RuntimeBridge.setRuntimeSurface(surface)
+                }
+
                 RuntimeIpc.MSG_WORKER_STOP_RUNTIME -> {
                     workerExecutor.execute {
                         RuntimeBridge.stopRuntime()
@@ -130,6 +159,9 @@ class RuntimeWorkerService : Service() {
 
     override fun onDestroy() {
         RuntimeBridge.setNativeLogSink(null)
+        RuntimeBridge.setRuntimeSurface(null)
+        currentSurface?.release()
+        currentSurface = null
         RuntimeBridge.stopRuntime()
         workerExecutor.shutdownNow()
         super.onDestroy()

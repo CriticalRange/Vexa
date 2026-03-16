@@ -5,6 +5,7 @@
 #include <Common/FEXServerClient.h>
 #include <Tools/CommonTools/PortabilityInfo.h>
 #include <Tools/LinuxEmulation/LinuxSyscalls/Syscalls.h>
+#include <cstdlib>
 
 #include "../../logging/native_log.h"
 
@@ -14,17 +15,29 @@
 namespace Vexa::Runtime::Init {
     Vexa::Common::Result SetupClient(JNIEnv *env,
                                      const Vexa::Common::Paths &paths) {
+        const char *disable_server = std::getenv("VEXA_DISABLE_FEXSERVER");
+        if (disable_server && disable_server[0] == '1') {
+            VEXA_LOGW(env, "FEX", "Skipping FEXServerClient setup (env override)", "{}");
+            return Vexa::Common::Result::Success(Vexa::Common::Phase::Init);
+        }
         const auto selfPath = FEX::GetSelfPath();
         const std::string_view interpreterPath = selfPath ? std::string_view(*selfPath)
                                                           : std::string_view(paths.executable);
 
         const bool setupReady = FEXServerClient::SetupClient(interpreterPath);
         if (!setupReady) {
-            VEXA_LOGW(env, "FEX", "FEX Server Client setup failed (continuing)", "{}");
+            VEXA_LOGE(env, "FEX", "FEX Server Client setup failed", Vexa::Log::AddFields({
+                                                                                                 Vexa::Log::F(
+                                                                                                         "interpreterPath",
+                                                                                                         std::string(
+                                                                                                                 interpreterPath))
+                                                                                         }).c_str());
             return {
-                    Vexa::Common::Code::Ok,
-                    Vexa::Common::Phase::Init,
-                    "FEX Server Client setup skipped"
+                    Vexa::Common::Result::Failure(
+                            Vexa::Common::Code::InternalError,
+                            Vexa::Common::Phase::Init,
+                            "FEX Server Client setup skipped"
+                    ),
             };
         }
         VEXA_LOGI(env, "FEX", "FEXServerClient setup OK", Vexa::Log::AddFields({

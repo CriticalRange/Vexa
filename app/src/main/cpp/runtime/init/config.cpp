@@ -37,7 +37,8 @@ namespace Vexa::Runtime::Init {
             dst.push_back(value);
         }
 
-        void AddDirProbeOverlays(std::vector<std::string> &dst, const std::string &dir, const std::string &stem,
+        void AddDirProbeOverlays(std::vector<std::string> &dst, const std::string &dir,
+                                 const std::string &stem,
                                  bool addSo1 = false) {
             if (dir.empty()) return;
             PushUnique(dst, dir + "/" + stem + ".so");
@@ -63,11 +64,13 @@ namespace Vexa::Runtime::Init {
         }
 
         std::string BuildThunkDBJson(const Vexa::Common::Paths &paths) {
-            const std::string gameDir = std::filesystem::path(paths.executable).parent_path().string();
+            const std::string gameDir = std::filesystem::path(
+                    paths.executable).parent_path().string();
             std::string gameDirAlias;
             constexpr const char *userPrefix = "/data/user/0/";
             if (gameDir.rfind(userPrefix, 0) == 0) {
-                gameDirAlias = std::string("/data/data/") + gameDir.substr(std::char_traits<char>::length(userPrefix));
+                gameDirAlias = std::string("/data/data/") +
+                               gameDir.substr(std::char_traits<char>::length(userPrefix));
             }
 
             std::vector<std::string> sdl3Overlays = {
@@ -222,10 +225,13 @@ namespace Vexa::Runtime::Init {
         }
         FEXCore::Config::Shutdown(); // safe defensive
 
+        ::setenv("VEXA_DISABLE_FEXSERVER", "1", 1);
+        VEXA_LOGW(env, "FEX", "VEXA_DISABLE_FEXSERVER=1 (runtime only for now", "");
+
         // Initializing FEX runtime here.
         FEX::Config::LoadConfig(
                 /*ProgramName=*/fextl::string{programNameForConfig},
-                /*envp=*/envp,
+                /*envp=*/nullptr, // don't scan raw envp on Android runtime_worker
                                 portableInfo);
         FEXCore::Config::ReloadMetaLayer(); // Apply Meta Config Changes
         FEXCore::Config::Set(FEXCore::Config::CONFIG_ROOTFS, paths.rootfs);

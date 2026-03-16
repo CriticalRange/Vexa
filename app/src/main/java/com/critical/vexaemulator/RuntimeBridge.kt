@@ -9,6 +9,13 @@ import org.json.JSONObject
 object RuntimeBridge {
 
     @JvmStatic
+
+    private external fun nativeSetRuntimeSurface(surface: android.view.Surface?)
+
+    fun setRuntimeSurface(surface: android.view.Surface?) {
+        nativeSetRuntimeSurface(surface)
+    }
+
     fun logFromNative(level: String, category: String, message: String, fieldsJson: String) {
         val lvl = runCatching { LogLevel.valueOf(level) }.getOrDefault(LogLevel.INFO)
         val cat = runCatching { LogCategory.valueOf(category) }.getOrDefault(LogCategory.RUNTIME)

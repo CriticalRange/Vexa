@@ -13,8 +13,9 @@ object RuntimeIpc {
     const val MSG_WORKER_START_RUNTIME = 100
     const val MSG_WORKER_STOP_RUNTIME = 101
     const val MSG_WORKER_START_RESULT = 102
+    const val MSG_WORKER_SET_SURFACE = 103
 
-
+    const val KEY_SURFACE = "surface"
     const val KEY_SURFACE_WIDTH = "surfaceWidth"
     const val KEY_SURFACE_HEIGHT = "surfaceHeight"
     const val KEY_SURFACE_FORMAT = "surfaceFormat"

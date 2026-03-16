@@ -167,6 +167,13 @@
   viable calls to `EGL/GLES`, phase 3 = remove stubs
   only after runtime validation.
 
+## Hytale Integration
+
+- [ ] Implement CDN game assets retrieval (current
+  startup error indicates assets directory/content is
+  missing from game runtime view).
+- [ ] Make "Login to Hytale" button functional.
+
 ## Later: Additional Categories
 
 - [ ] Add new TODO categories here as runtime architecture evolves.

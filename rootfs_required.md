@@ -24,10 +24,14 @@ Source binary:
 - [x] `/etc/ld.so.cache`
 - [x] `/etc/ld.so.conf`
 - [x] `/etc/ld.so.conf.d`
+- [x] `/usr/lib/x86_64-linux-gnu/libssl.so.3` (with `libssl.so` symlink)
+- [x] `/usr/lib/x86_64-linux-gnu/libcrypto.so.3` (with `libcrypto.so` symlink)
+- [x] `/usr/lib/i386-linux-gnu/libssl.so.3` (with `libssl.so` symlink)
+- [x] `/usr/lib/i386-linux-gnu/libcrypto.so.3` (with `libcrypto.so` symlink)
 
 ## Observed Potential Runtime Libraries (from binary strings)
 
-- [ ] `libssl.so` family (`libssl.so`, `libssl.so.1.0.0`, `libssl.so.1.0.2`, `libssl.so.1.1`, `libssl.so.10`, `libssl.so.3`)
+- [x] `libssl.so` family (`libssl.so`, `libssl.so.1.0.0`, `libssl.so.1.0.2`, `libssl.so.1.1`, `libssl.so.10`, `libssl.so.3`) (`.so.3` + unversioned symlink added)
 - [ ] `libicui18n.so`
 - [ ] `libicuuc.so`
 - [ ] `libgssapi_krb5.so.2`

@@ -5,6 +5,7 @@
 #include "crash_signals.h"
 
 #include <signal.h>
+#include <dlfcn.h>
 #include <ucontext.h>
 #include <string.h>
 #include <sys/syscall.h>
@@ -45,9 +46,48 @@ namespace {
         }
     }
 
+    static inline void WriteCStr(const char *s) {
+        if (!s) {
+            return;
+        }
+        size_t n = 0;
+        while (s[n] && n < 4096) {
+            ++n;
+        }
+        WriteLit(s, n);
+    }
+
     template<size_t N>
     static inline void WriteLit(const char (&s)[N]) {
         (void) !write(STDERR_FILENO, s, N - 1); // exclude "\0"
+    }
+
+    static inline void WriteAddrInfo(const char *label, uint64_t addr) {
+        WriteLit("[VEXA][CRASH] ");
+        WriteCStr(label);
+        WriteLit("=");
+        WriteHex64(addr);
+
+        Dl_info info{};
+        if (dladdr(reinterpret_cast<void *>(addr), &info)) {
+            if (info.dli_fname) {
+                WriteLit(" module=");
+                WriteCStr(info.dli_fname);
+            }
+            if (info.dli_fbase) {
+                WriteLit(" offset=");
+                WriteHex64(addr - reinterpret_cast<uint64_t>(info.dli_fbase));
+            }
+            if (info.dli_sname) {
+                WriteLit(" sym=");
+                WriteCStr(info.dli_sname);
+                if (info.dli_saddr) {
+                    WriteLit("+");
+                    WriteHex64(addr - reinterpret_cast<uint64_t>(info.dli_saddr));
+                }
+            }
+        }
+        WriteLit("\n");
     }
 
     void ReRaise(int sig) {
@@ -107,6 +147,8 @@ namespace {
             WriteLit(" host_sp=");
             WriteHex64(uc->uc_mcontext.sp);
             WriteLit("\n");
+            WriteAddrInfo("pc_info", uc->uc_mcontext.pc);
+            WriteAddrInfo("lr_info", uc->uc_mcontext.regs[30]);
         }
 #endif
         ReRaise(sig); // Re-raising so debuggerd/tombstone can log crash and handle it like normal

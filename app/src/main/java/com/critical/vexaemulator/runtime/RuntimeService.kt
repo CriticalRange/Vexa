@@ -4,6 +4,7 @@ import android.app.Service
 import android.content.ComponentName
 import android.content.Intent
 import android.content.ServiceConnection
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
@@ -11,6 +12,7 @@ import android.os.Looper
 import android.os.Message
 import android.os.Messenger
 import android.os.Process
+import android.view.Surface
 import com.critical.vexaemulator.logging.LogCategory
 import com.critical.vexaemulator.logging.LogLevel
 import com.critical.vexaemulator.logging.VexaLogger
@@ -22,6 +24,31 @@ class RuntimeService : Service() {
     private var workerMessenger: Messenger? = null
     private var workerBound = false
     private var pendingWorkerStart: LaunchRequest? = null
+    private var pendingSurface: Surface? = null
+
+    private fun getSurfaceCompat(bundle: Bundle): Surface? {
+        bundle.classLoader = Surface::class.java.classLoader
+        return if (Build.VERSION.SDK_INT >= 33) {
+            bundle.getParcelable(RuntimeIpc.KEY_SURFACE, Surface::class.java)
+        } else {
+            @Suppress("DEPRECATION")
+            bundle.getParcelable(RuntimeIpc.KEY_SURFACE)
+        }
+    }
+
+    private fun sendSurfaceToWorker(surface: Surface?) {
+        val target = workerMessenger ?: return
+        val out = Message.obtain(
+            null,
+            RuntimeIpc.MSG_WORKER_SET_SURFACE
+        ).apply {
+            replyTo = workerReplyMessenger
+            data = Bundle().apply {
+                putParcelable(RuntimeIpc.KEY_SURFACE, surface)
+            }
+        }
+        runCatching { target.send(out) }
+    }
 
     private val workerReplyHandler = object : Handler(Looper.getMainLooper()) {
         override fun handleMessage(msg: Message) {
@@ -54,7 +81,9 @@ class RuntimeService : Service() {
             workerMessenger = Messenger(service)
             workerBound = true
             emitLog("INFO", "BOOT", "Runtime worker connected")
-
+            pendingSurface?.let {
+                sendSurfaceToWorker(it)
+            }
             pendingWorkerStart?.let {
                 sendStartToWorker(it)
                 pendingWorkerStart = null
@@ -183,9 +212,11 @@ class RuntimeService : Service() {
                 }
 
                 RuntimeIpc.MSG_SURFACE_CREATED -> {
+                    val surface = getSurfaceCompat(msg.data)
+                    pendingSurface?.release()
+                    pendingSurface = surface
                     emitLog("INFO", "SURFACE", "Surface created in UI process")
-                    // TODO: add real surface transport,
-                    //  initialize renderer binding here
+                    sendSurfaceToWorker(surface)
                 }
 
                 RuntimeIpc.MSG_SURFACE_CHANGED -> {
@@ -198,8 +229,10 @@ class RuntimeService : Service() {
 
                         """{"format":"$surfaceFormat","width":"$surfaceWidth","height":"$surfaceHeight"}"""
                     )
+                    sendSurfaceToWorker(null)
+                    pendingSurface?.release()
+                    pendingSurface = null
                     // TODO: RuntimeBridge.onRuntimeSurfaceChanged(width, height)
-                    //  once routed in runtime process
                 }
 
                 RuntimeIpc.MSG_SURFACE_DESTROYED -> {
@@ -290,6 +323,8 @@ class RuntimeService : Service() {
     override fun onDestroy() {
         sendStopToWorker()
         unbindWorkerSafe()
+        pendingSurface?.release()
+        pendingSurface = null
         super.onDestroy()
     }
 }

@@ -10,6 +10,7 @@
 #include "runtime/init/preflight.h"
 #include "runtime/launch.h"
 #include "utils/jni_scoped.h"
+#include "runtime/surface_bridge.h"
 
 extern char **environ;
 
@@ -80,5 +81,16 @@ JNIEXPORT void JNICALL
 Java_com_critical_vexaemulator_RuntimeBridge_nativeStopRuntime(JNIEnv *env, jobject thiz) {
     VEXA_LOGI(env, "BOOT", "native stopRuntime is called", "{}");
     Vexa::Log::UninstallSignalHandlers();
+    Vexa::Runtime::SurfaceBridge::Clear();
     Vexa::Runtime::StopRuntime();
+}
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_com_critical_vexaemulator_RuntimeBridge_nativeSetRuntimeSurface(
+        JNIEnv *env,
+        jobject /*thiz*/,
+        jobject surface
+) {
+    Vexa::Runtime::SurfaceBridge::Set(env, surface);
 }

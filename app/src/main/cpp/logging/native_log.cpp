@@ -50,13 +50,33 @@ namespace Vexa::Log {
 
     void VexaNativeLog(JNIEnv *env, const char *level, const char *category, const char *msg,
                        const char *fieldsJson) {
+        if (env->ExceptionCheck()) {
+            env->ExceptionClear();
+            return;
+        }
         if (!env) return;
 
 
         jstring jLevel = env->NewStringUTF(level ? level : "INFO");
+        if (env->ExceptionCheck() || !jLevel) {
+            env->ExceptionClear();
+            return;
+        }
         jstring jCategory = env->NewStringUTF(category ? category : "RUNTIME");
+        if (env->ExceptionCheck() || !jCategory) {
+            env->ExceptionClear();
+            return;
+        }
         jstring jMsg = env->NewStringUTF(msg ? msg : "");
+        if (env->ExceptionCheck() || !jMsg) {
+            env->ExceptionClear();
+            return;
+        }
         jstring jFields = env->NewStringUTF(fieldsJson ? fieldsJson : "{}");
+        if (env->ExceptionCheck() || !jFields) {
+            env->ExceptionClear();
+            return;
+        }
 
         if (!jLevel || !jCategory || !jMsg || !jFields) {
             __android_log_print(ANDROID_LOG_ERROR, VEXA_TAG,
