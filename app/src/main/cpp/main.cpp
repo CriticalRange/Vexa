@@ -1,7 +1,11 @@
 //
 // Created by critical on 9.03.2026.
 //
+
 #include <jni.h>
+#include <vector>
+#include <string>
+#include <cstdlib>
 
 #include "logging/crash_signals.h"
 #include "common/paths.h"
@@ -12,7 +16,27 @@
 #include "utils/jni_scoped.h"
 #include "runtime/surface_bridge.h"
 
-extern char **environ;
+static std::vector<std::string>
+JStringArrayToVector(JNIEnv *env, jobjectArray arr) {
+    std::vector<std::string> out;
+    if (!arr) return out;
+    const jsize n = env->GetArrayLength(arr);
+    out.reserve(static_cast<size_t>(n));
+    for (jsize i = 0; i < n; ++i) {
+        auto *jstr =
+                static_cast<jstring>(env->GetObjectArrayElement(arr,
+                                                                i));
+        if (!jstr) continue;
+        const char *raw =
+                env->GetStringUTFChars(jstr, nullptr);
+        if (raw) {
+            out.emplace_back(raw);
+            env->ReleaseStringUTFChars(jstr, raw);
+        }
+        env->DeleteLocalRef(jstr);
+    }
+    return out;
+}
 
 extern "C"
 JNIEXPORT jint JNICALL
@@ -22,7 +46,9 @@ Java_com_critical_vexaemulator_RuntimeBridge_nativeStartRuntime(JNIEnv *env, job
                                                                 jstring thunkHostPath,
                                                                 jstring thunkGuestPath,
                                                                 jstring workingDirectory,
-                                                                jstring artifactDirectory) {
+                                                                jstring artifactDirectory,
+                                                                jobjectArray launchEnv,
+                                                                jobjectArray launchArgs) {
     Vexa::Utils::ScopedUtfChars exec(env, executable);
     Vexa::Utils::ScopedUtfChars working(env, workingDirectory);
     Vexa::Utils::ScopedUtfChars rootfs(env, rootfsPath);
@@ -47,6 +73,11 @@ Java_com_critical_vexaemulator_RuntimeBridge_nativeStartRuntime(JNIEnv *env, job
             artifactDir.get()
     };
 
+    auto launchEnvVec = JStringArrayToVector(env,
+                                             launchEnv);
+    auto launchArgsVec = JStringArrayToVector(env,
+                                              launchArgs);
+
     // Runs preflight
     auto preflight = Vexa::Runtime::RunPreflight(paths);
     if (!preflight.Ok()) {
@@ -58,7 +89,7 @@ Java_com_critical_vexaemulator_RuntimeBridge_nativeStartRuntime(JNIEnv *env, job
         return static_cast<jint>(preflight.code);
     }
     // Launches FEX Runtime
-    auto launch = Vexa::Runtime::StartRuntime(env, paths, environ);
+    auto launch = Vexa::Runtime::StartRuntime(env, paths, launchEnvVec, launchArgsVec);
     if (!launch.Ok()) {
         auto fields = Vexa::Log::AddFields({
                                                    Vexa::Log::F("reason", launch.reason),

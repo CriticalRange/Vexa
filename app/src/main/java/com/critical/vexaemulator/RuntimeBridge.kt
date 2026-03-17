@@ -53,7 +53,9 @@ object RuntimeBridge {
         thunkHostPath: String,
         thunkGuestPath: String,
         workingDirectory: String,
-        artifactDirectory: String
+        artifactDirectory: String,
+        launchEnv: Array<String>,
+        launchArgs: Array<String>,
     ): Int
 
     private external fun nativeStopRuntime()
@@ -78,7 +80,9 @@ object RuntimeBridge {
             thunkHostPath = request.thunkHostPath,
             thunkGuestPath = request.thunkGuestPath,
             workingDirectory = request.workingDirectory,
-            artifactDirectory = request.artifactDirectory
+            artifactDirectory = request.artifactDirectory,
+            launchEnv = request.launchEnv.toTypedArray(),
+            launchArgs = request.launchArgs.toTypedArray(),
         )
 
         if (preflightCode != 0) {

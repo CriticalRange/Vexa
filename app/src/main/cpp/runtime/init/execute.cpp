@@ -1,7 +1,10 @@
 //
 // Created by critical on 12.03.2026.
 //
+
 #include <jni.h>
+#include <vector>
+#include <string>
 
 #include <FEXCore/Core/X86Enums.h>
 #include <Tools/FEXInterpreter/ELFCodeLoader.h>
@@ -16,19 +19,45 @@
 
 namespace Vexa::Runtime::Init {
     Vexa::Common::Result
-    ExecuteRuntime(JNIEnv *env, const Vexa::Common::Paths &paths, Resources &state) {
+    ExecuteRuntime(JNIEnv *env, const Vexa::Common::Paths &paths, Resources &state,
+                   const std::vector<std::string> &launchEnv,
+                   const std::vector<std::string> &launchArgs) {
         if (!state.ctx || !state.parentThread || !state.linuxSyscallHandler ||
             !state.thunkHandler || !state.signalDelegator) {
             return {Vexa::Common::Code::ExecutePrereqMissing, Vexa::Common::Phase::Init,
                     "Execute prerequisites missing. this can be context, syscall, thread, thunk or signal handling."};
         }
-        // Argv template: argv[0] = executable
+        // executable
         const fextl::string binary{paths.executable.c_str()};
+
+        // rootfs
         const fextl::string rootfs{paths.rootfs.c_str()};
+
+        // Arguments
         fextl::vector<fextl::string> args;
         args.emplace_back(binary);
-        fextl::vector<fextl::string> parsedArgs;
-        parsedArgs.emplace_back(binary);
+        for (const auto &arg: launchArgs) {
+            if (!arg.empty()) {
+                args.emplace_back(arg.c_str());
+            }
+        }
+        fextl::vector<fextl::string> parsedArgs = args;
+
+        // Environment Variables
+        fextl::vector<fextl::string> envVars;
+        envVars.reserve(launchEnv.size());
+        for (const auto &entry: launchEnv) {
+            if (!entry.empty() && entry.find("=") != std::string::npos) {
+                envVars.emplace_back(entry.c_str());
+            }
+        }
+
+        fextl::vector<char *> envpVec;
+        envpVec.reserve(envVars.size() + 1);
+        for (auto &e: envVars) {
+            envpVec.emplace_back(const_cast<char *>(e.c_str()));
+        }
+        envpVec.emplace_back(nullptr);
 
         auto mkStat = [](const std::string &p) {
             struct stat st{};
@@ -59,7 +88,7 @@ namespace Vexa::Runtime::Init {
                 rootfs, // rootfs obviously
                 args,
                 parsedArgs,
-                nullptr, // envp, for now empty
+                envpVec.data(),
                 nullptr, // AdditionalEnvp
                 false //SkipInterpreter
         );

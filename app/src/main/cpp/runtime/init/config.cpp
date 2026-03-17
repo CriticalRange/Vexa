@@ -149,7 +149,8 @@ namespace Vexa::Runtime::Init {
     }
 
     Vexa::Common::Result
-    SetupConfig(JNIEnv *env, const Vexa::Common::Paths &paths, char **envp) {
+    SetupConfig(JNIEnv *env, const Vexa::Common::Paths &paths,
+                const std::vector<std::string> &launchEnv) {
         const char *programName =
                 paths.executable.empty() ? "unknown" : paths.executable.c_str();
         const std::string stderrPath = paths.artifactDir + "/fex_stderr.log";

@@ -441,46 +441,55 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
             message = "Game Surface is being created..."
         )
         val authManager = com.critical.vexaemulator.auth.AuthManager(applicationContext)
-        val authState = authManager.load()
-        if (authState?.hasGameTokens != true) {
-            VexaLogger.log(
-                LogLevel.ERROR,
-                LogCategory.FAILURE,
-                "Cannot launch: auth tokens missing"
-            )
-            return
-        }
-        val (launchEnv, launchArgs) = authManager.buildLaunchContract(authState)
-        val request = LaunchRequest(
-            executablePath = "/data/user/0/com.critical.vexaemulator/files/game/Client/HytaleClient",
-            rootfsPath = "/data/user/0/com.critical.vexaemulator/files/rootfs",
-            thunkHostPath = "/data/user/0/com.critical.vexaemulator/files/thunks/host",
-            thunkGuestPath = "/data/user/0/com.critical.vexaemulator/files/thunks/guest",
-            workingDirectory = "/data/user/0/com.critical.vexaemulator/files/game/Client",
-            artifactDirectory = "/data/user/0/com.critical.vexaemulator/files/artifacts/",
-            launchEnv = launchEnv,
-            launchArgs = launchArgs,
-        )
-        if (!runtimeBound || serviceMessenger == null) {
-            pendingLaunchRequest = request
-            VexaLogger.log(
-                level = LogLevel.WARN,
-                category = LogCategory.BOOT,
-                message = "Runtime service not bound yet; launch queued",
-                fields = mapOf(
-                    "code" to "-100"
+        lifecycleScope.launch {
+            val authState = runCatching {
+                authManager.ensureGameTokens() // force refresh when click "Refresh session"
+            }.getOrElse { t ->
+                android.util.Log.e("VEXA-AUTH", "ensureGameTokens failed", t)
+                return@launch
+            }
+            if (authState?.hasGameTokens != true) {
+                VexaLogger.log(
+                    LogLevel.ERROR,
+                    LogCategory.FAILURE,
+                    "Cannot launch: auth tokens missing"
                 )
+                return@launch
+            }
+            val (launchEnv, launchArgs) = authManager.buildLaunchContract(authState)
+            val request = LaunchRequest(
+                executablePath = "/data/user/0/com.critical.vexaemulator/files/game/Client/HytaleClient",
+                rootfsPath = "/data/user/0/com.critical.vexaemulator/files/rootfs",
+                thunkHostPath = "/data/user/0/com.critical.vexaemulator/files/thunks/host",
+                thunkGuestPath = "/data/user/0/com.critical.vexaemulator/files/thunks/guest",
+                workingDirectory = "/data/user/0/com.critical.vexaemulator/files/game/Client",
+                artifactDirectory = "/data/user/0/com.critical.vexaemulator/files/artifacts/",
+                launchEnv = launchEnv,
+                launchArgs = launchArgs,
             )
-            return
+            if (!runtimeBound || serviceMessenger == null) {
+                pendingLaunchRequest = request
+                VexaLogger.log(
+                    level = LogLevel.WARN,
+                    category = LogCategory.BOOT,
+                    message = "Runtime service not bound yet; launch queued",
+                    fields = mapOf(
+                        "code" to "-100"
+                    )
+                )
+                return@launch
+            }
+            sendStartRuntime(request)
+            // TODO: Add a retry mechanism or exit later
+            sendSurfaceCreated(holder.surface)
+            VexaLogger.log(
+                level = LogLevel.INFO,
+                category = LogCategory.SURFACE,
+                message = "Game Surface successfully created"
+            )
         }
-        sendStartRuntime(request)
-        // TODO: Add a retry mechanism or exit later
-        sendSurfaceCreated(holder.surface)
-        VexaLogger.log(
-            level = LogLevel.INFO,
-            category = LogCategory.SURFACE,
-            message = "Game Surface successfully created"
-        )
+
+
     }
 
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {

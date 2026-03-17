@@ -11,7 +11,9 @@
 
 namespace Vexa::Runtime::Init {
     Vexa::Common::Result
-    ExecuteRuntime(JNIEnv *env, const Vexa::Common::Paths &paths, Resources &state);
+    ExecuteRuntime(JNIEnv *env, const Vexa::Common::Paths &paths, Resources &state,
+                   const std::vector<std::string> &launchEnv,
+                   const std::vector<std::string> &launchArgs);
 }
 
 #endif //VEXA_EMULATOR_EXECUTE_H

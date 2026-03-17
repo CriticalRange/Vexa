@@ -165,6 +165,28 @@ class AuthManager(context: Context) {
             "HYTALE_IDENTITY_TOKEN=${sanitize(state.gameIdentityToken)}",
 
             "HYTALE_SESSION_TOKEN=${sanitize(state.gameSessionToken)}",
+
+            "HOME=/data/user/0/com.critical.vexaemulator/files/game/Client",
+
+            "USER=hymobile",
+
+            "TMPDIR=/data/user/0/com.critical.vexaemulator/files/fex-runtime/tmp",
+
+            "XDG_RUNTIME_DIR=/data/user/0/com.critical.vexaemulator/files/fex-runtime/run",
+
+            "PATH=/data/user/0/com.critical.vexaemulator/files/game/Client/jre/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+
+            "GLIBC_TUNABLES=glibc.pthread.rseq=0",
+
+            "DOTNET_EnableWriteXorExecute=0",
+
+            "DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1",
+
+            "DOTNET_EnableDiagnostics=0",
+
+            "DOTNET_gcServer=0",
+
+            "SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt",
         )
 
         if (!state.gameProfileUuid.isNullOrBlank())

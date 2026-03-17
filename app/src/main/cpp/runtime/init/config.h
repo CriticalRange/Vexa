@@ -12,7 +12,8 @@
 
 namespace Vexa::Runtime::Init {
     Vexa::Common::Result
-    SetupConfig(JNIEnv *env, const Vexa::Common::Paths &paths, char **envp);
+    SetupConfig(JNIEnv *env, const Vexa::Common::Paths &paths,
+                const std::vector<std::string> &launchEnv);
 
     void ShutdownConfig();
 }

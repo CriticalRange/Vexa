@@ -1,6 +1,8 @@
 //
 // Created by critical on 10.03.2026.
 //
+#include <vector>
+#include <string>
 
 #include "../logging/native_log.h"
 #include "launch.h"
@@ -41,7 +43,9 @@ namespace Vexa::Runtime {
     }
 
     Vexa::Common::Result
-    StartRuntime(JNIEnv *env, const Vexa::Common::Paths &paths, char **envp) {
+    StartRuntime(JNIEnv *env, const Vexa::Common::Paths &paths,
+                 const std::vector<std::string> &launchEnv,
+                 const std::vector<std::string> &launchArgs) {
         if (g_state.fexStarted) {
             return {Vexa::Common::Code::AlreadyStarted, Vexa::Common::Phase::Init,
                     "Runtime already started"};
@@ -50,7 +54,7 @@ namespace Vexa::Runtime {
 
         Init::InstallLogHandlers();
 
-        auto r = Init::SetupConfig(env, paths, envp);
+        auto r = Init::SetupConfig(env, paths, launchEnv);
         if (!r.Ok()) {
             const std::string fields = Vexa::Log::AddFields({
                                                                     Vexa::Log::F("code", r.code),
@@ -148,7 +152,7 @@ namespace Vexa::Runtime {
             return r;
         }
         VEXA_LOGI(env, "FEX", "SetupThreads OK", "{}");
-        r = Init::ExecuteRuntime(env, paths, g_state);
+        r = Init::ExecuteRuntime(env, paths, g_state, launchEnv, launchArgs);
         if (!r.Ok()) {
             const std::string fields = Vexa::Log::AddFields({
                                                                     Vexa::Log::F("code", r.code),
