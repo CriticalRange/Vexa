@@ -20,6 +20,9 @@ BUILD_DIR="${BUILD_DIR:-${FEX_ROOT}/build-android-arm64-ninja}"
 HOST_DIR="${HOST_DIR:-${BUILD_DIR}/HostLibs_64}"
 GUEST_DIR="${GUEST_DIR:-${BUILD_DIR}/Guest}"
 TMP_PREFIX="${TMP_PREFIX:-/data/local/tmp/vexa-thunks}"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+VEXA_ROOT="${VEXA_ROOT:-$(cd -- "${SCRIPT_DIR}/.." && pwd)}"
+THIRD_PARTY_ANDROID_ARM64_ROOT="${THIRD_PARTY_ANDROID_ARM64_ROOT:-${VEXA_ROOT}/third_party/install-android-arm64}"
 
 HOST_DST="files/thunks/host"
 GUEST_DST="files/thunks/guest"
@@ -28,15 +31,23 @@ HOST_LIBS=(
   "libSDL3-host.so"
   "libSDL3_image-host.so"
   "libopenal-host.so"
+  "libGL-host.so"
+  "libEGL-host.so"
   "libSDL3.so"
+  "libSDL3.so.1"
   "libSDL3_image.so"
   "libopenal.so"
+  "libopenal.so.1"
+  "libGL.so.1"
+  "libEGL.so.1"
 )
 
 GUEST_LIBS=(
   "libSDL3-guest.so"
   "libSDL3_image-guest.so"
   "libopenal-guest.so"
+  "libGL-guest.so"
+  "libEGL-guest.so"
 )
 
 host_source_for() {
@@ -45,15 +56,23 @@ host_source_for() {
     libSDL3-host.so|libSDL3_image-host.so|libopenal-host.so)
       echo "${HOST_DIR}/${name}"
       ;;
-    # Overlay aliases consumed by thunk config should resolve to guest thunk binaries.
-    libSDL3.so)
-      echo "${GUEST_DIR}/libSDL3-guest.so"
+    # VEXA_FIXES: Runtime overlays for SDL/OpenAL must load Android host-native
+    # dependencies (AArch64), not guest thunk payloads (x86_64).
+    libSDL3.so|libSDL3.so.1)
+      echo "${THIRD_PARTY_ANDROID_ARM64_ROOT}/sdl3/lib/libSDL3.so"
       ;;
     libSDL3_image.so)
-      echo "${GUEST_DIR}/libSDL3_image-guest.so"
+      echo "${THIRD_PARTY_ANDROID_ARM64_ROOT}/sdl3_image/lib/libSDL3_image.so"
       ;;
-    libopenal.so)
-      echo "${GUEST_DIR}/libopenal-guest.so"
+    libopenal.so|libopenal.so.1)
+      echo "${THIRD_PARTY_ANDROID_ARM64_ROOT}/openal/lib/libopenal.so"
+      ;;
+    # GL/EGL overlays intentionally resolve to guest thunk stubs.
+    libGL.so.1)
+      echo "${GUEST_DIR}/libGL-guest.so"
+      ;;
+    libEGL.so.1)
+      echo "${GUEST_DIR}/libEGL-guest.so"
       ;;
     *)
       echo "${HOST_DIR}/${name}"
@@ -101,41 +120,112 @@ check_local_files() {
   fi
 }
 
+check_host_overlay_arch() {
+  if ! command -v readelf >/dev/null 2>&1; then
+    echo "[push-fex-thunks] readelf not found; skipping host overlay arch check"
+    return
+  fi
+
+  local missing=0
+  local f src
+  local aliases=("libSDL3.so" "libSDL3.so.1" "libSDL3_image.so" "libopenal.so" "libopenal.so.1")
+  for f in "${aliases[@]}"; do
+    src="$(host_source_for "$f")"
+    if ! readelf -h "${src}" 2>/dev/null | rg -q "Machine:[[:space:]]+AArch64"; then
+      echo "[push-fex-thunks] ${f} source is not AArch64: ${src}" >&2
+      missing=1
+    fi
+  done
+  if [[ "${missing}" -ne 0 ]]; then
+    exit 1
+  fi
+}
+
 check_key_symbols() {
   local guest_sdl3="${GUEST_DIR}/libSDL3-guest.so"
+  local guest_gl="${GUEST_DIR}/libGL-guest.so"
+  local guest_sdl3_symbols
+  local guest_gl_symbols
+  guest_sdl3_symbols="$(nm -D "${guest_sdl3}" | awk '{print $NF}')"
+  guest_gl_symbols="$(nm -D "${guest_gl}" | awk '{print $NF}')"
 
-  # These checks prevent stale 2-symbol guest SDL3 thunk pushes.
-  nm -D "${guest_sdl3}" | rg -q " SDL_GetPlatform$" || {
+  require_symbol_any() {
+    local dump="$1"
+    local err="$2"
+    shift 2
+    local sym
+    for sym in "$@"; do
+      if printf "%s\n" "${dump}" | rg -Fqx "${sym}"; then
+        return 0
+      fi
+    done
+    echo "[push-fex-thunks] ${err}" >&2
+    return 1
+  }
+
+  # These checks prevent pushing stale/minimal SDL3 guest thunk payloads.
+  printf "%s\n" "${guest_sdl3_symbols}" | rg -Fqx "SDL_GetPlatform" || {
     echo "[push-fex-thunks] libSDL3-guest.so missing SDL_GetPlatform" >&2
     exit 1
   }
-  nm -D "${guest_sdl3}" | rg -q " SDL_InitSubSystem$" || {
+  printf "%s\n" "${guest_sdl3_symbols}" | rg -Fqx "SDL_InitSubSystem" || {
     echo "[push-fex-thunks] libSDL3-guest.so missing SDL_InitSubSystem" >&2
     exit 1
   }
-  nm -D "${guest_sdl3}" | rg -q " SDL_SetMainReady$" || {
-    echo "[push-fex-thunks] libSDL3-guest.so missing SDL_SetMainReady" >&2
-    exit 1
-  }
-  nm -D "${guest_sdl3}" | rg -q " SDL_QuitSubSystem$" || {
+  printf "%s\n" "${guest_sdl3_symbols}" | rg -Fqx "SDL_QuitSubSystem" || {
     echo "[push-fex-thunks] libSDL3-guest.so missing SDL_QuitSubSystem" >&2
     exit 1
   }
-  nm -D "${guest_sdl3}" | rg -q " SDL_GetError$" || {
+  printf "%s\n" "${guest_sdl3_symbols}" | rg -Fqx "SDL_GetError" || {
     echo "[push-fex-thunks] libSDL3-guest.so missing SDL_GetError" >&2
     exit 1
   }
-  nm -D "${guest_sdl3}" | rg -q " SDL_ClearError$" || {
+  printf "%s\n" "${guest_sdl3_symbols}" | rg -Fqx "SDL_ClearError" || {
     echo "[push-fex-thunks] libSDL3-guest.so missing SDL_ClearError" >&2
     exit 1
   }
+  printf "%s\n" "${guest_sdl3_symbols}" | rg -Fqx "SDL_GL_GetProcAddress" || {
+    echo "[push-fex-thunks] libSDL3-guest.so missing SDL_GL_GetProcAddress" >&2
+    exit 1
+  }
+  printf "%s\n" "${guest_sdl3_symbols}" | rg -Fqx "SDL_GL_MakeCurrent" || {
+    echo "[push-fex-thunks] libSDL3-guest.so missing SDL_GL_MakeCurrent" >&2
+    exit 1
+  }
+  printf "%s\n" "${guest_sdl3_symbols}" | rg -Fqx "SDL_PollEvent" || {
+    echo "[push-fex-thunks] libSDL3-guest.so missing SDL_PollEvent" >&2
+    exit 1
+  }
+  printf "%s\n" "${guest_sdl3_symbols}" | rg -Fqx "SDL_GetRevision" || {
+    echo "[push-fex-thunks] libSDL3-guest.so missing SDL_GetRevision" >&2
+    exit 1
+  }
+
+  # VEXA_FIXES: Guest SDL3 thunk should not carry hard undefined GL imports,
+  # otherwise the guest loader can fail before thunk overlay routing is active.
+  if nm -D "${guest_sdl3}" | rg -q "^[[:space:]]*U[[:space:]]+gl"; then
+    echo "[push-fex-thunks] libSDL3-guest.so has unresolved GL symbols (expected: none)" >&2
+    nm -D "${guest_sdl3}" | rg "^[[:space:]]*U[[:space:]]+gl" | head -n 20 >&2 || true
+    exit 1
+  fi
+
+  # VEXA_FIXES: Ensure Android GL thunk payload includes required proc bridge symbols.
+  require_symbol_any "${guest_gl_symbols}" \
+    "libGL-guest.so missing glX proc bridge (glXGetProcAddress/glXGetProcAddressARB/fexfn_pack_glXGetProcAddress)" \
+    "glXGetProcAddress" "glXGetProcAddressARB" "fexfn_pack_glXGetProcAddress" || exit 1
+  require_symbol_any "${guest_gl_symbols}" \
+    "libGL-guest.so missing clear-depth bridge (glClearDepthf*/glClearDepth*/fexfn_pack_*)" \
+    "glClearDepthf" "glClearDepthfOES" "fexfn_pack_glClearDepthf" "fexfn_pack_glClearDepthfOES" \
+    "glClearDepth" "fexfn_pack_glClearDepth" || exit 1
+  require_symbol_any "${guest_gl_symbols}" \
+    "libGL-guest.so missing glClearDepth" \
+    "glClearDepth" "fexfn_pack_glClearDepth" || exit 1
 }
 
 push_one() {
   local src="$1"
   local dst_dir="$2"
-  local base
-  base="$(basename "${src}")"
+  local base="${3:-$(basename "${src}")}"
   local tmp="${TMP_PREFIX}-${base}"
 
   echo "[push-fex-thunks] push ${base}"
@@ -148,9 +238,9 @@ push_one() {
 
 show_remote_summary() {
   echo "[push-fex-thunks] remote host libs:"
-  adb shell run-as "${PKG}" /system/bin/ls -l "${HOST_DST}" | rg "libSDL3|libopenal" || true
+  adb shell run-as "${PKG}" /system/bin/ls -l "${HOST_DST}" | rg "libSDL3|libopenal|libGL|libEGL" || true
   echo "[push-fex-thunks] remote guest libs:"
-  adb shell run-as "${PKG}" /system/bin/ls -l "${GUEST_DST}" | rg "libSDL3|libopenal" || true
+  adb shell run-as "${PKG}" /system/bin/ls -l "${GUEST_DST}" | rg "libSDL3|libopenal|libGL|libEGL" || true
 }
 
 main() {
@@ -158,16 +248,21 @@ main() {
   need_cmd nm
   need_cmd rg
 
+  echo "[push-fex-thunks] BUILD_DIR=${BUILD_DIR}"
+  echo "[push-fex-thunks] HOST_DIR=${HOST_DIR}"
+  echo "[push-fex-thunks] GUEST_DIR=${GUEST_DIR}"
+
   check_device
   check_local_files
+  check_host_overlay_arch
   check_key_symbols
 
   local f
   for f in "${HOST_LIBS[@]}"; do
-    push_one "$(host_source_for "$f")" "${HOST_DST}"
+    push_one "$(host_source_for "$f")" "${HOST_DST}" "${f}"
   done
   for f in "${GUEST_LIBS[@]}"; do
-    push_one "${GUEST_DIR}/${f}" "${GUEST_DST}"
+    push_one "${GUEST_DIR}/${f}" "${GUEST_DST}" "${f}"
   done
 
   show_remote_summary

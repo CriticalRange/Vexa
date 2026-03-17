@@ -20,6 +20,9 @@ object RuntimeIpc {
     const val KEY_SURFACE_HEIGHT = "surfaceHeight"
     const val KEY_SURFACE_FORMAT = "surfaceFormat"
 
+    const val KEY_LAUNCH_ENV = "launchEnv"
+    const val KEY_LAUNCH_ARGS = "launchArgs"
+
     const val KEY_ROOTFS_PATH = "rootfsPath"
     const val KEY_THUNK_HOST_PATH = "thunkHostPath"
     const val KEY_THUNK_GUEST_PATH = "thunkGuestPath"

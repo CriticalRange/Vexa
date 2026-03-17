@@ -105,6 +105,10 @@ class RuntimeWorkerService : Service() {
                                 (),
                         artifactDirectory =
                             d.getString(RuntimeIpc.KEY_ARTIFACT_DIRECTORY).orEmpty(),
+                        launchEnv =
+                            d.getStringArrayList(RuntimeIpc.KEY_LAUNCH_ENV)?.toList().orEmpty(),
+                        launchArgs =
+                            d.getStringArrayList(RuntimeIpc.KEY_LAUNCH_ARGS)?.toList().orEmpty(),
                     )
                     workerExecutor.execute {
                         val code =

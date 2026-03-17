@@ -14,7 +14,8 @@ cmake "$FEX_ROOT" \
   -DCMAKE_TOOLCHAIN_FILE="$NDK_TOOLCHAIN" \
   -DCMAKE_BUILD_TYPE=RelWithDebInfo \
   -DTHUNKGEN_EXECUTABLE="$THUNKGEN_EXECUTABLE" \
-  -DENABLE_DESKTOP_GL_THUNKS=OFF \
+  -DENABLE_DESKTOP_GL_THUNKS=ON \
+  -DENABLE_EGL_THUNKS=ON \
   -DVEXA_SDL3_PREFIX=/home/critical/vexa/third_party/install-android-arm64/sdl3 \
   -DVEXA_SDL3_IMAGE_PREFIX=/home/critical/vexa/third_party/install-android-arm64/sdl3_image \
   -DVEXA_OPENAL_PREFIX=/home/critical/vexa/third_party/install-android-arm64/openal \

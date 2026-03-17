@@ -7,4 +7,6 @@ data class LaunchRequest(
     val thunkGuestPath: String,
     val workingDirectory: String,
     val artifactDirectory: String,
+    val launchEnv: List<String> = emptyList(),
+    val launchArgs: List<String> = emptyList(),
 )

@@ -228,6 +228,8 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
                 putString(RuntimeIpc.KEY_THUNK_GUEST_PATH, request.thunkGuestPath)
                 putString(RuntimeIpc.KEY_WORKING_DIRECTORY, request.workingDirectory)
                 putString(RuntimeIpc.KEY_ARTIFACT_DIRECTORY, request.artifactDirectory)
+                putStringArrayList(RuntimeIpc.KEY_LAUNCH_ENV, ArrayList(request.launchEnv))
+                putStringArrayList(RuntimeIpc.KEY_LAUNCH_ARGS, ArrayList(request.launchArgs))
             }
         }
         runCatching {
@@ -438,13 +440,26 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
             category = LogCategory.SURFACE,
             message = "Game Surface is being created..."
         )
+        val authManager = com.critical.vexaemulator.auth.AuthManager(applicationContext)
+        val authState = authManager.load()
+        if (authState?.hasGameTokens != true) {
+            VexaLogger.log(
+                LogLevel.ERROR,
+                LogCategory.FAILURE,
+                "Cannot launch: auth tokens missing"
+            )
+            return
+        }
+        val (launchEnv, launchArgs) = authManager.buildLaunchContract(authState)
         val request = LaunchRequest(
             executablePath = "/data/user/0/com.critical.vexaemulator/files/game/Client/HytaleClient",
             rootfsPath = "/data/user/0/com.critical.vexaemulator/files/rootfs",
             thunkHostPath = "/data/user/0/com.critical.vexaemulator/files/thunks/host",
             thunkGuestPath = "/data/user/0/com.critical.vexaemulator/files/thunks/guest",
             workingDirectory = "/data/user/0/com.critical.vexaemulator/files/game/Client",
-            artifactDirectory = "/data/user/0/com.critical.vexaemulator/files/artifacts/"
+            artifactDirectory = "/data/user/0/com.critical.vexaemulator/files/artifacts/",
+            launchEnv = launchEnv,
+            launchArgs = launchArgs,
         )
         if (!runtimeBound || serviceMessenger == null) {
             pendingLaunchRequest = request

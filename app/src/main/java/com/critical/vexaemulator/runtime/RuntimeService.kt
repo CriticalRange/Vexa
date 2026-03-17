@@ -155,6 +155,14 @@ class RuntimeService : Service() {
                     RuntimeIpc.KEY_ARTIFACT_DIRECTORY,
                     request.artifactDirectory
                 )
+                putStringArrayList(
+                    RuntimeIpc.KEY_LAUNCH_ENV,
+                    ArrayList(request.launchEnv)
+                )
+                putStringArrayList(
+                    RuntimeIpc.KEY_LAUNCH_ARGS,
+                    ArrayList(request.launchArgs)
+                )
             }
         }
 
@@ -207,6 +215,10 @@ class RuntimeService : Service() {
                         workingDirectory = d.getString(RuntimeIpc.KEY_WORKING_DIRECTORY).orEmpty(),
                         artifactDirectory = d.getString(RuntimeIpc.KEY_ARTIFACT_DIRECTORY)
                             .orEmpty(),
+                        launchEnv =
+                            d.getStringArrayList(RuntimeIpc.KEY_LAUNCH_ENV)?.toList().orEmpty(),
+                        launchArgs =
+                            d.getStringArrayList(RuntimeIpc.KEY_LAUNCH_ARGS)?.toList().orEmpty(),
                     )
                     sendStartToWorker(request)
                 }
