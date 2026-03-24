@@ -11,6 +11,9 @@ import android.os.Message
 import android.os.Messenger
 import android.view.Surface
 import com.critical.vexaemulator.RuntimeBridge
+import java.io.File
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.util.concurrent.Executors
 
 class RuntimeWorkerService : Service() {
@@ -18,6 +21,118 @@ class RuntimeWorkerService : Service() {
     private val mainHandler = Handler(Looper.getMainLooper())
     private var supervisorMessenger: Messenger? = null
     private var currentSurface: Surface? = null
+    private var pendingStartRequest: LaunchRequest? = null
+
+    private fun startRuntimeAsync(request: LaunchRequest) {
+        workerExecutor.execute {
+            val cleaned = resetArtifactsDir(request.artifactDirectory)
+            if (!cleaned) {
+                sendWorkerLog(
+                    "WARN",
+                    "BOOT",
+                    "Failed to reset artifacts directory",
+                    """{"artifactDirectory": "${request.artifactDirectory}"}"""
+                )
+            } else {
+                sendWorkerLog(
+                    "INFO",
+                    "BOOT",
+                    "Artifacts directory reset for fresh run",
+                    """{"artifactDirectory": "${request.artifactDirectory}"}"""
+                )
+            }
+
+            val code = RuntimeBridge.startRuntime(request)
+            sendToSupervisor(RuntimeIpc.MSG_WORKER_START_RESULT) {
+                putInt(RuntimeIpc.KEY_CODE, code)
+            }
+        }
+    }
+
+    private fun sendWorkerLog(
+        level: String,
+        category: String,
+        message: String,
+        fieldsJson: String = "{}",
+    ) {
+        sendToSupervisor(RuntimeIpc.MSG_LOG_EVENT) {
+            putString(RuntimeIpc.KEY_LEVEL, level)
+            putString(RuntimeIpc.KEY_CATEGORY, category)
+            putString(RuntimeIpc.KEY_MESSAGE, message)
+            putString(RuntimeIpc.KEY_FIELDS_JSON, fieldsJson)
+        }
+    }
+
+    private fun normalizePath(file: File): String {
+        return file.absoluteFile.normalize().path.trimEnd(File.separatorChar)
+    }
+
+    private fun resetArtifactsDir(path: String): Boolean {
+        if (path.isBlank()) return false
+
+        return try {
+            val expected =
+                File(applicationContext.filesDir, "artifacts")
+            val requested = File(path)
+
+            if (normalizePath(requested) !=
+                normalizePath(expected)
+            ) return false
+            if (expected.exists() && !
+                expected.isDirectory
+            ) return false
+            if (!expected.exists() && !
+                expected.mkdirs()
+            ) return false
+
+            expected.listFiles()?.forEach { child ->
+                if (!child.deleteRecursively()) return false
+            }
+
+            val requiredDirs = listOf(
+                "fexcfg",
+                "shaders",
+                "shaders/original",
+                "shaders/translated"
+            )
+            for (rel in requiredDirs) {
+                val dir = File(expected, rel)
+                if (!dir.exists() && !dir.mkdirs())
+                    return false
+            }
+
+            true
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    private fun envValue(envList: List<String>, key: String): String? {
+        val prefix = "$key="
+        return envList.firstOrNull { it.startsWith(prefix) }?.substring(prefix.length)
+    }
+
+    private fun isTruthy(value: String?): Boolean {
+        return when (value?.trim()?.lowercase()) {
+            "1", "true", "yes", "on" -> true
+            else -> false
+        }
+    }
+
+    private fun copyOrThrow(source: File, target: File, executable: Boolean) {
+        if (!source.isFile) {
+            throw IllegalStateException("Source missing: ${source.absolutePath}")
+        }
+        target.parentFile?.mkdirs()
+        Files.copy(
+            source.toPath(),
+            target.toPath(),
+            StandardCopyOption.REPLACE_EXISTING
+        )
+        if (executable) {
+            target.setExecutable(true, false)
+        }
+    }
 
     private fun getSurfaceCompat(bundle: Bundle): Surface? {
         bundle.classLoader = Surface::class.java.classLoader
@@ -110,16 +225,11 @@ class RuntimeWorkerService : Service() {
                         launchArgs =
                             d.getStringArrayList(RuntimeIpc.KEY_LAUNCH_ARGS)?.toList().orEmpty(),
                     )
-                    workerExecutor.execute {
-                        val code =
-                            RuntimeBridge.startRuntime(request)
-
-                        sendToSupervisor(RuntimeIpc.MSG_WORKER_START_RESULT)
-                        {
-
-                            putInt(RuntimeIpc.KEY_CODE, code)
-                        }
+                    if (currentSurface?.isValid != true) {
+                        pendingStartRequest = request
+                        return
                     }
+                    startRuntimeAsync(request)
                 }
 
                 RuntimeIpc.MSG_WORKER_SET_SURFACE -> {
@@ -127,6 +237,13 @@ class RuntimeWorkerService : Service() {
                     currentSurface?.release()
                     currentSurface = surface
                     RuntimeBridge.setRuntimeSurface(surface)
+
+                    if (surface?.isValid == true) {
+                        pendingStartRequest?.let { req ->
+                            pendingStartRequest = null
+                            startRuntimeAsync(req)
+                        }
+                    }
                 }
 
                 RuntimeIpc.MSG_WORKER_STOP_RUNTIME -> {

@@ -38,6 +38,18 @@
   URI-backed inputs: ensure grants are applied before worker start and log explicit
   permission-denied
   diagnostics with failing path.
+- [ ] Fix `:runtime_worker` stack-bound crash seen in logcat on 2026-03-18
+  (`thread.cc:1489 Check failed: FindStackTop<stack_type>() >
+  reinterpret_cast<void*>(GetStackEnd<stack_type>())`), which is followed by
+  `signal 11 (Segmentation fault)` worker exits.
+- [ ] Ensure all FEX entry points (`SetSignalDelegator`, `CreateThread`, `ExecuteThread`) run on a
+  dedicated native worker pthread, never on Binder/Java framework threads.
+- [ ] Add explicit pthread stack policy for FEX worker threads
+  (`pthread_attr_setstacksize` + `pthread_attr_setguardsize`) and document/enforce a minimum safe
+  stack size for Android worker mode.
+- [ ] Add stack preflight diagnostics before entering FEX:
+  `pthread_getattr_np` + `pthread_attr_getstack` logging/validation for every thread that may enter
+  FEX; fail fast with a clear `THREAD`/`SIGNAL` reason when bounds are invalid.
 - [ ] Track and patch FEX `/proc/pid/cmdline` remap behavior on Android app UIDs:
   `prctl(PR_SET_MM, PR_SET_MM_MAP, ...)` fails without privileged caps (expected, non-fatal).
   Action: downgrade to warn-once or skip on Android, and keep launch flow unaffected.

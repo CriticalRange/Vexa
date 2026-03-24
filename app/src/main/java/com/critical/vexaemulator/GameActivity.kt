@@ -20,6 +20,7 @@ import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
@@ -49,14 +50,36 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 private const val WORKER_PROCESS = "com.critical.vexaemulator:runtime_worker"
+private const val LOGCAT_TAG_RUNTIME_EXIT = "Vexa-RuntimeExit"
 
 class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
     private lateinit var gameSurfaceView: SurfaceView
+    private var isExiting = false
 
+    private var latestSurface: Surface? = null
     private var serviceMessenger: Messenger? = null
     private var runtimeBound = false
     private var pendingLaunchRequest: LaunchRequest? = null
     private var lastReportedRuntimeExitKey: String? = null
+
+    private fun closeGameActivity() {
+        if (isExiting) return
+
+        sendSurfaceDestroyed()
+        sendUnregister()
+        sendStopRuntime()
+
+        if (runtimeBound) {
+            runCatching {
+                unbindService(runtimeConnection)
+            }
+            runtimeBound = false
+        }
+
+        finish()
+        overridePendingTransition(0, 0)
+    }
+
     private var uiIncomingHandler = object : Handler(Looper.getMainLooper()) {
         override fun handleMessage(msg: Message) {
             when (msg.what) {
@@ -88,6 +111,22 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
                                 if (pid != null) lastRuntimePid = pid
                             }
                         }
+
+                        if (category == "BOOT" &&
+                            (message.contains("Runtime worker disconnected") ||
+                                    message.contains("Runtime worker binding died"))
+                        ) {
+                            Handler(Looper.getMainLooper()).post {
+                                logLatestRuntimeExitInfo("worker_event_t0")
+                            }
+                            Handler(Looper.getMainLooper()).postDelayed({
+                                logLatestRuntimeExitInfo("worker_event_t+500ms")
+                            }, 500)
+                            Handler(Looper.getMainLooper()).postDelayed({
+                                logLatestRuntimeExitInfo("worker_event_t+1500ms")
+                            }, 1500)
+                        }
+
                         RuntimeBridge.logFromNative(
                             level = msg.data.getString(RuntimeIpc.KEY_LEVEL).orEmpty(),
                             category = msg.data.getString(RuntimeIpc.KEY_CATEGORY).orEmpty(),
@@ -111,6 +150,15 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
     private var runtimeConnectedAtMs: Long = 0L
     private var lastReportedExitKey: String? = null
 
+
+    private fun tryLaunchWithSurface(request: LaunchRequest): Boolean {
+        val surface = latestSurface
+        if (surface == null || !surface.isValid) return false
+        sendSurfaceCreated(surface)
+        sendStartRuntime(request)
+        return true
+    }
+
     private fun sendRegister() {
         val msg = Message.obtain(null, RuntimeIpc.MSG_REGISTER_CLIENT).apply {
             replyTo = uiMessenger
@@ -133,7 +181,8 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
 
         val am = getSystemService(ActivityManager::class.java) ?: return
-        val pid = lastRuntimePid ?: 0
+        // Query all pids
+        val pid = 0
         val exits = runCatching {
             am.getHistoricalProcessExitReasons(
                 packageName,
@@ -148,19 +197,20 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
                 mapOf(
                     "tag" to tag,
                     "pidFilter" to pid.toString(),
+                    "runtimePidHint" to (lastRuntimePid?.toString() ?: ""),
                     "error" to (e.message ?: e.javaClass.simpleName)
                 )
             )
             return
         }
 
-        val latestRuntimeProcess = exits.firstOrNull {
-            it.processName == WORKER_PROCESS &&
-                    it.timestamp >= runtimeConnectedAtMs &&
-                    (it.reason == ApplicationExitInfo.REASON_SIGNALED ||
-                            it.reason == ApplicationExitInfo.REASON_CRASH ||
-                            it.reason == ApplicationExitInfo.REASON_CRASH_NATIVE)
-        } ?: run {
+        val latestRuntimeProcess = exits
+            .asSequence()
+            .filter {
+                it.processName == WORKER_PROCESS &&
+                        it.timestamp >= runtimeConnectedAtMs
+            }
+            .maxByOrNull { it.timestamp } ?: run {
             VexaLogger.log(
                 LogLevel.WARN,
                 LogCategory.FAILURE,
@@ -168,6 +218,7 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
                 mapOf(
                     "tag" to tag,
                     "pidFilter" to pid.toString(),
+                    "runtimePidHint" to (lastRuntimePid?.toString() ?: ""),
                     "connectedAtMs" to runtimeConnectedAtMs.toString(),
                     "totalExits" to exits.size.toString()
                 )
@@ -183,11 +234,22 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
         lastReportedRuntimeExitKey = exitKey
 
         val reasonText = when (latestRuntimeProcess.reason) {
+            ApplicationExitInfo.REASON_EXIT_SELF -> "EXIT_SELF"
             ApplicationExitInfo.REASON_SIGNALED -> "SIGNALED"
+            ApplicationExitInfo.REASON_LOW_MEMORY -> "LOW_MEMORY"
             ApplicationExitInfo.REASON_CRASH -> "CRASH"
             ApplicationExitInfo.REASON_CRASH_NATIVE -> "CRASH_NATIVE"
-            ApplicationExitInfo.REASON_LOW_MEMORY -> "LOW_MEMORY"
             ApplicationExitInfo.REASON_ANR -> "ANR"
+            ApplicationExitInfo.REASON_INITIALIZATION_FAILURE -> "INITIALIZATION_FAILURE"
+            ApplicationExitInfo.REASON_PERMISSION_CHANGE -> "PERMISSION_CHANGE"
+            ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE -> "EXCESSIVE_RESOURCE_USAGE"
+            ApplicationExitInfo.REASON_USER_REQUESTED -> "USER_REQUESTED"
+            ApplicationExitInfo.REASON_USER_STOPPED -> "USER_STOPPED"
+            ApplicationExitInfo.REASON_DEPENDENCY_DIED -> "DEPENDENCY_DIED"
+            ApplicationExitInfo.REASON_OTHER -> "OTHER"
+            // Some platform builds report additional reason codes not exposed in
+            // this compileSdk's ApplicationExitInfo constants.
+            14 -> "EXIT_OTHER"
             else -> latestRuntimeProcess.reason.toString()
         }
 
@@ -197,25 +259,42 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
             }
         }.getOrNull().orEmpty()
 
-        if (latestRuntimeProcess.status.toString() == "0") {
-            return
+        val severity = when (latestRuntimeProcess.reason) {
+            ApplicationExitInfo.REASON_SIGNALED,
+            ApplicationExitInfo.REASON_CRASH,
+            ApplicationExitInfo.REASON_CRASH_NATIVE,
+            ApplicationExitInfo.REASON_ANR,
+            ApplicationExitInfo.REASON_DEPENDENCY_DIED -> LogLevel.ERROR
+
+            else -> LogLevel.WARN
         }
 
+        val exitFields = mapOf(
+            "tag" to tag,
+            "pid" to latestRuntimeProcess.pid.toString(),
+            "process" to (latestRuntimeProcess.processName ?: ""),
+            "reason" to latestRuntimeProcess.reason.toString(),
+            "reasonText" to reasonText,
+            "status" to latestRuntimeProcess.status.toString(),
+            "importance" to latestRuntimeProcess.importance.toString(),
+            "timestamp" to latestRuntimeProcess.timestamp.toString(),
+            "description" to (latestRuntimeProcess.description ?: ""),
+            "traceSnippet" to traceSnippet
+        )
+
         VexaLogger.log(
-            level = LogLevel.ERROR,
+            level = severity,
             category = LogCategory.FAILURE,
             message = "Runtime process exit captured",
-            fields = mapOf(
-                "tag" to tag,
-                "pid" to latestRuntimeProcess.pid.toString(),
-                "process" to (latestRuntimeProcess.processName ?: ""),
-                "reason" to latestRuntimeProcess.reason.toString(),
-                "status" to latestRuntimeProcess.status.toString(),
-                "importance" to latestRuntimeProcess.importance.toString(),
-                "timestamp" to latestRuntimeProcess.timestamp.toString(),
-                "description" to (latestRuntimeProcess.description ?: "")
-            )
+            fields = exitFields
         )
+        val logcatPayload = "Runtime process exit captured $exitFields"
+        when (severity) {
+            LogLevel.ERROR -> android.util.Log.e(LOGCAT_TAG_RUNTIME_EXIT, logcatPayload)
+            LogLevel.WARN -> android.util.Log.w(LOGCAT_TAG_RUNTIME_EXIT, logcatPayload)
+            LogLevel.DEBUG -> android.util.Log.d(LOGCAT_TAG_RUNTIME_EXIT, logcatPayload)
+            else -> android.util.Log.i(LOGCAT_TAG_RUNTIME_EXIT, logcatPayload)
+        }
     }
 
     private fun sendStartRuntime(request: LaunchRequest) {
@@ -300,9 +379,10 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
             runtimeConnectedAtMs = System.currentTimeMillis()
             sendRegister()
 
-            pendingLaunchRequest?.let {
-                sendStartRuntime(it)
-                pendingLaunchRequest = null
+            pendingLaunchRequest?.let { req ->
+                if (tryLaunchWithSurface(req)) {
+                    pendingLaunchRequest = null
+                }
             }
 
             VexaLogger.log(
@@ -356,6 +436,18 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                VexaLogger.log(
+                    LogLevel.INFO,
+                    LogCategory.ACTIVITY,
+                    "User initiated back press",
+                    mapOf("source" to "onBackPressedDispatcher")
+                )
+                closeGameActivity()
+            }
+        })
         VexaLogger.log(
             level = LogLevel.INFO,
             category = LogCategory.ACTIVITY,
@@ -379,9 +471,10 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
             )
         )
 
-        gameSurfaceView = SurfaceView(this).also {
-            it.setBackgroundColor(android.graphics.Color.BLACK)
-            it.holder.addCallback(this)
+        gameSurfaceView = SurfaceView(this).also { sv ->
+            sv.setZOrderOnTop(false)
+            sv.holder.addCallback(this)
+            sv.holder.setFormat(android.graphics.PixelFormat.TRANSLUCENT)
         }
         VexaLogger.log(
             level = LogLevel.INFO,
@@ -410,7 +503,7 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
         lifecycleScope.launch {
             delay(5000)
 
-            showLoading = true // TODO: change this to false after setting up everything
+            showLoading = false
             VexaLogger.log(
                 level = LogLevel.INFO,
                 category = LogCategory.UI,
@@ -435,6 +528,7 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
     }
 
     override fun surfaceCreated(holder: SurfaceHolder) {
+        latestSurface = holder.surface
         VexaLogger.log(
             level = LogLevel.INFO,
             category = LogCategory.SURFACE,
@@ -479,9 +573,12 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
                 )
                 return@launch
             }
-            sendStartRuntime(request)
+
+            if (!tryLaunchWithSurface(request)) {
+                pendingLaunchRequest = request
+                return@launch
+            }
             // TODO: Add a retry mechanism or exit later
-            sendSurfaceCreated(holder.surface)
             VexaLogger.log(
                 level = LogLevel.INFO,
                 category = LogCategory.SURFACE,
@@ -493,6 +590,14 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
     }
 
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
+        latestSurface = holder.surface
+        sendSurfaceChanged(format, width, height)
+
+        pendingLaunchRequest?.let { req ->
+            if (runtimeBound && tryLaunchWithSurface(req)) {
+                pendingLaunchRequest = null
+            }
+        }
         VexaLogger.log(
             level = LogLevel.INFO,
             category = LogCategory.SURFACE,
@@ -516,7 +621,9 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
                 "isValid" to holder.surface.isValid.toString()
             )
         )
-        sendStopRuntime()
+        latestSurface = null
+        sendSurfaceDestroyed()
+
         VexaLogger.log(
             level = LogLevel.INFO,
             category = LogCategory.SURFACE,
@@ -531,10 +638,23 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
     override fun onStop() {
         if (runtimeBound) {
             sendUnregister()
-            unbindService(runtimeConnection)
+            runCatching {
+                unbindService(runtimeConnection)
+            }
             runtimeBound = false
         }
         super.onStop()
+    }
+
+    override fun onDestroy() {
+        if (runtimeBound) {
+            sendUnregister()
+            runCatching {
+                unbindService(runtimeConnection)
+            }
+            runtimeBound = false
+        }
+        super.onDestroy()
     }
 
     private fun hideSystemBars() {

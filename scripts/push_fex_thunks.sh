@@ -67,12 +67,14 @@ host_source_for() {
     libopenal.so|libopenal.so.1)
       echo "${THIRD_PARTY_ANDROID_ARM64_ROOT}/openal/lib/libopenal.so"
       ;;
-    # GL/EGL overlays intentionally resolve to guest thunk stubs.
+    # VEXA_FIXES: Host thunk aliases must remain AArch64 host payloads.
+    # Pushing x86_64 guest payloads here causes host dlopen failures:
+    # "EM_X86_64 instead of EM_AARCH64" during fexldr_init_libGL/libEGL.
     libGL.so.1)
-      echo "${GUEST_DIR}/libGL-guest.so"
+      echo "${HOST_DIR}/libGL-host.so"
       ;;
     libEGL.so.1)
-      echo "${GUEST_DIR}/libEGL-guest.so"
+      echo "${HOST_DIR}/libEGL-host.so"
       ;;
     *)
       echo "${HOST_DIR}/${name}"
@@ -121,18 +123,37 @@ check_local_files() {
 }
 
 check_host_overlay_arch() {
-  if ! command -v readelf >/dev/null 2>&1; then
-    echo "[push-fex-thunks] readelf not found; skipping host overlay arch check"
-    return
-  fi
-
   local missing=0
   local f src
-  local aliases=("libSDL3.so" "libSDL3.so.1" "libSDL3_image.so" "libopenal.so" "libopenal.so.1")
+  local aliases=("libSDL3.so" "libSDL3.so.1" "libSDL3_image.so" "libopenal.so" "libopenal.so.1" "libGL.so.1" "libEGL.so.1")
   for f in "${aliases[@]}"; do
     src="$(host_source_for "$f")"
-    if ! readelf -h "${src}" 2>/dev/null | rg -q "Machine:[[:space:]]+AArch64"; then
+    local machine_line=""
+    local file_line=""
+    local is_aarch64=1
+
+    if command -v readelf >/dev/null 2>&1; then
+      machine_line="$(readelf -h "${src}" 2>/dev/null | rg "Machine:" | head -n 1 || true)"
+      if printf "%s\n" "${machine_line}" | rg -qi "AArch64|ARM64"; then
+        is_aarch64=0
+      fi
+    fi
+
+    if [[ "${is_aarch64}" -ne 0 ]] && command -v file >/dev/null 2>&1; then
+      file_line="$(file "${src}" 2>/dev/null || true)"
+      if printf "%s\n" "${file_line}" | rg -qi "ARM aarch64|AArch64|ARM64"; then
+        is_aarch64=0
+      fi
+    fi
+
+    if [[ "${is_aarch64}" -ne 0 ]]; then
       echo "[push-fex-thunks] ${f} source is not AArch64: ${src}" >&2
+      if [[ -n "${machine_line}" ]]; then
+        echo "[push-fex-thunks] readelf: ${machine_line}" >&2
+      fi
+      if [[ -n "${file_line}" ]]; then
+        echo "[push-fex-thunks] file: ${file_line}" >&2
+      fi
       missing=1
     fi
   done
@@ -217,6 +238,24 @@ check_key_symbols() {
     "libGL-guest.so missing clear-depth bridge (glClearDepthf*/glClearDepth*/fexfn_pack_*)" \
     "glClearDepthf" "glClearDepthfOES" "fexfn_pack_glClearDepthf" "fexfn_pack_glClearDepthfOES" \
     "glClearDepth" "fexfn_pack_glClearDepth" || exit 1
+  require_symbol_any "${guest_gl_symbols}" \
+    "libGL-guest.so missing glFlush bridge (glFlush/fexfn_pack_glFlush)" \
+    "glFlush" "fexfn_pack_glFlush" || exit 1
+  require_symbol_any "${guest_gl_symbols}" \
+    "libGL-guest.so missing glGetSynciv bridge (glGetSynciv/fexfn_pack_glGetSynciv)" \
+    "glGetSynciv" "fexfn_pack_glGetSynciv" || exit 1
+  require_symbol_any "${guest_gl_symbols}" \
+    "libGL-guest.so missing glReadPixels bridge (glReadPixels/fexfn_pack_glReadPixels)" \
+    "glReadPixels" "fexfn_pack_glReadPixels" || exit 1
+  require_symbol_any "${guest_gl_symbols}" \
+    "libGL-guest.so missing glReadBuffer bridge (glReadBuffer/fexfn_pack_glReadBuffer)" \
+    "glReadBuffer" "fexfn_pack_glReadBuffer" || exit 1
+  require_symbol_any "${guest_gl_symbols}" \
+    "libGL-guest.so missing glVertexAttrib2f bridge (glVertexAttrib2f/fexfn_pack_glVertexAttrib2f)" \
+    "glVertexAttrib2f" "fexfn_pack_glVertexAttrib2f" || exit 1
+  require_symbol_any "${guest_gl_symbols}" \
+    "libGL-guest.so missing glVertexAttribIPointer bridge (glVertexAttribIPointer/fexfn_pack_glVertexAttribIPointer)" \
+    "glVertexAttribIPointer" "fexfn_pack_glVertexAttribIPointer" || exit 1
   require_symbol_any "${guest_gl_symbols}" \
     "libGL-guest.so missing glClearDepth" \
     "glClearDepth" "fexfn_pack_glClearDepth" || exit 1

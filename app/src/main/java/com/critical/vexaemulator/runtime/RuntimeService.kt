@@ -23,6 +23,7 @@ class RuntimeService : Service() {
     private var clientMessenger: Messenger? = null
     private var workerMessenger: Messenger? = null
     private var workerBound = false
+    private var workerBinding = false
     private var pendingWorkerStart: LaunchRequest? = null
     private var pendingSurface: Surface? = null
 
@@ -79,6 +80,7 @@ class RuntimeService : Service() {
     private val workerConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
             workerMessenger = Messenger(service)
+            workerBinding = true
             workerBound = true
             emitLog("INFO", "BOOT", "Runtime worker connected")
             pendingSurface?.let {
@@ -91,12 +93,14 @@ class RuntimeService : Service() {
         }
 
         override fun onServiceDisconnected(name: ComponentName?) {
+            workerBinding = false
             workerBound = false
             workerMessenger = null
             emitLog("WARN", "BOOT", "Runtime worker disconnected")
         }
 
         override fun onBindingDied(name: ComponentName?) {
+            workerBinding = false
             workerBound = false
             workerMessenger = null
             emitLog("ERROR", "BOOT", "Runtime worker binding died")
@@ -104,14 +108,19 @@ class RuntimeService : Service() {
     }
 
     private fun bindWorker() {
-        if (workerBound) return
+        if (workerBound || workerBinding) return
         val intent = Intent(this, RuntimeWorkerService::class.java)
-        bindService(intent, workerConnection, BIND_AUTO_CREATE)
+        val ok = bindService(intent, workerConnection, BIND_AUTO_CREATE)
+        workerBinding = ok
+        if (!ok) {
+            emitLog("ERROR", "BOOT", "bindService to RuntimeWorkerService returned false")
+        }
     }
 
     private fun unbindWorkerSafe() {
-        if (!workerBound) return
+        if (!workerBound && !workerBinding) return
         runCatching { unbindService(workerConnection) }
+        workerBinding = false
         workerBound = false
         workerMessenger = null
     }
@@ -241,15 +250,24 @@ class RuntimeService : Service() {
 
                         """{"format":"$surfaceFormat","width":"$surfaceWidth","height":"$surfaceHeight"}"""
                     )
-                    sendSurfaceToWorker(null)
-                    pendingSurface?.release()
-                    pendingSurface = null
-                    // TODO: RuntimeBridge.onRuntimeSurfaceChanged(width, height)
+                    val current = pendingSurface
+                    if (current != null && current.isValid) {
+                        sendSurfaceToWorker(current)
+                    } else {
+                        emitLog(
+                            "WARN",
+                            "SURFACE",
+                            "Surface change arrived but no valid pending surface"
+                        )
+                        // TODO: RuntimeBridge.onRuntimeSurfaceChanged(width, height)
+                    }
                 }
 
                 RuntimeIpc.MSG_SURFACE_DESTROYED -> {
                     emitLog("INFO", "SURFACE", "Surface destroyed in UI process")
-                    // TODO: release runtime-side surface state
+                    sendSurfaceToWorker(null)
+                    pendingSurface?.release()
+                    pendingSurface = null
                 }
 
                 RuntimeIpc.MSG_STOP_RUNTIME -> {

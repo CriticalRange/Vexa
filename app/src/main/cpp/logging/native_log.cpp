@@ -50,6 +50,7 @@ namespace Vexa::Log {
 
     void VexaNativeLog(JNIEnv *env, const char *level, const char *category, const char *msg,
                        const char *fieldsJson) {
+        if (!env) return;
         if (env->ExceptionCheck()) {
             env->ExceptionClear();
             return;

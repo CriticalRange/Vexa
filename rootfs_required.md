@@ -4,6 +4,7 @@ This file tracks the minimum RootFS content needed to launch targets under VEXA/
 Update this file whenever a new missing dependency is discovered.
 
 ## Target: HytaleClient
+
 Source binary:
 `/home/critical/.var/app/com.hypixel.HytaleLauncher/data/Hytale/install/release/package/game/latest/Client/HytaleClient`
 
@@ -21,6 +22,7 @@ Source binary:
 - [x] `/lib/x86_64-linux-gnu/libgcc_s.so.1`
 - [x] `/usr/lib/x86_64-linux-gnu/libstdc++.so.6`
 - [x] `/usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.33`
+- [x] `/usr/lib/x86_64-linux-gnu/libmvec.so.1` (required by `libNoesis.so`)
 - [x] `/etc/ld.so.cache`
 - [x] `/etc/ld.so.conf`
 - [x] `/etc/ld.so.conf.d`
@@ -97,7 +99,8 @@ adb shell run-as com.critical.vexaemulator ls -la files/rootfs/etc/ssl/certs/ca-
 
 ## Observed Potential Runtime Libraries (from binary strings)
 
-- [x] `libssl.so` family (`libssl.so`, `libssl.so.1.0.0`, `libssl.so.1.0.2`, `libssl.so.1.1`, `libssl.so.10`, `libssl.so.3`) (`.so.3` + unversioned symlink added)
+- [x] `libssl.so` family (`libssl.so`, `libssl.so.1.0.0`, `libssl.so.1.0.2`, `libssl.so.1.1`,
+  `libssl.so.10`, `libssl.so.3`) (`.so.3` + unversioned symlink added)
 - [ ] `libicui18n.so`
 - [ ] `libicuuc.so`
 - [ ] `libgssapi_krb5.so.2`
@@ -111,11 +114,14 @@ adb shell run-as com.critical.vexaemulator ls -la files/rootfs/etc/ssl/certs/ca-
 ## Verification Log
 
 - 2026-03-13: `HytaleClient` analyzed with `readelf` and `strings`.
-  - `PT_INTERP`: `/lib64/ld-linux-x86-64.so.2`
-  - `DT_NEEDED`: `libm.so.6`, `libc.so.6`, `ld-linux-x86-64.so.2`
+    - `PT_INTERP`: `/lib64/ld-linux-x86-64.so.2`
+    - `DT_NEEDED`: `libm.so.6`, `libc.so.6`, `ld-linux-x86-64.so.2`
 - 2026-03-13: Pushed missing glibc/runtime files to device rootfs path:
   `/data/user/0/com.critical.vexaemulator/files/rootfs`.
-  - Fixed broken loader symlink by adding `/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2`.
+    - Fixed broken loader symlink by adding `/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2`.
 - 2026-03-17: Auth failure root cause confirmed in client logs:
   `Failed to fetch JWKS ... Resource temporarily unavailable (sessions.hytale.com:443)`.
   Device rootfs lacked NSS/DNS/TLS files required for hostname resolution and HTTPS trust.
+- 2026-03-18: Added `libmvec.so.1` into app rootfs:
+  `/data/user/0/com.critical.vexaemulator/files/rootfs/usr/lib/x86_64-linux-gnu/libmvec.so.1`
+  to satisfy `libNoesis.so` dynamic dependency resolution.

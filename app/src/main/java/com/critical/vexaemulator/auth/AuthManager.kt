@@ -158,6 +158,16 @@ class AuthManager(context: Context) {
             Pair<List<String>, List<String>> {
         if (!state.hasGameTokens) throw IllegalStateException("Missing game tokens")
 
+        val gameDir = "/data/user/0/com.critical.vexaemulator/files/game/Client"
+        val rootfs = "/data/user/0/com.critical.vexaemulator/files/rootfs"
+        val rootLibPath = listOf(
+            // add list of used library paths later here
+            "$rootfs/lib/x86_64-linux-gnu",
+            "$rootfs/usr/lib/x86_64-linux-gnu",
+            "$rootfs/lib64/",
+            "$rootfs/lib/",
+        ).joinToString(":")
+
         fun sanitize(v: String?): String = (v ?: "").replace("\r", "").replace("\n", "")
 
         val env = mutableListOf(
@@ -173,6 +183,10 @@ class AuthManager(context: Context) {
             "TMPDIR=/data/user/0/com.critical.vexaemulator/files/fex-runtime/tmp",
 
             "XDG_RUNTIME_DIR=/data/user/0/com.critical.vexaemulator/files/fex-runtime/run",
+
+            "LD_LIBRARY_PATH=${gameDir}:${rootLibPath}",
+
+            "DISPLAY=:0",
 
             "PATH=/data/user/0/com.critical.vexaemulator/files/game/Client/jre/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
 
@@ -200,6 +214,18 @@ class AuthManager(context: Context) {
         if (!state.gameProfileUuid.isNullOrBlank()
             && !state.gameProfileName.isNullOrBlank()
         ) {
+            args += listOf(
+                "--auth-mode",
+                "authenticated",
+                "--app-dir",
+                "/data/user/0/com.critical.vexaemulator/files/game",
+                "--user-dir",
+                "/data/user/0/com.critical.vexaemulator/files/game/Client/UserData"
+            )
+            args += "--identity-token"
+            args += sanitize(state.gameIdentityToken)
+            args += "--session-token"
+            args += sanitize(state.gameSessionToken)
             args += "--uuid"
             args += state.gameProfileUuid!!
             args += "--name"

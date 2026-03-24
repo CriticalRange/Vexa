@@ -19,10 +19,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -108,6 +110,7 @@ class MainActivity : ComponentActivity() {
                 mutableStateOf(authManager?.load())
             }
             var authBusy by remember { mutableStateOf(false) }
+            var playError by remember { mutableStateOf<String?>(null) }
             val scope = rememberCoroutineScope()
 
             val authStatus = when {
@@ -141,14 +144,40 @@ class MainActivity : ComponentActivity() {
                     ) {
                         Button(
                             onClick = {
-                                LogStore.clear()
-                                activity?.startActivity(
-                                    Intent(
-                                        activity,
-                                        GameActivity::class.java
-                                    )
-                                )
+                                val hostActivity = activity ?: return@Button
+                                val manager = authManager ?: return@Button
+                                if (authBusy) return@Button
+
+                                scope.launch {
+                                    authBusy = true
+                                    try {
+                                        if (authState?.hasOauthRefreshToken != true) {
+                                            playError = "Not logged in. Please Login first."
+                                            return@launch
+                                        }
+                                        val ensured = manager.ensureGameTokens()
+                                        authState = ensured ?: manager.load()
+                                        if (ensured?.hasGameTokens != true) {
+                                            playError =
+                                                "Session is not ready. Press Refresh Session or Login again."
+                                            return@launch
+                                        }
+                                        LogStore.clear()
+                                        hostActivity.startActivity(
+                                            Intent(
+                                                hostActivity,
+                                                GameActivity::class.java
+                                            )
+                                        )
+                                    } catch (t: Throwable) {
+                                        authState = manager.load()
+                                        playError = t.message ?: t.javaClass.simpleName
+                                    } finally {
+                                        authBusy = false
+                                    }
+                                }
                             },
+                            enabled = !authBusy,
                             modifier = Modifier.fillMaxWidth(),
                             contentPadding = PaddingValues(horizontal = 24.dp, vertical = 12.dp)
                         ) {
@@ -279,6 +308,18 @@ class MainActivity : ComponentActivity() {
                                 },
                                 color = Color.LightGray
                             )
+                            playError?.let { err ->
+                                AlertDialog(
+                                    onDismissRequest = { playError = null },
+                                    title = { Text("Authentication Error") },
+                                    text = { Text(err) },
+                                    confirmButton = {
+                                        TextButton(onClick = { playError = null }) {
+                                            Text("OK")
+                                        }
+                                    }
+                                )
+                            }
                         }
                         Spacer(modifier = Modifier.height(8.dp))
                         Button(

@@ -3,7 +3,15 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+
+val thirdPartyDir = rootProject.file("third_party")
+
+val shadercDir = thirdPartyDir.resolve("shaderc")
 val rapidJsonDir = rootProject.file("third_party/rapidjson/include/rapidjson")
+val spirvCrossDir = thirdPartyDir.resolve("spirv-cross")
+
+val shadercCommit = "1d234d34d43cf5ade135803f7777484eaa48e27f"
+val spirvCrossCommit = "bf6bb5ce3c9fb141127a7d3289ebaaef86d3b065"
 val fexRoot = providers.environmentVariable("FEX_ROOT").orElse("/home/critical/FEX")
 val fexBuildDir = providers.gradleProperty("FEX_BUILD")
     .orElse("/home/critical/FEX/build-android-arm64-ninja")
@@ -21,29 +29,121 @@ val ensureThirdPartySources by tasks.registering {
     description = "Ensures required third-party sources are present."
 
     doLast {
-        if (rapidJsonDir.exists()) return@doLast
-
-        logger.lifecycle("RapidJSON not found at ${rapidJsonDir.path}, fetching via git submodule...")
-
-        val gitProcess = ProcessBuilder(
-            "git",
-            "submodule",
-            "update",
-            "--init",
-            "--depth",
-            "1",
-            "third_party/rapidjson"
-        )
-            .directory(rootProject.rootDir)
-            .inheritIO()
-            .start()
-        val gitExitCode = gitProcess.waitFor()
-
-        if (gitExitCode != 0 || !rapidJsonDir.exists()) {
-            throw GradleException(
-                "Failed to fetch RapidJSON. Run: git submodule update --init --depth 1 third_party/rapidjson"
-            )
+        fun run(
+            vararg args: String,
+            cwd: File = rootProject.rootDir,
+            ignoreExit: Boolean = false
+        ): Int {
+            return providers.exec {
+                workingDir = cwd
+                commandLine(*args)
+                isIgnoreExitValue = ignoreExit
+            }.result.get().exitValue
         }
+
+        fun gitStatusPorcelain(dir: File): String {
+            val out = providers.exec {
+                workingDir = dir
+                commandLine(
+                    "git",
+                    "status",
+                    "--porcelain"
+                )
+            }
+            var rc = out.result.get().exitValue
+
+            if (rc != 0) {
+                throw GradleException("git status failed in ${dir.absolutePath}")
+            }
+            return out.standardOutput.asText.get().trim()
+        }
+
+        fun isDirtyRepo(dir: File): Boolean {
+            val rc = run(
+                "bash",
+                "-lc",
+                "test -z \"$(git -c alias.status= status --porcelain --untracked-files=normal)\"",
+                cwd = dir,
+                ignoreExit = true
+            )
+            return rc != 0
+        }
+
+        fun ensureRepo(
+            name: String,
+            url: String,
+            commit: String,
+            updateSubmodules: Boolean = false
+        ) {
+            val dir = thirdPartyDir.resolve(name)
+            if (!dir.resolve(".git").exists()) {
+                run("git", "clone", url, dir.absolutePath)
+            }
+
+            if (gitStatusPorcelain(dir).isNotEmpty()) {
+                throw GradleException("dirty repo: ${dir.absolutePath}")
+            }
+
+            run("git", "fetch", "--force", "origin", commit, cwd = dir, ignoreExit = false)
+            run("git", "checkout", "--detach", commit, cwd = dir)
+
+            if (updateSubmodules && dir.resolve(".gitmodules").exists()) {
+                run("git", "submodule", "update", "--init", "--recursive", cwd = dir)
+            }
+        }
+
+        if (!thirdPartyDir.exists()) {
+            thirdPartyDir.mkdirs()
+        }
+
+        if (isDirtyRepo(rapidJsonDir)) {
+            throw GradleException("dirt repo: ${rapidJsonDir.absolutePath}")
+        }
+
+        // RapidJSON
+        if (!rapidJsonDir.exists()) {
+            logger.lifecycle("RapidJSON not found at ${rapidJsonDir.path}, fetching via git submodule...")
+            val rc = run(
+                "git",
+                "submodule",
+                "update",
+                "--init",
+                "--depth",
+                "1",
+                "third_party/rapidjson"
+            )
+            if (rc != 0 || !rapidJsonDir.exists()) {
+                throw GradleException(
+                    "Failed to fetch RapidJSON. Run: git submodule update --init --depth 1 third_party/rapidjson"
+                )
+            }
+        }
+
+        // shaderc + spirv-cross
+        if (isDirtyRepo(shadercDir)) {
+            throw GradleException("dirt repo: ${shadercDir.absolutePath}")
+        }
+
+        if (isDirtyRepo(spirvCrossDir)) {
+            throw GradleException("dirt repo: ${spirvCrossDir.absolutePath}")
+        }
+
+        ensureRepo(
+            "shaderc",
+            "https://github.com/google/shaderc.git",
+            shadercCommit,
+            updateSubmodules = true
+        )
+        run(
+            "python3",
+            shadercDir.resolve("utils/git-sync-deps").absolutePath,
+            cwd = rootProject.rootDir
+        )
+        ensureRepo(
+            "spirv-cross",
+            "https://github.com/KhronosGroup/SPIRV-Cross.git",
+            spirvCrossCommit
+        )
     }
 }
 
@@ -94,7 +194,7 @@ val buildFEXCore = tasks.register<org.gradle.api.tasks.Exec>("buildFEXCore") {
 }
 
 kotlin {
-    jvmToolchain(11)
+    jvmToolchain(21)
 }
 
 android {
@@ -143,8 +243,8 @@ android {
         }
     }
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_11
-        targetCompatibility = JavaVersion.VERSION_11
+        sourceCompatibility = JavaVersion.VERSION_21
+        targetCompatibility = JavaVersion.VERSION_21
     }
     buildFeatures {
         compose = true
@@ -182,6 +282,7 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.activity.compose)
     implementation(platform(libs.androidx.compose.bom))
+    implementation("com.google.android.material:material:1.12.0")
     implementation("androidx.browser:browser:1.9.0")
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.ui.graphics)

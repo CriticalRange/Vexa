@@ -4,26 +4,41 @@ set -euo pipefail
 FEX_ROOT="${FEX_ROOT:-/home/critical/FEX}"
 HOST_BUILD_DIR="${HOST_BUILD_DIR:-$FEX_ROOT/build-host-thunkgen-ninja}"
 ANDROID_BUILD_DIR="${ANDROID_BUILD_DIR:-$FEX_ROOT/build-android-arm64-ninja}"
+LLVM_VER="${LLVM_VER:-19}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 CLEAN=0
 
-for arg in "$@"; do
+while [[ $# -gt 0 ]]; do
+  arg="$1"
   case "$arg" in
     --clean) CLEAN=1 ;;
+    --llvm-ver)
+      shift
+      if [[ $# -eq 0 ]]; then
+        echo "--llvm-ver requires a value (example: 19)" >&2
+        exit 1
+      fi
+      LLVM_VER="$1"
+      ;;
+    --llvm-ver=*)
+      LLVM_VER="${arg#*=}"
+      ;;
     -h|--help)
-      echo "Usage: $0 [--clean]"
+      echo "Usage: $0 [--clean] [--llvm-ver <major>]"
       echo "  --clean   Delete host/android FEX build folders before configure/build"
+      echo "  --llvm-ver  Pin host thunkgen toolchain to a specific LLVM major (default: 19)"
       exit 0
       ;;
     *)
       echo "Unknown arg: $arg" >&2
-      echo "Usage: $0 [--clean]" >&2
+      echo "Usage: $0 [--clean] [--llvm-ver <major>]" >&2
       exit 1
       ;;
   esac
+  shift
 done
 
 safe_remove_dir() {
@@ -42,7 +57,10 @@ if [[ "$CLEAN" -eq 1 ]]; then
 fi
 
 echo "[1/4] configure thunkgen host"
-"${PROJECT_ROOT}/scripts/configure_fex_thunkgen.sh"
+if [[ -n "$LLVM_VER" ]]; then
+  echo "[toolchain] host thunkgen pinned to LLVM $LLVM_VER"
+fi
+LLVM_VER="$LLVM_VER" "${PROJECT_ROOT}/scripts/configure_fex_thunkgen.sh"
 
 echo "[2/4] configure android"
 "${PROJECT_ROOT}/scripts/configure_fex_android.sh"

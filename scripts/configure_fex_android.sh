@@ -1,10 +1,23 @@
 #!/usr/bin/env bash
+set -euo pipefail
 
 FEX_ROOT="${FEX_ROOT:-/home/critical/FEX}"
 BUILD_DIR="${BUILD_DIR:-$FEX_ROOT/build-android-arm64-ninja}"
 THUNKGEN_EXECUTABLE="${THUNKGEN_EXECUTABLE:-/home/critical/FEX/build-host-thunkgen-ninja/Bin/thunkgen}"
 NDK_TOOLCHAIN="${NDK_TOOLCHAIN:-/home/critical/Android/Sdk/ndk/29.0.14206865/build/cmake/android.toolchain.cmake}"
 BUILD_THUNKS="${BUILD_THUNKS:-ON}"
+# BUILD_ANDROID must be forwarded so Guest/Guest_32 ExternalProject thunk builds
+# compile Android-specific branches in guest thunk sources.
+BUILD_ANDROID_FLAG="${BUILD_ANDROID_FLAG:-1}"
+
+if [[ ! -f "$NDK_TOOLCHAIN" ]]; then
+  echo "[error] Android NDK toolchain not found: $NDK_TOOLCHAIN" >&2
+  exit 1
+fi
+if [[ ! -x "$THUNKGEN_EXECUTABLE" ]]; then
+  echo "[error] Host thunkgen executable not found or not executable: $THUNKGEN_EXECUTABLE" >&2
+  exit 1
+fi
 
 mkdir -p "$BUILD_DIR"
 cd "$BUILD_DIR"
@@ -14,8 +27,11 @@ cmake "$FEX_ROOT" \
   -DCMAKE_TOOLCHAIN_FILE="$NDK_TOOLCHAIN" \
   -DCMAKE_BUILD_TYPE=RelWithDebInfo \
   -DTHUNKGEN_EXECUTABLE="$THUNKGEN_EXECUTABLE" \
+  -DBUILD_ANDROID="$BUILD_ANDROID_FLAG" \
   -DENABLE_DESKTOP_GL_THUNKS=ON \
   -DENABLE_EGL_THUNKS=ON \
+  -DVEXA_ENABLE_RUNTIME_SHADER_TRANSLATOR=ON \
+  -DVEXA_THIRD_PARTY_DIR=/home/critical/vexa/third_party/ \
   -DVEXA_SDL3_PREFIX=/home/critical/vexa/third_party/install-android-arm64/sdl3 \
   -DVEXA_SDL3_IMAGE_PREFIX=/home/critical/vexa/third_party/install-android-arm64/sdl3_image \
   -DVEXA_OPENAL_PREFIX=/home/critical/vexa/third_party/install-android-arm64/openal \
