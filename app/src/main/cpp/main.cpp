@@ -224,7 +224,7 @@ extern "C"
 JNIEXPORT void JNICALL
 Java_com_critical_vexaemulator_RuntimeBridge_nativeStopRuntime(JNIEnv *env, jobject thiz) {
     VEXA_LOGI(env, "BOOT", "native stopRuntime is called", "{}");
-    Vexa::Log::UninstallSignalHandlers();
+    // Vexa::Log::UninstallSignalHandlers();
     Vexa::Runtime::SurfaceBridge::Clear();
     Vexa::Runtime::StopRuntime();
 }

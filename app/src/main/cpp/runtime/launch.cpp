@@ -5,6 +5,7 @@
 #include <string>
 
 #include "../logging/native_log.h"
+#include "../logging/crash_signals.h"
 #include "launch.h"
 #include "init/config.h"
 #include "init/core.h"
@@ -140,6 +141,10 @@ namespace Vexa::Runtime {
 
         Init::TrackClientFDs(env, g_state);
         VEXA_LOGI(env, "FEX", "Track FEX Server FDs OK", "{}");
+
+        Vexa::Log::InstallFexCrashHandler(g_state.signalDelegator.get());
+        VEXA_LOGI(env, "FEX", "FEX crash handler installed", "{}");
+        Vexa::Log::UninstallSignalHandlers();
 
         r = Init::SetupThreads(g_state);
         if (!r.Ok()) {

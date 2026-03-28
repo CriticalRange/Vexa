@@ -17,6 +17,14 @@ namespace Vexa::Common {
         return ::access(path.c_str(), R_OK | X_OK) == 0;
     }
 
+    bool IsReadableFile(const std::string &path) {
+        if (path.empty()) return false;
+        struct stat st{};
+        if (::stat(path.c_str(), &st) != 0) return false;
+        if (!S_ISREG(st.st_mode)) return false;
+        return ::access(path.c_str(), R_OK) == 0;
+    }
+
     bool IsExecutable(const std::string &path) {
         if (path.empty()) return false;
         struct stat st{};

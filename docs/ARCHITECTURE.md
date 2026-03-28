@@ -141,3 +141,13 @@ Keep the public state model simple:
 - exited
 
 Avoid ambiguous states like "loading" unless there is a precise meaning behind them.
+
+## Native Worker Thread Contract
+
+- FEX-facing runtime entry points must run on a dedicated native worker pthread, never on Binder or Android framework threads.
+- The same worker-thread ownership rule applies to `SetSignalDelegator`, `SetSyscallHandler`, `InitCore`, `CreateThread`, and `ExecuteThread`.
+- Worker-thread stack policy must be explicit via `pthread_attr_setstacksize` and `pthread_attr_setguardsize`.
+- Android worker mode must enforce a documented minimum safe stack size before entering FEX code.
+- Before the first FEX entry point, runtime must validate live thread stack bounds using `pthread_getattr_np` + `pthread_attr_getstack`.
+- Stack/entry-thread validation failures are startup-blocking errors, not warnings.
+- Runtime should expose these checks as part of startup phase reporting so app-side diagnostics can distinguish thread-policy failures from guest failures.

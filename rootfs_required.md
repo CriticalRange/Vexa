@@ -23,6 +23,7 @@ Source binary:
 - [x] `/usr/lib/x86_64-linux-gnu/libstdc++.so.6`
 - [x] `/usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.33`
 - [x] `/usr/lib/x86_64-linux-gnu/libmvec.so.1` (required by `libNoesis.so`)
+- [x] `/usr/lib/x86_64-linux-gnu/libdbus-1.so.3` (with `libdbus-1.so.3.32.4`)
 - [x] `/etc/ld.so.cache`
 - [x] `/etc/ld.so.conf`
 - [x] `/etc/ld.so.conf.d`
@@ -30,6 +31,32 @@ Source binary:
 - [x] `/usr/lib/x86_64-linux-gnu/libcrypto.so.3` (with `libcrypto.so` symlink)
 - [x] `/usr/lib/i386-linux-gnu/libssl.so.3` (with `libssl.so` symlink)
 - [x] `/usr/lib/i386-linux-gnu/libcrypto.so.3` (with `libcrypto.so` symlink)
+
+## X11 Compatibility Stub Libraries (Noesis dependency chain)
+
+These are intentionally no-op compatibility stubs for Android guest runtime.
+They are required so `libNoesis.so` can resolve X11/XCB SONAMEs without a full X11 stack.
+
+- [x] `/usr/lib/x86_64-linux-gnu/libX11.so.6` (stub)
+- [x] `/usr/lib/x86_64-linux-gnu/libxcb.so.1` (stub)
+- [x] `/usr/lib/x86_64-linux-gnu/libXau.so.6` (stub)
+- [x] `/usr/lib/x86_64-linux-gnu/libXdmcp.so.6` (stub)
+
+Build + overlay workflow:
+
+```bash
+./scripts/libx11-stub/build.sh
+./scripts/push_fex_rootfs.sh
+```
+
+Manual verify:
+
+```bash
+adb shell run-as com.critical.vexaemulator ls -la files/rootfs/usr/lib/x86_64-linux-gnu/libX11.so.6
+adb shell run-as com.critical.vexaemulator ls -la files/rootfs/usr/lib/x86_64-linux-gnu/libxcb.so.1
+adb shell run-as com.critical.vexaemulator ls -la files/rootfs/usr/lib/x86_64-linux-gnu/libXau.so.6
+adb shell run-as com.critical.vexaemulator ls -la files/rootfs/usr/lib/x86_64-linux-gnu/libXdmcp.so.6
+```
 
 ## Hytale Auth/JWKS Network Requirements (minimal push set)
 
@@ -125,3 +152,12 @@ adb shell run-as com.critical.vexaemulator ls -la files/rootfs/etc/ssl/certs/ca-
 - 2026-03-18: Added `libmvec.so.1` into app rootfs:
   `/data/user/0/com.critical.vexaemulator/files/rootfs/usr/lib/x86_64-linux-gnu/libmvec.so.1`
   to satisfy `libNoesis.so` dynamic dependency resolution.
+- 2026-03-26: Added `libdbus-1.so.3` (and backing
+  `libdbus-1.so.3.32.4`) into app rootfs:
+  `/data/user/0/com.critical.vexaemulator/files/rootfs/usr/lib/x86_64-linux-gnu/`
+  after `ALSOFT` logged:
+  `Failed to load libdbus-1.so.3`.
+- 2026-03-27: Added X11 compatibility stubs (`libX11.so.6`, `libxcb.so.1`,
+  `libXau.so.6`, `libXdmcp.so.6`) via `scripts/libx11-stub/build.sh` and
+  integrated overlay in `scripts/push_fex_rootfs.sh`.
+  Reason: `libNoesis.so` load path requires X11 SONAME resolution on Android.

@@ -24,6 +24,9 @@ REMOTE_STAGE_ROOT="/data/local/tmp/vexa-rootfs-stage"
 CLEAN_DEST=0
 STRICT=0
 INCLUDE_OPTIONAL=1
+INCLUDE_X11_STUBS=1
+X11_STUB_DIR="${REPO_ROOT}/scripts/libx11-stub/out"
+X11_STUB_BUILD_SCRIPT="${REPO_ROOT}/scripts/libx11-stub/build.sh"
 
 REQUIRED_ENTRIES=(
   "/lib64/ld-linux-x86-64.so.2"
@@ -62,6 +65,13 @@ OPTIONAL_ENTRIES=(
   "/usr/lib/x86_64-linux-gnu/libmd.so.0"
 )
 
+X11_COMPAT_LIBS=(
+  "libX11.so.6"
+  "libxcb.so.1"
+  "libXau.so.6"
+  "libXdmcp.so.6"
+)
+
 usage() {
   cat <<'USAGE'
 Usage: push_fex_rootfs.sh [options]
@@ -73,6 +83,8 @@ Options:
   --clean             Clean destination first (default: disabled; overlay copy)
   --strict            Fail when any required source entry is missing
   --no-optional       Skip optional GL bridge entries
+  --x11-stub-dir <d>  X11 stub artifact dir (default: scripts/libx11-stub/out)
+  --no-x11-stubs      Skip overlaying X11 compatibility stubs
   --help              Show this help
 USAGE
 }
@@ -219,6 +231,63 @@ verify_device_required() {
   return 0
 }
 
+ensure_x11_stub_artifacts() {
+  [[ "$INCLUDE_X11_STUBS" -eq 1 ]] || return 0
+
+  local missing=0
+  local name
+  for name in "${X11_COMPAT_LIBS[@]}"; do
+    if [[ ! -f "${X11_STUB_DIR}/${name}" ]]; then
+      missing=1
+      break
+    fi
+  done
+
+  if [[ "$missing" -eq 0 ]]; then
+    return 0
+  fi
+
+  if [[ ! -x "$X11_STUB_BUILD_SCRIPT" ]]; then
+    echo "[push-fex-rootfs] missing x11 stub artifacts and build helper is not executable: $X11_STUB_BUILD_SCRIPT" >&2
+    return 1
+  fi
+
+  echo "[push-fex-rootfs] building x11 compatibility stubs..."
+  "$X11_STUB_BUILD_SCRIPT"
+
+  for name in "${X11_COMPAT_LIBS[@]}"; do
+    if [[ ! -f "${X11_STUB_DIR}/${name}" ]]; then
+      echo "[push-fex-rootfs] missing x11 stub after build: ${X11_STUB_DIR}/${name}" >&2
+      return 1
+    fi
+  done
+}
+
+stage_x11_compat_overlays() {
+  [[ "$INCLUDE_X11_STUBS" -eq 1 ]] || return 0
+
+  local dst_dir="${LOCAL_STAGE_DIR}/usr/lib/x86_64-linux-gnu"
+  mkdir -p "$dst_dir"
+  local name
+  for name in "${X11_COMPAT_LIBS[@]}"; do
+    cp -aL -- "${X11_STUB_DIR}/${name}" "${dst_dir}/${name}"
+  done
+}
+
+verify_device_x11_compat() {
+  [[ "$INCLUDE_X11_STUBS" -eq 1 ]] || return 0
+
+  local missing=0
+  local name
+  for name in "${X11_COMPAT_LIBS[@]}"; do
+    if ! adb shell run-as "$PKG" /system/bin/test -e "${DEST_ROOTFS_DIR}/usr/lib/x86_64-linux-gnu/${name}"; then
+      echo "[push-fex-rootfs] missing on device: ${DEST_ROOTFS_DIR}/usr/lib/x86_64-linux-gnu/${name}" >&2
+      missing=1
+    fi
+  done
+  [[ "$missing" -eq 0 ]]
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --source)
@@ -243,6 +312,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --no-optional)
       INCLUDE_OPTIONAL=0
+      shift
+      ;;
+    --x11-stub-dir)
+      X11_STUB_DIR="${2:?missing value for --x11-stub-dir}"
+      shift 2
+      ;;
+    --no-x11-stubs)
+      INCLUDE_X11_STUBS=0
       shift
       ;;
     --help)
@@ -284,6 +361,8 @@ ensure_symlink "$SOURCE_ROOTFS/usr/lib/x86_64-linux-gnu" "libcrypto.so" "libcryp
 ensure_symlink "$SOURCE_ROOTFS/usr/lib/i386-linux-gnu" "libssl.so" "libssl.so.3"
 ensure_symlink "$SOURCE_ROOTFS/usr/lib/i386-linux-gnu" "libcrypto.so" "libcrypto.so.3"
 
+ensure_x11_stub_artifacts
+
 validate_required_source "$SOURCE_ROOTFS"
 
 adb get-state >/dev/null 2>&1 || {
@@ -299,6 +378,9 @@ adb shell run-as "$PKG" /system/bin/true >/dev/null 2>&1 || {
 echo "[push-fex-rootfs] package=$PKG"
 echo "[push-fex-rootfs] source=$SOURCE_ROOTFS"
 echo "[push-fex-rootfs] dest=$DEST_ROOTFS_DIR"
+if [[ "$INCLUDE_X11_STUBS" -eq 1 ]]; then
+  echo "[push-fex-rootfs] x11_stub_dir=$X11_STUB_DIR"
+fi
 
 LOCAL_STAGE_DIR="$(mktemp -d)"
 
@@ -317,6 +399,7 @@ if [[ "$INCLUDE_OPTIONAL" -eq 1 ]]; then
     stage_path "$rel" 0
   done
 fi
+stage_x11_compat_overlays
 
 if [[ "$CLEAN_DEST" -eq 1 ]]; then
   adb shell run-as "$PKG" /system/bin/rm -rf "$DEST_ROOTFS_DIR"
@@ -334,6 +417,10 @@ adb shell run-as "$PKG" /system/bin/cp -R "$REMOTE_STAGE_ROOT/." "$DEST_ROOTFS_D
 
 verify_device_required || {
   echo "[push-fex-rootfs] verification failed" >&2
+  exit 1
+}
+verify_device_x11_compat || {
+  echo "[push-fex-rootfs] x11 compatibility verification failed" >&2
   exit 1
 }
 

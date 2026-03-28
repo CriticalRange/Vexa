@@ -6,6 +6,24 @@
 #include "preflight.h"
 
 namespace Vexa::Runtime {
+    namespace {
+        bool RootfsHasCompatLib(const std::string &rootfs, const char *soname) {
+            static constexpr const char *kLibDirs[] = {
+                    "/usr/lib/x86_64-linux-gnu",
+                    "/lib/x86_64-linux-gnu",
+                    "/lib64",
+                    "/lib",
+            };
+
+            for (const char *dir: kLibDirs) {
+                if (Vexa::Common::IsReadableFile(rootfs + dir + "/" + soname)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
     Vexa::Common::Result RunPreflight(const Vexa::Common::Paths &p) {
         if (!Vexa::Common::IsReadableDir(p.workingDir))
             return Vexa::Common::Result::Failure(
@@ -19,6 +37,21 @@ namespace Vexa::Runtime {
                     Vexa::Common::Phase::Preflight,
                     "RootFS unreadable"
             );
+        static constexpr const char *kRequiredX11CompatLibs[] = {
+                "libX11.so.6",
+                "libxcb.so.1",
+                "libXau.so.6",
+                "libXdmcp.so.6",
+        };
+        for (const char *soname: kRequiredX11CompatLibs) {
+            if (!RootfsHasCompatLib(p.rootfs, soname))
+                return Vexa::Common::Result::Failure(
+                        Vexa::Common::Code::BadRootfs,
+                        Vexa::Common::Phase::Preflight,
+                        "RootFS missing X11 compatibility library",
+                        soname
+                );
+        }
         if (!Vexa::Common::IsReadableDir(p.thunkHost))
             return Vexa::Common::Result::Failure(
                     Vexa::Common::Code::BadThunkHost,

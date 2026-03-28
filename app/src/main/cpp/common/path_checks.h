@@ -10,6 +10,8 @@
 namespace Vexa::Common {
     bool IsReadableDir(const std::string &path);
 
+    bool IsReadableFile(const std::string &path);
+
     bool IsExecutable(const std::string &path);
 }
 
