@@ -4,7 +4,7 @@
 
 - Assumption: the Android app will be rewritten in Kotlin.
 - Assumption: the native/runtime side may stay native and separate from the app layer even if implementation details change.
-- Assumption: the first runtime target remains an x86_64 Linux game payload launched on Android ARM64 through a compatibility layer.
+- Assumption: the runtime runs x86_64 Linux programs on Android ARM64. The app is general-purpose. A program is an instance, not a hardcoded game.
 
 ## High-Level Architecture
 
@@ -15,7 +15,7 @@ VEXA should be treated as two cooperating systems:
 
 The Android app layer is responsible for control, validation, visibility, and lifecycle coordination.
 
-The runtime / compatibility layer is responsible for actually hosting and executing the target game's runtime environment.
+The runtime / compatibility layer is responsible for hosting and executing the selected Linux program.
 
 ### Suggested Mental Model
 
@@ -87,7 +87,7 @@ The runtime layer should not own Android UI decisions.
 - The runtime returns explicit state and failure reasons. It does not rely on the app to guess what happened.
 - Cross-layer communication should use explicit data contracts, not ad hoc globals.
 - Every hidden fallback should be treated as suspicious until documented.
-- If a behavior is Hytale-specific, mark it as such instead of pretending it is generic.
+- If a behavior belongs to one program, keep it on that instance instead of making it a rule for every launch.
 - HyMobile is an evidence source, not an implementation base. Reuse proven behaviors, not old structure.
 - The new runtime integration should be written from scratch around a small explicit launch contract.
 - Do not copy old wrapper object models, globals, or package-specific path assumptions into VEXA.

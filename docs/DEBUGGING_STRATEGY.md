@@ -1,5 +1,7 @@
 # DEBUGGING STRATEGY
 
+VEXA is a general-purpose Linux x86_64 runner. Diagnosis is per program, not per one title.
+
 ## Assumptions
 
 - Assumption: debugging and explicit crash diagnosis are the top priority for the rewrite.

@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "../../logging/native_log.h"
+#include "../../logging/crash_signals.h"
 #include "config.h"
 
 namespace Vexa::Runtime::Init {
@@ -101,6 +102,35 @@ namespace Vexa::Runtime::Init {
             AddDirProbeOverlays(openalOverlays, gameDir, "openal", true);
             AddDirProbeOverlays(openalOverlays, gameDirAlias, "openal", true);
 
+            std::vector<std::string> glOverlays = {
+                    "@PREFIX_LIB@/libGL.so",
+                    "@PREFIX_LIB@/libGL.so.1",
+                    "@PREFIX_LIB@/libGL.so.1.2.0",
+                    "@PREFIX_LIB@/libGL.so.1.7.0",
+                    "/proc/libGL.so",
+                    "/proc/libGL.so.1",
+            };
+            AddDirProbeOverlays(glOverlays, gameDir, "GL");
+            AddDirProbeOverlays(glOverlays, gameDirAlias, "GL");
+
+            std::vector<std::string> eglOverlays = {
+                    "@PREFIX_LIB@/libEGL.so",
+                    "@PREFIX_LIB@/libEGL.so.1",
+                    "/proc/libEGL.so",
+                    "/proc/libEGL.so.1",
+            };
+            AddDirProbeOverlays(eglOverlays, gameDir, "EGL");
+            AddDirProbeOverlays(eglOverlays, gameDirAlias, "EGL");
+
+            std::vector<std::string> glesOverlays = {
+                    "@PREFIX_LIB@/libGLESv2.so",
+                    "@PREFIX_LIB@/libGLESv2.so.2",
+                    "/proc/libGLESv2.so",
+                    "/proc/libGLESv2.so.2",
+            };
+            AddDirProbeOverlays(glesOverlays, gameDir, "GLESv2");
+            AddDirProbeOverlays(glesOverlays, gameDirAlias, "GLESv2");
+
             std::ostringstream json;
             json << "{\n"
                  << "  \"DB\": {\n"
@@ -115,22 +145,43 @@ namespace Vexa::Runtime::Init {
                  << "    \"openal\": {\n"
                  << "      \"Library\": \"libopenal-guest.so\",\n"
                  << "      \"Overlay\": " << BuildJsonArray(openalOverlays) << "\n"
+                 << "    },\n"
+                 << "    \"GL\": {\n"
+                 << "      \"Library\": \"libGL-guest.so\",\n"
+                 << "      \"Overlay\": " << BuildJsonArray(glOverlays) << "\n"
+                 << "    },\n"
+                 << "    \"EGL\": {\n"
+                 << "      \"Library\": \"libEGL-guest.so\",\n"
+                 << "      \"Overlay\": " << BuildJsonArray(eglOverlays) << "\n"
+                 << "    },\n"
+                 << "    \"GLESv2\": {\n"
+                 << "      \"Library\": \"libGLESv2-guest.so\",\n"
+                 << "      \"Overlay\": " << BuildJsonArray(glesOverlays) << "\n"
                  << "    }\n"
                  << "  }\n"
                  << "}\n";
             return json.str();
         }
 
-        std::string BuildAppTHunkConfigJson() {
-            return R"json(
-  {
-    "ThunksDB": {
-      "SDL3": 1,
-      "SDL3_image": 1,
-      "openal": 1
-    }
-  }
-  )json";
+        int ThunkGuestPresent(const Vexa::Common::Paths &paths, const char *fileName) {
+            std::error_code ec;
+            const auto full = std::filesystem::path(paths.thunkGuest) / fileName;
+            return std::filesystem::is_regular_file(full, ec) ? 1 : 0;
+        }
+
+        std::string BuildAppTHunkConfigJson(const Vexa::Common::Paths &paths) {
+            std::ostringstream json;
+            json << "{\n"
+                 << "  \"ThunksDB\": {\n"
+                 << "    \"SDL3\": " << ThunkGuestPresent(paths, "libSDL3-guest.so") << ",\n"
+                 << "    \"SDL3_image\": " << ThunkGuestPresent(paths, "libSDL3_image-guest.so") << ",\n"
+                 << "    \"openal\": " << ThunkGuestPresent(paths, "libopenal-guest.so") << ",\n"
+                 << "    \"GL\": " << ThunkGuestPresent(paths, "libGL-guest.so") << ",\n"
+                 << "    \"EGL\": " << ThunkGuestPresent(paths, "libEGL-guest.so") << ",\n"
+                 << "    \"GLESv2\": " << ThunkGuestPresent(paths, "libGLESv2-guest.so") << "\n"
+                 << "  }\n"
+                 << "}\n";
+            return json.str();
         }
 
         std::string GetFilename(const std::string &path) {
@@ -191,7 +242,7 @@ namespace Vexa::Runtime::Init {
                                          }).c_str()
             );
         }
-        if (!WriteTextFile(appCfgPath, BuildAppTHunkConfigJson())) {
+        if (!WriteTextFile(appCfgPath, BuildAppTHunkConfigJson(paths))) {
             VEXA_LOGW(
                     env,
                     "FEX",
@@ -224,6 +275,13 @@ namespace Vexa::Runtime::Init {
             (void) ::dup2(fd, STDERR_FILENO);
             ::close(fd);
         }
+        const std::string stdoutPath = paths.artifactDir + "/guest_stdout.log";
+        int outFd = ::open(stdoutPath.c_str(), O_CREAT | O_WRONLY | O_TRUNC, 0644);
+        if (outFd >= 0) {
+            (void) ::dup2(outFd, STDOUT_FILENO);
+            ::close(outFd);
+        }
+        Vexa::Log::OpenCrashLog(paths.artifactDir.c_str());
         FEXCore::Config::Shutdown(); // safe defensive
 
         ::setenv("VEXA_DISABLE_FEXSERVER", "1", 1);

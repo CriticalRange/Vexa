@@ -1,5 +1,7 @@
 # FINDINGS AND QUIRKS
 
+VEXA is a general-purpose Linux x86_64 runner. Notes below that describe one guest are historical bring-up records. They are not product requirements for every program.
+
 ## Assumptions
 
 - Assumption: this file is a living evidence log, not a final truth document.

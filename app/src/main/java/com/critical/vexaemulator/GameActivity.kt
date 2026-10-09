@@ -6,7 +6,6 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
-import android.content.pm.ActivityInfo
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -26,13 +25,28 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.Button
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -40,19 +54,25 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.lifecycleScope
 import com.critical.vexaemulator.logging.LogCategory
 import com.critical.vexaemulator.logging.LogLevel
+import com.critical.vexaemulator.logging.LogStore
 import com.critical.vexaemulator.logging.VexaLogger
 import com.critical.vexaemulator.runtime.LaunchRequest
 import com.critical.vexaemulator.runtime.RuntimeIpc
 import com.critical.vexaemulator.runtime.RuntimeService
 import com.critical.vexaemulator.ui.GameDebugPanel
 import com.critical.vexaemulator.ui.GameLoadingOverlay
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private const val WORKER_PROCESS = "com.critical.vexaemulator:runtime_worker"
 private const val LOGCAT_TAG_RUNTIME_EXIT = "Vexa-RuntimeExit"
 
 class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
+    companion object {
+        const val EXTRA_PROGRAM_ID = "programId"
+    }
     private lateinit var gameSurfaceView: SurfaceView
     private var isExiting = false
 
@@ -90,7 +110,7 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
                         VexaLogger.log(
                             level = LogLevel.ERROR,
                             category = LogCategory.FAILURE,
-                            message = "Runtime service start failed",
+                            message = "Runtime service start failed ($code)",
                             fields = mapOf(
                                 "code" to code.toString()
                             )
@@ -144,7 +164,7 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
     private val uiMessenger = Messenger(uiIncomingHandler)
 
     private var showLoading by mutableStateOf(true)
-    private var showDebugMenu by mutableStateOf(true) // For now, it's true; will be changed
+    private var showDebugMenu by mutableStateOf(false)
     private var hideFilters by mutableStateOf(true)
     private var lastRuntimePid: Int? = null
     private var runtimeConnectedAtMs: Long = 0L
@@ -458,7 +478,6 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
             )
         )
 
-        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         hideSystemBars()
         VexaLogger.log(
@@ -466,7 +485,7 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
             category = LogCategory.ACTIVITY,
             message = "GameActivity window configured",
             fields = mapOf(
-                "orientation" to "sensorLandscape",
+                "orientation" to "unspecified",
                 "keepScreenOn" to "true"
             )
         )
@@ -492,7 +511,8 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
                 showDebugMenu = showDebugMenu,
                 onToggleDebugMenu = { showDebugMenu = !showDebugMenu },
                 hideFilters = hideFilters,
-                onHideFilters = { hideFilters = !hideFilters }
+                onHideFilters = { hideFilters = !hideFilters },
+                onBack = { closeGameActivity() },
             )
         }
         VexaLogger.log(
@@ -500,20 +520,6 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
             category = LogCategory.SURFACE,
             message = "SurfaceView object attached"
         )
-        lifecycleScope.launch {
-            delay(5000)
-
-            showLoading = false
-            VexaLogger.log(
-                level = LogLevel.INFO,
-                category = LogCategory.UI,
-                message = "Loading overlay hidden",
-                fields = mapOf(
-                    "showLoading" to showLoading.toString(),
-                    "reason" to "timeout_5s"
-                )
-            )
-        }
     }
 
     override fun onStart() {
@@ -534,33 +540,30 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
             category = LogCategory.SURFACE,
             message = "Game Surface is being created..."
         )
-        val authManager = com.critical.vexaemulator.auth.AuthManager(applicationContext)
-        lifecycleScope.launch {
-            val authState = runCatching {
-                authManager.ensureGameTokens() // force refresh when click "Refresh session"
-            }.getOrElse { t ->
-                android.util.Log.e("VEXA-AUTH", "ensureGameTokens failed", t)
-                return@launch
-            }
-            if (authState?.hasGameTokens != true) {
-                VexaLogger.log(
-                    LogLevel.ERROR,
-                    LogCategory.FAILURE,
-                    "Cannot launch: auth tokens missing"
-                )
-                return@launch
-            }
-            val (launchEnv, launchArgs) = authManager.buildLaunchContract(authState)
-            val request = LaunchRequest(
-                executablePath = "/data/user/0/com.critical.vexaemulator/files/game/Client/HytaleClient",
-                rootfsPath = "/data/user/0/com.critical.vexaemulator/files/rootfs",
-                thunkHostPath = "/data/user/0/com.critical.vexaemulator/files/thunks/host",
-                thunkGuestPath = "/data/user/0/com.critical.vexaemulator/files/thunks/guest",
-                workingDirectory = "/data/user/0/com.critical.vexaemulator/files/game/Client",
-                artifactDirectory = "/data/user/0/com.critical.vexaemulator/files/artifacts/",
-                launchEnv = launchEnv,
-                launchArgs = launchArgs,
+        val program = com.critical.vexaemulator.guest.GuestCatalog.find(
+            intent.getStringExtra(EXTRA_PROGRAM_ID).orEmpty()
+        )
+        if (program == null) {
+            VexaLogger.log(
+                LogLevel.ERROR,
+                LogCategory.FAILURE,
+                "No program selected"
             )
+            return
+        }
+        val request = com.critical.vexaemulator.guest.GuestInstaller.install(this, program)
+        VexaLogger.log(
+            level = LogLevel.INFO,
+            category = LogCategory.BOOT,
+            message = "Launching ${program.title}",
+            fields = mapOf(
+                "id" to program.id,
+                "executable" to request.executablePath,
+                "args" to request.launchArgs.joinToString(" "),
+            )
+        )
+        startGuestOutputTail(java.io.File(request.artifactDirectory))
+        lifecycleScope.launch {
             if (!runtimeBound || serviceMessenger == null) {
                 pendingLaunchRequest = request
                 VexaLogger.log(
@@ -657,6 +660,44 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
         super.onDestroy()
     }
 
+    private fun startGuestOutputTail(artifactDir: java.io.File) {
+        lifecycleScope.launch(Dispatchers.IO) {
+            val stdout = java.io.File(artifactDir, "guest_stdout.log")
+            val stderr = java.io.File(artifactDir, "fex_stderr.log")
+            var stdoutPos = 0L
+            var stderrPos = 0L
+            repeat(40) {
+                stdoutPos = publishNewLines(stdout, stdoutPos, "guest stdout")
+                stderrPos = publishNewLines(stderr, stderrPos, "guest stderr")
+                delay(500)
+            }
+        }
+    }
+
+    private suspend fun publishNewLines(file: java.io.File, position: Long, label: String): Long {
+        if (!file.exists()) return position
+        val length = file.length()
+        if (length <= position) return position
+        val chunk = try {
+            withContext(Dispatchers.IO) {
+                java.io.RandomAccessFile(file, "r").use { raf ->
+                    raf.seek(position)
+                    val size = (length - position).coerceAtMost(65536L).toInt()
+                    val bytes = ByteArray(size)
+                    val read = raf.read(bytes)
+                    if (read <= 0) null else read to String(bytes, 0, read, Charsets.UTF_8)
+                }
+            }
+        } catch (_: Exception) {
+            null
+        } ?: return position
+        val (read, text) = chunk
+        text.lineSequence().map { it.trimEnd() }.filter { it.isNotEmpty() }.forEach { line ->
+            VexaLogger.log(LogLevel.INFO, LogCategory.RUNTIME, "$label: $line")
+        }
+        return position + read
+    }
+
     private fun hideSystemBars() {
         WindowCompat.setDecorFitsSystemWindows(window, false)
 
@@ -675,8 +716,10 @@ private fun GameScreen(
     showDebugMenu: Boolean,
     onToggleDebugMenu: () -> Unit,
     hideFilters: Boolean,
-    onHideFilters: () -> Unit
+    onHideFilters: () -> Unit,
+    onBack: () -> Unit,
 ) {
+    val entries by LogStore.entries.collectAsState()
     Box(modifier = Modifier.fillMaxSize()) {
         AndroidView( // Shows actual game content
             factory = { surfaceView },
@@ -694,6 +737,56 @@ private fun GameScreen(
                 onToggleDebugMenu = onToggleDebugMenu,
                 onHideFilters = onHideFilters
             )
+        }
+
+        if (!showDebugMenu) {
+            Column(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .background(Color(0xEE111111))
+                    .padding(16.dp)
+            ) {
+                Text("Output", color = Color.White, fontSize = 16.sp)
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(220.dp)
+                        .padding(top = 8.dp)
+                ) {
+                    if (entries.isEmpty()) {
+                        item {
+                            Text(
+                                "Waiting for the program.",
+                                color = Color(0xFF9A9A9A),
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 12.sp,
+                            )
+                        }
+                    } else {
+                        items(entries.takeLast(12), key = { it.id }) { entry ->
+                            Text(
+                                text = "${entry.level} ${entry.category}: ${entry.message}",
+                                color = if (entry.level == LogLevel.ERROR || entry.level == LogLevel.FATAL) {
+                                    Color(0xFFFF8A80)
+                                } else {
+                                    Color(0xFFD7D7D7)
+                                },
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 12.sp,
+                            )
+                        }
+                    }
+                }
+                Button(
+                    onClick = onBack,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp)
+                ) {
+                    Text("Back")
+                }
+            }
         }
 
         if (showDebugMenu) {

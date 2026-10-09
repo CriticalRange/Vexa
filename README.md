@@ -1,8 +1,6 @@
 # VEXA
 
-VEXA is an Android compatibility runtime and runner for selected PC games.
-
-The current rewrite is focused on one target, one bring-up path, and strong diagnostics rather than broad compatibility or polished launcher UX. The first target is Hytale.
+VEXA is a general-purpose Android runtime for Linux x86_64 programs. Pick a program and run it. The runner is not tied to one game.
 
 ## What This Repo Is For
 

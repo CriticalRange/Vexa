@@ -4,11 +4,11 @@
 
 - Assumption: VEXA's first shipping target is Android on ARM64 devices.
 - Assumption: the first runtime path is "run the existing PC/Linux game build through a compatibility layer", not "port the game code to Android".
-- Assumption: Hytale remains the first target and the current rewrite focuses on bringing up a debuggable prototype, not a polished consumer app.
+- Assumption: VEXA is a general-purpose runner for Linux x86_64 programs on Android ARM64, not a client for one game.
 
 ## What VEXA Is
 
-VEXA is an Android compatibility runtime and runner for selected PC games.
+VEXA is a general-purpose Android compatibility runtime. It runs Linux x86_64 programs that are bundled with the app or supplied later.
 
 It combines:
 
@@ -17,7 +17,7 @@ It combines:
 - a native compatibility/runtime layer
 - strong diagnostics for startup, crash, and environment failures
 
-The current goal is not broad platform coverage. The current goal is to bring up one target cleanly and understand every failure mode.
+The current goal is a small catalog of Linux programs that start from the in-app list and report what they printed.
 
 ## What VEXA Is Not
 
@@ -31,20 +31,15 @@ VEXA is not:
 
 It is closer in spirit to Proton-style compatibility work than to a classic emulator or a native mobile port.
 
-## First Target
+## Programs
 
-The first target is Hytale.
+The launcher lists Linux x86_64 programs. The first bundled set is three static VEXA probes (hello, args, pid) and two BusyBox applets (echo, uname). A program is an instance: an executable, arguments, a working directory, and a place for its logs.
 
-That means the rewrite should prioritize:
-
-- Hytale-specific startup requirements
-- Hytale-specific runtime diagnostics
-- preserving proven findings from HyMobile
-- avoiding premature abstractions for future games
+Startup requirements that belong to one guest stay on that guest. They are not rules for every program.
 
 ## Long-Term Vision
 
-Long term, VEXA should become a small, understandable compatibility runtime framework for bringing specific PC games to Android one at a time.
+VEXA is a general-purpose runner. New Linux programs are added as instances. The runtime stays one compatibility layer.
 
 The intended end state is:
 
@@ -54,7 +49,7 @@ The intended end state is:
 - minimal hidden behavior
 - reusable operational knowledge for future targets
 
-Future multi-game support should come only after Hytale startup, launch flow, and crash diagnosis are stable and explainable.
+More programs are added as instances. Each one names its executable, arguments, and whether it needs a rootfs library or a thunk.
 
 ## Core Principles
 

@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
@@ -12,17 +14,87 @@ val spirvCrossDir = thirdPartyDir.resolve("spirv-cross")
 
 val shadercCommit = "1d234d34d43cf5ade135803f7777484eaa48e27f"
 val spirvCrossCommit = "bf6bb5ce3c9fb141127a7d3289ebaaef86d3b065"
-val fexRoot = providers.environmentVariable("FEX_ROOT").orElse("/home/critical/FEX")
-val fexBuildDir = providers.gradleProperty("FEX_BUILD")
-    .orElse("/home/critical/FEX/build-android-arm64-ninja")
-val ndkToolchain =
-    providers.environmentVariable("NDK_TOOLCHAIN")
-        // NDK 28 and below have libc++ std::atomic_ref disabled in headers.
-        // FEX/LinuxEmulation paths include SHMStats.h, which relies on std::atomic_ref.
-        // NDK 29 Re-enables this so it's required.
-        .orElse("/home/critical/Android/Sdk/ndk/29.0.14206865/build/cmake/android.toolchain.cmake")
+val isWindowsHost = System.getProperty("os.name").lowercase().contains("windows")
+
+fun localProperty(name: String): String? {
+    val f = rootProject.file("local.properties")
+    if (!f.exists()) return null
+    val props = Properties()
+    f.inputStream().use { props.load(it) }
+    return props.getProperty(name)?.takeIf { it.isNotBlank() }
+}
+
+fun cmakePath(path: String): String = path.replace("\\", "/")
+
+val sdkDirPath: String = localProperty("sdk.dir")
+    ?: System.getenv("ANDROID_SDK_ROOT")
+    ?: System.getenv("ANDROID_HOME")
+    ?: ""
+
+val fexRoot = providers.provider {
+    val prop = (findProperty("FEX_ROOT") as? String)?.takeIf { it.isNotBlank() }
+    val env = System.getenv("FEX_ROOT")?.takeIf { it.isNotBlank() }
+    val linux = "/home/critical/FEX"
+    val sibling = rootProject.file("../FEX").absolutePath
+    when {
+        prop != null -> prop
+        env != null -> env
+        file(linux).exists() -> linux
+        else -> sibling
+    }
+}
+val fexBuildDir = providers.provider {
+    val prop = (findProperty("FEX_BUILD") as? String)?.takeIf { it.isNotBlank() }
+    val env = System.getenv("FEX_BUILD")?.takeIf { it.isNotBlank() }
+    when {
+        prop != null -> prop
+        env != null -> env
+        file("/home/critical/FEX").exists() -> "/home/critical/FEX/build-android-arm64-ninja"
+        else -> File(fexRoot.get(), "build-android-arm64-ninja").absolutePath
+    }
+}
+val ndkToolchain = providers.provider {
+    // NDK 28 and below have libc++ std::atomic_ref disabled in headers.
+    // FEX/LinuxEmulation paths include SHMStats.h, which relies on std::atomic_ref.
+    // NDK 29 re-enables this, so it is required.
+    val env = System.getenv("NDK_TOOLCHAIN")?.takeIf { it.isNotBlank() }
+    val linux = "/home/critical/Android/Sdk/ndk/29.0.14206865/build/cmake/android.toolchain.cmake"
+    val sdkNdk = if (sdkDirPath.isNotBlank()) {
+        File(sdkDirPath, "ndk/29.0.14206865/build/cmake/android.toolchain.cmake").absolutePath
+    } else {
+        ""
+    }
+    when {
+        env != null -> env
+        file(linux).exists() -> linux
+        sdkNdk.isNotBlank() && file(sdkNdk).exists() -> sdkNdk
+        else -> linux
+    }
+}
+val hostCmake = providers.provider {
+    val name = if (isWindowsHost) "cmake.exe" else "cmake"
+    val bundled = if (sdkDirPath.isNotBlank()) File(sdkDirPath, "cmake/3.22.1/bin/$name") else null
+    if (bundled != null && bundled.exists()) bundled.absolutePath else "cmake"
+}
+val hostNinja = providers.provider {
+    val name = if (isWindowsHost) "ninja.exe" else "ninja"
+    val bundled = if (sdkDirPath.isNotBlank()) File(sdkDirPath, "cmake/3.22.1/bin/$name") else null
+    if (bundled != null && bundled.exists()) bundled.absolutePath else "ninja"
+}
 val buildThunks =
     providers.environmentVariable("BUILD_THUNKS").orElse("OFF")
+val enableRuntimeShaderTranslator =
+    providers.environmentVariable("VEXA_ENABLE_RUNTIME_SHADER_TRANSLATOR").orElse("OFF")
+
+fun hostToolPath(): String {
+    val extras = mutableListOf<String>()
+    val hostTools = File(fexRoot.get(), ".hosttools")
+    if (hostTools.exists()) extras += hostTools.absolutePath
+    val gitUsr = File("C:/Program Files/Git/usr/bin")
+    if (gitUsr.exists()) extras += gitUsr.absolutePath
+    val current = System.getenv("Path") ?: System.getenv("PATH") ?: ""
+    return (extras + current).filter { it.isNotBlank() }.joinToString(File.pathSeparator)
+}
 
 val ensureThirdPartySources by tasks.registering {
     group = "build setup"
@@ -59,14 +131,12 @@ val ensureThirdPartySources by tasks.registering {
         }
 
         fun isDirtyRepo(dir: File): Boolean {
-            val rc = run(
-                "bash",
-                "-lc",
-                "test -z \"$(git -c alias.status= status --porcelain --untracked-files=normal)\"",
-                cwd = dir,
-                ignoreExit = true
-            )
-            return rc != 0
+            if (!dir.exists()) return false
+            return try {
+                gitStatusPorcelain(dir).isNotEmpty()
+            } catch (e: Exception) {
+                false
+            }
         }
 
         fun ensureRepo(
@@ -119,31 +189,33 @@ val ensureThirdPartySources by tasks.registering {
             }
         }
 
-        // shaderc + spirv-cross
-        if (isDirtyRepo(shadercDir)) {
-            throw GradleException("dirt repo: ${shadercDir.absolutePath}")
-        }
+        // shaderc is only required when the GL host translates desktop GLSL at runtime.
+        if (buildThunks.get() == "ON" && enableRuntimeShaderTranslator.get() == "ON") {
+            if (isDirtyRepo(shadercDir)) {
+                throw GradleException("dirt repo: ${shadercDir.absolutePath}")
+            }
 
-        if (isDirtyRepo(spirvCrossDir)) {
-            throw GradleException("dirt repo: ${spirvCrossDir.absolutePath}")
-        }
+            if (isDirtyRepo(spirvCrossDir)) {
+                throw GradleException("dirt repo: ${spirvCrossDir.absolutePath}")
+            }
 
-        ensureRepo(
-            "shaderc",
-            "https://github.com/google/shaderc.git",
-            shadercCommit,
-            updateSubmodules = true
-        )
-        run(
-            "python3",
-            shadercDir.resolve("utils/git-sync-deps").absolutePath,
-            cwd = rootProject.rootDir
-        )
-        ensureRepo(
-            "spirv-cross",
-            "https://github.com/KhronosGroup/SPIRV-Cross.git",
-            spirvCrossCommit
-        )
+            ensureRepo(
+                "shaderc",
+                "https://github.com/google/shaderc.git",
+                shadercCommit,
+                updateSubmodules = true
+            )
+            run(
+                "python3",
+                shadercDir.resolve("utils/git-sync-deps").absolutePath,
+                cwd = rootProject.rootDir
+            )
+            ensureRepo(
+                "spirv-cross",
+                "https://github.com/KhronosGroup/SPIRV-Cross.git",
+                spirvCrossCommit
+            )
+        }
     }
 }
 
@@ -153,14 +225,21 @@ tasks.registering(org.gradle.api.tasks.Exec::class) {
     description = "Configures FEX Android build."
     onlyIf { !file("${fexBuildDir.get()}/build.ninja").exists() }
     workingDir = rootProject.rootDir
-    commandLine(
-        "cmake",
+    val pkgConfig = File(fexRoot.get(), ".hosttools/pkg-config.cmd")
+    val hostPath = hostToolPath()
+    environment("Path", hostPath)
+    environment("PATH", hostPath)
+    val configureArgs = mutableListOf(
+        hostCmake.get(),
         "-S", fexRoot.get(),
         "-B", fexBuildDir.get(),
         "-G", "Ninja",
-
+        "-DCMAKE_MAKE_PROGRAM=${hostNinja.get()}",
         "-DCMAKE_TOOLCHAIN_FILE=${ndkToolchain.get()}",
         "-DCMAKE_BUILD_TYPE=RelWithDebInfo",
+        "-DTUNE_CPU=none",
+        "-DPKG_CONFIG_EXECUTABLE=${pkgConfig.absolutePath}",
+        "-DPython_EXECUTABLE=C:/Program Files/WindowsApps/PythonSoftwareFoundation.Python.3.12_3.12.2800.0_x64__qbz5n2kfra8p0/python3.12.exe",
         "-DENABLE_ASSERTIONS=ON",
         "-DANDROID_ABI=arm64-v8a",
         "-DANDROID_PLATFORM=android-30",
@@ -177,6 +256,25 @@ tasks.registering(org.gradle.api.tasks.Exec::class) {
         "-DENABLE_JEMALLOC=OFF",
         "-DENABLE_JEMALLOC_GLIBC_ALLOC=OFF"
     )
+    if (buildThunks.get() == "ON") {
+        val ndkPrebuilt = File(sdkDirPath, "ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64")
+        val guestRootfs = rootProject.file("guest-tests/graphics/rootfs").absolutePath
+        configureArgs += listOf(
+            "-DTHUNKGEN_EXECUTABLE=${cmakePath(File(fexRoot.get(), "build-thunkgen-host/thunkgen.exe").absolutePath)}",
+            "-DX86_DEV_ROOTFS=${cmakePath(guestRootfs)}",
+            "-DENABLE_CLANG_THUNKS=ON",
+            "-DENABLE_DESKTOP_GL_THUNKS=ON",
+            "-DENABLE_EGL_THUNKS=ON",
+            "-DENABLE_VULKAN_THUNKS=OFF",
+            "-DENABLE_WAYLAND_THUNKS=OFF",
+            "-DENABLE_VDSO_THUNKS=OFF",
+            "-DVEXA_ENABLE_RUNTIME_SHADER_TRANSLATOR=${enableRuntimeShaderTranslator.get()}",
+            "-DVEXA_GUEST_CC=${cmakePath(File(ndkPrebuilt, "bin/clang.exe").absolutePath)}",
+            "-DVEXA_GUEST_CXX=${cmakePath(File(ndkPrebuilt, "bin/clang++.exe").absolutePath)}",
+            "-DANDROID_NDK_SYSROOT=${cmakePath(File(ndkPrebuilt, "sysroot").absolutePath)}"
+        )
+    }
+    commandLine(configureArgs)
 }
 
 val buildFEXCore = tasks.register<org.gradle.api.tasks.Exec>("buildFEXCore") {
@@ -184,13 +282,36 @@ val buildFEXCore = tasks.register<org.gradle.api.tasks.Exec>("buildFEXCore") {
     description = "Builds libFEXCore.so"
     dependsOn(configureFexAndroid)
     workingDir = rootProject.rootDir
+    val hostPath = hostToolPath()
+    environment("Path", hostPath)
+    environment("PATH", hostPath)
     val buildPath = fexBuildDir.get()
-    commandLine(
-        "cmake",
+    val buildArgs = mutableListOf(
+        hostCmake.get(),
         "--build", buildPath,
+        "--target", "FEXCore_shared",
         "--target", "FEXCore",
-        "-j"
+        "--target", "FEXCore_Base",
+        "--target", "JemallocLibs",
+        "--target", "Common",
+        "--target", "CommonTools",
+        "--target", "LinuxEmulation",
+        "--target", "fmt",
+        "--target", "xxhash",
+        "--target", "cephes_128bit",
+        "--target", "softfloat_3e",
+        "--target", "tiny-json"
     )
+    if (buildThunks.get() == "ON") {
+        buildArgs += listOf(
+            "--target", "GL-host-64",
+            "--target", "EGL-host-64",
+            "--target", "GLESv2-host-64",
+            "--target", "guest-libs"
+        )
+    }
+    buildArgs += "-j"
+    commandLine(buildArgs)
 }
 
 kotlin {
@@ -223,6 +344,10 @@ android {
         externalNativeBuild {
             cmake {
                 cppFlags += ""
+                arguments += listOf(
+                    "-DFEX_ROOT=${cmakePath(fexRoot.get())}",
+                    "-DFEX_BUILD=${cmakePath(fexBuildDir.get())}",
+                )
             }
         }
     }
@@ -277,13 +402,29 @@ tasks.matching {
     dependsOn(buildFEXCore)
 }
 
+val stageGuestRuntime by tasks.registering(Exec::class) {
+    group = "build setup"
+    description = "Copies the guest rootfs, graphics programs, and thunk libraries into assets."
+    dependsOn(buildFEXCore)
+    environment("REQUIRE_THUNKS", if (buildThunks.get() == "ON") "1" else "0")
+    commandLine(
+        "C:/Program Files/WindowsApps/PythonSoftwareFoundation.Python.3.12_3.12.2800.0_x64__qbz5n2kfra8p0/python3.12.exe",
+        rootProject.file("guest-tests/graphics/stage_runtime_assets.py").absolutePath,
+    )
+}
+
+tasks.matching {
+    it.name == "mergeDebugAssets" || it.name == "mergeReleaseAssets"
+}.configureEach {
+    dependsOn(stageGuestRuntime)
+}
+
 dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.activity.compose)
     implementation(platform(libs.androidx.compose.bom))
     implementation("com.google.android.material:material:1.12.0")
-    implementation("androidx.browser:browser:1.9.0")
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.ui.tooling.preview)

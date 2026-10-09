@@ -1,5 +1,7 @@
 # FEX Interpreter Feature Parity
 
+VEXA is a general-purpose Linux x86_64 runner.
+
 Scope: parity checklist between VEXA runtime wrapper and upstream `FEXInterpreter` startup flow.
 
 Reference baseline:

@@ -234,45 +234,37 @@ private fun LogEntryRow(
             .background(Color(0xFF181818), RoundedCornerShape(10.dp))
             .padding(10.dp)
     ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically
-        ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 text = formatTimestamp(entry.timestampMs),
                 color = Color(0xFF9E9E9E),
                 fontSize = 12.sp,
                 fontFamily = FontFamily.Monospace
             )
-
             Spacer(modifier = Modifier.width(8.dp))
-
             Text(
                 text = entry.level.name,
                 color = levelColor(entry.level),
                 fontSize = 12.sp,
                 fontFamily = FontFamily.Monospace
             )
-
-            Spacer(modifier = Modifier.width(8.dp))
-
+        }
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = entry.message,
+            color = Color.White,
+            fontSize = 14.sp,
+            modifier = Modifier.fillMaxWidth()
+        )
+        if (entry.fields.isNotEmpty()) {
+            Spacer(modifier = Modifier.height(4.dp))
             Text(
-                text = entry.message,
-                color = Color.White,
-                fontSize = 14.sp
+                text = entry.fields.entries.joinToString("  ") { "${it.key}=${it.value}" },
+                color = Color(0xFFBDBDBD),
+                fontSize = 12.sp,
+                fontFamily = FontFamily.Monospace,
+                modifier = Modifier.fillMaxWidth()
             )
-
-            Spacer(modifier = Modifier.weight(1f))
-
-            if (entry.fields.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(6.dp))
-
-                Text(
-                    text = entry.fields.entries.joinToString("  ") { "${it.key}=${it.value}" },
-                    color = Color(0xFFBDBDBD),
-                    fontSize = 12.sp,
-                    fontFamily = FontFamily.Monospace
-                )
-            }
         }
     }
 }

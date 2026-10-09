@@ -1,5 +1,7 @@
 # AI USAGE POLICY
 
+VEXA is a general-purpose Linux x86_64 runner.
+
 ## Purpose
 
 AI is a support tool for VEXA.

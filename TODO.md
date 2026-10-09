@@ -1,3 +1,5 @@
+VEXA is a general-purpose Linux x86_64 runner. Older items that name one game are historical notes, not the current product.
+
 ## Runtime TODO: FEX Bring-up Sequence
 
 - [x] First priority: Compile VEXA runtime wrapper directly against FEX headers/libs

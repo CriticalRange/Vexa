@@ -1,4 +1,8 @@
-# RootFS Required Files (Tracking)
+# RootFS Required
+
+VEXA is a general-purpose Linux x86_64 runner. Library lists below were collected for one guest. A console program does not need that set. Add libraries only when that program fails without them.
+
+## Files (Tracking)
 
 This file tracks the minimum RootFS content needed to launch targets under VEXA/FEX.
 Update this file whenever a new missing dependency is discovered.

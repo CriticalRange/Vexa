@@ -1,5 +1,7 @@
 # FILE TRIAGE TEMPLATE
 
+VEXA is a general-purpose Linux x86_64 runner.
+
 Use this template when reviewing files or components from the old project.
 
 The goal is to decide whether each item should be:

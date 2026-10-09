@@ -16,7 +16,7 @@ import androidx.compose.ui.unit.sp
 
 @Composable
 fun GameLoadingOverlay(
-    message: String = "Wait a little!\nThe game is opening!",
+    message: String = "Starting the program",
     isDebugMenuOpen: Boolean,
     onToggleDebugMenu: () -> Unit,
     onHideFilters: () -> Unit
@@ -40,7 +40,7 @@ fun GameLoadingOverlay(
             contentAlignment = Alignment.Center
         ) {
             Text(
-                text = "Wait a little!\nThe game is opening!",
+                text = message,
                 color = Color.White,
                 fontSize = 24.sp,
                 textAlign = TextAlign.Center,

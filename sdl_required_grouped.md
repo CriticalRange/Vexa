@@ -1,5 +1,7 @@
 # SDL Required Checklist
 
+VEXA is a general-purpose Linux x86_64 runner. This list is only for guests that use SDL.
+
 - Legend:
   - [x] present in guest thunk + overlay lib
   - [!] present in guest thunk but missing in overlay lib

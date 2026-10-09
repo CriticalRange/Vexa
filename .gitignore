@@ -25,3 +25,11 @@
 local.properties
 AGENTS.md
 third_party/FEX
+guest-tests/graphics/debs/
+guest-tests/graphics/debs-rootfs/
+guest-tests/graphics/rootfs/
+guest-tests/graphics/tree/
+guest-tests/graphics/*.out
+guest-tests/graphics/*.txt
+__pycache__/
+*.pyc

@@ -14,6 +14,9 @@ namespace Vexa::Log {
     void InstallFexCrashHandler(FEX::HLE::SignalDelegator *delegator);
 
     void UninstallSignalHandlers();
+
+    // Opens artifactDir/crash.log before the guest runs. Signal handlers only write this fd.
+    void OpenCrashLog(const char *artifactDir);
 }
 
 #endif //VEXA_EMULATOR_CRASH_SIGNALS_H

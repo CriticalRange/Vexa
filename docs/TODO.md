@@ -1,5 +1,7 @@
 # TODO
 
+VEXA is a general-purpose Linux x86_64 runner. The items below that name a single game are historical and are not the product target.
+
 ## App Shell
 
 - [x] Create the `~/vexa` Android project skeleton in Kotlin.

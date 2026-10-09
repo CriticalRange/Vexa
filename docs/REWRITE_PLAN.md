@@ -1,5 +1,7 @@
 # REWRITE PLAN
 
+VEXA is a general-purpose Linux x86_64 runner. Phases below that lock the project to one game are superseded. Programs are instances.
+
 ## Assumptions
 
 - Assumption: the rewrite target is a new repo rooted at `~/vexa`.
