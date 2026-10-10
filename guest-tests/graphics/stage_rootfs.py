@@ -95,9 +95,24 @@ def dep_names(depends):
     return names
 
 
+def open_data_tar(data):
+    # Ubuntu noble ships data.tar.zst; tarfile only reads zst on Python 3.14+.
+    if data.endswith(".zst"):
+        try:
+            import zstandard
+        except ImportError as error:
+            raise SystemExit("data.tar.zst needs the zstandard package") from error
+        raw = open(data, "rb")
+        reader = zstandard.ZstdDecompressor().stream_reader(raw)
+        archive = tarfile.open(fileobj=reader, mode="r|")
+        return archive, raw
+    return tarfile.open(data), None
+
+
 def extract_data(data, root, links):
     # Windows cannot create the package symlinks without extra privileges, so record them and copy later.
-    with tarfile.open(data) as archive:
+    archive, raw = open_data_tar(data)
+    with archive:
         for member in archive:
             if member.issym() or member.islnk():
                 target = member.linkname if member.issym() else "/" + member.linkname.lstrip("./")
@@ -107,6 +122,8 @@ def extract_data(data, root, links):
                 archive.extract(member, root, filter="fully_trusted")
             except OSError as error:
                 print(f"skip {member.name}: {error}", flush=True)
+    if raw is not None:
+        raw.close()
 
 
 def materialize_links(root, links):

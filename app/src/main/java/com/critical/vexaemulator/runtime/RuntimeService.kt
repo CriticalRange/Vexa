@@ -112,7 +112,12 @@ class RuntimeService : Service() {
     private fun bindWorker() {
         if (workerBound || workerBinding) return
         val intent = Intent(this, RuntimeWorkerService::class.java)
-        val ok = bindService(intent, workerConnection, BIND_AUTO_CREATE)
+        // BIND_IMPORTANT lifts the worker to the client's (top-app) importance,
+        // otherwise it sits in /foreground cpuset without the big core.
+        val ok = bindService(
+            intent, workerConnection,
+            BIND_AUTO_CREATE or BIND_IMPORTANT
+        )
         workerBinding = ok
         if (!ok) {
             emitLog("ERROR", "BOOT", "bindService to RuntimeWorkerService returned false")
