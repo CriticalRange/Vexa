@@ -57,6 +57,8 @@ class RuntimeService : Service() {
                 RuntimeIpc.MSG_WORKER_START_RESULT -> {
                     val code = msg.data.getInt(RuntimeIpc.KEY_CODE, -999)
                     sendStartResult(code)
+                    // FEX state is single-use; release the worker so the next launch gets a fresh process.
+                    unbindWorkerSafe()
                 }
 
                 RuntimeIpc.MSG_LOG_EVENT -> {

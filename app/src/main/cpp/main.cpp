@@ -33,6 +33,8 @@ namespace {
         jint result{
                 static_cast<jint>(Vexa::Common::ToInt(Vexa::Common::Code::InternalError))
         };
+        // False when the guest's exit syscall terminated the runtime pthread inside FEX.
+        bool returned{false};
     };
 
     void *RuntimeLaunchThreadMain(void *opaque) {
@@ -102,6 +104,7 @@ namespace {
             }
         }
 
+        payload->returned = true;
         if (attached) payload->vm->DetachCurrentThread();
         return nullptr;
     }
@@ -212,6 +215,11 @@ Java_com_critical_vexaemulator_RuntimeBridge_nativeStartRuntime(JNIEnv *env, job
     pthread_setname_np(tid, "runtime_worker");
 
     (void) pthread_join(tid, nullptr);
+    if (!payload->returned) {
+        VEXA_LOGI(env, "FEX", "Guest exit terminated the runtime thread", "{}");
+        Vexa::Runtime::ReleaseAfterGuestExit();
+        payload->result = 0;
+    }
     const jint result = payload->result;
     payload.reset();
     return result;
