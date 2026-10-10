@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -20,24 +21,34 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.critical.vexaemulator.guest.GuestCatalog
+import com.critical.vexaemulator.logging.LogCategory
+import com.critical.vexaemulator.logging.LogLevel
 import com.critical.vexaemulator.logging.LogStore
+import com.critical.vexaemulator.logging.VexaLogger
+import com.critical.vexaemulator.runtime.RootLogCollector
 import com.critical.vexaemulator.ui.theme.VexaEmulatorTheme
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -70,6 +81,16 @@ private fun LauncherScreen(
     var menuOpen by remember { mutableStateOf(false) }
     val selected = programs.first { it.id == selectedId }
     val entries by LogStore.entries.collectAsState()
+
+    val context = LocalContext.current
+    var rootLoggingEnabled by remember {
+        mutableStateOf(RootLogCollector.isEnabled(context.filesDir))
+    }
+    // null = probing, "" = no usable su, otherwise the su path that worked
+    var rootSuPath by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(Unit) {
+        rootSuPath = withContext(Dispatchers.IO) { RootLogCollector.probeSu() } ?: ""
+    }
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
@@ -125,7 +146,46 @@ private fun LauncherScreen(
             ) {
                 Text("Run")
             }
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(12.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Checkbox(
+                    checked = rootLoggingEnabled,
+                    onCheckedChange = { checked ->
+                        rootLoggingEnabled = checked
+                        val wrote = RootLogCollector.setEnabled(context.filesDir, checked)
+                        VexaLogger.log(
+                            LogLevel.INFO,
+                            LogCategory.CONFIG,
+                            "Root logging ${if (checked) "enabled" else "disabled"}",
+                            mapOf(
+                                "source" to "launcher",
+                                "flagWritten" to wrote.toString(),
+                            ),
+                        )
+                    },
+                )
+                Column {
+                    Text("Root logging", color = Color.White, fontSize = 14.sp)
+                    Text(
+                        text = when {
+                            rootSuPath == null -> "Checking for su…"
+                            rootSuPath!!.isEmpty() ->
+                                "No root for this app — grant in KernelSU Manager (safe no-op)"
+                            else -> "su: $rootSuPath — dmesg/proc snapshots go to artifacts"
+                        },
+                        color = if (rootSuPath.isNullOrEmpty()) {
+                            Color(0xFF8A8A8A)
+                        } else {
+                            Color(0xFF81C784)
+                        },
+                        fontSize = 11.sp,
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(8.dp))
             Text("Logs", color = Color.White)
             Spacer(modifier = Modifier.height(8.dp))
             LazyColumn(

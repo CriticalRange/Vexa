@@ -7,6 +7,7 @@
 #include "rapidjson/stringbuffer.h"
 #include "rapidjson/writer.h"
 #include <string>
+#include <cstring>
 #include <type_traits>
 #include <mutex>
 
@@ -118,13 +119,20 @@ namespace Vexa::Log {
 
     void VexaNativeLogRaw(const char *level, const char *category, const char *message,
                           const char *fields) {
-        // Temporarily disable raw JNI logging path to avoid attaching arbitrary
-        // native/FEX threads to ART (can abort in thread.cc stack checks).
-        (void) level;
-        (void) category;
-        (void) message;
-        (void) fields;
-        return;
+        // Raw threads (e.g. FEX worker threads) must not be attached to ART, so
+        // the JNI sink is skipped here. liblog is a plain logd socket write and
+        // is safe from any thread.
+        int prio = ANDROID_LOG_INFO;
+        if (level) {
+            if (!strcmp(level, "DEBUG")) prio = ANDROID_LOG_DEBUG;
+            else if (!strcmp(level, "WARN")) prio = ANDROID_LOG_WARN;
+            else if (!strcmp(level, "ERROR") || !strcmp(level, "FATAL"))
+                prio = ANDROID_LOG_ERROR;
+        }
+        __android_log_print(prio, VEXA_TAG, "[%s] %s %s",
+                            category ? category : "RUNTIME",
+                            message ? message : "",
+                            fields ? fields : "");
     }
 
 } // namespace Vexa::Log

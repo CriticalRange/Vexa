@@ -105,6 +105,23 @@ def find_elf(soname):
     return best
 
 
+# Guest libs that must be the VEXA shims (compile_fake_* in stage_rootfs.py),
+# not the real Ubuntu socket clients. The shims stamp "VEXA" into their
+# vendor/setup bytes; the real libs never carry that string.
+FAKE_LIB_MARKERS = {
+    "libxcb.so.1": b"VEXA",
+    "libX11.so.6": b"VEXA",
+}
+
+
+def has_marker(path, marker):
+    try:
+        with open(path, "rb") as handle:
+            return marker in handle.read()
+    except OSError:
+        return False
+
+
 def copy_file(src, dest):
     os.makedirs(os.path.dirname(dest), exist_ok=True)
     shutil.copy2(src, dest)
@@ -124,6 +141,18 @@ def main():
             else:
                 print(f"skip {soname}", flush=True)
             continue
+        marker = FAKE_LIB_MARKERS.get(soname)
+        if marker and not has_marker(found, marker):
+            raise SystemExit(
+                f"staging real {soname} socket client instead of the VEXA shim: "
+                f"{found}\n"
+                "find_elf prefers the largest match, so a stale guest rootfs "
+                "silently breaks XCB/X11 guests (vkcube: 'Cannot connect to XCB').\n"
+                "Rebuild the rootfs so compile_fake_*() replaces the lib:\n"
+                "  rm -f guest-tests/graphics/rootfs/.vexa-rootfs-ready\n"
+                "  rm -rf guest-tests/graphics/rootfs\n"
+                "  python guest-tests/graphics/stage_rootfs.py"
+            )
         copy_file(found, os.path.join(lib_dest, soname))
         print(f"lib {soname} <= {found}", flush=True)
     if missing:

@@ -49,6 +49,36 @@ Recommended Android logcat rendering:
 - tag: `VEXA`
 - body: `[CATEGORY] message key=value key=value`
 
+## Root-Level Diagnostics (optional)
+
+VEXA works fully without root. On rooted devices an optional extra layer
+unlocks diagnostics a normal app (or `run-as`) can never see:
+
+- `dmesg`: SELinux `avc: granted/denied` audit lines, kernel segfault/OOM
+- `/data/tombstones/` native crash dumps, `/data/anr/` ANR traces
+- per-process `/proc/<pid>`: `maps`/`smaps` (JIT code-cache growth), `fd` +
+  `fdinfo` (dmabuf fences), `syscall`, `stack` (kernel stacks per thread),
+  `schedstat`, `cpuset`, `oom_score`, `mountinfo`, `net/*`
+- `debuggerd -b <pid>` live native backtraces of any vexa process
+- system context: thermal zones/throttling, cpufreq, devfreq (GPU), PSI
+- `simpleperf` hardware counters, `perfetto`/`atrace`/tracefs
+- `/proc/<pid>/mem` region dumps (FEX code cache) for offline disassembly
+
+Two mechanisms, both off by default:
+
+1. In-app: the launcher **Root logging** toggle (writes
+   `files/root_logs_enabled`, probed per launch in `:runtime_worker`).
+   Streams `dmesg -w` plus proc snapshots into the guest artifact dir.
+   Requires KernelSU/Magisk to grant this app a root profile; without a
+   grant it degrades to one `WARN [ROOT]` line and changes nothing.
+2. Host: `scripts/pull_root_logs.sh` collects everything through
+   `adb shell su` — see its header for `--watch`, `--perf` and
+   `--dump-jit` flags. On-device helpers `vexa_proc_dump.sh` /
+   `vexa_sys_dump.sh` keep `su -c` quoting sane.
+
+Note for device identity: `ro.product.*` may be spoofed; trust
+`ro.boot.bootloader`, kernel version and tombstone fingerprints instead.
+
 ## Crash Breadcrumb Idea
 
 Keep a rolling breadcrumb trail for startup and shutdown:
