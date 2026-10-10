@@ -20,6 +20,8 @@ namespace Vexa::Runtime {
                  const std::vector<std::string> &launchArgs);
 
     void StopRuntime();
+
+    void ReleaseAfterGuestExit();
 }
 
 #endif //VEXA_EMULATOR_LAUNCH_H

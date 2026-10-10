@@ -8,6 +8,7 @@
 #include <jni.h>
 #include <initializer_list>
 #include <string>
+#include <string_view>
 #include <type_traits>
 
 namespace Vexa::Log {
@@ -19,10 +20,14 @@ namespace Vexa::Log {
 
     inline std::string ToString(bool v) { return v ? "true" : "false"; }
 
+    inline std::string ToString(std::string_view v) { return std::string(v); }
+
     template<typename T>
     inline std::string ToString(const T &v) {
         if constexpr (std::is_arithmetic_v<T>) {
             return std::to_string(v);
+        } else if constexpr (std::is_enum_v<T>) {
+            return std::to_string(static_cast<std::underlying_type_t<T>>(v));
         } else {
             return "";
         }

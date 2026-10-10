@@ -51,6 +51,7 @@ namespace Vexa::Runtime {
             return {Vexa::Common::Code::AlreadyStarted, Vexa::Common::Phase::Init,
                     "Runtime already started"};
         }
+        g_state.fexStarted = true;
         VEXA_LOGI(env, "FEX", "FEXCore initialized", "{}");
 
         Init::InstallLogHandlers();
@@ -169,13 +170,29 @@ namespace Vexa::Runtime {
         }
         VEXA_LOGI(env, "FEX", "ExecuteRuntime OK", "{}");
 
-        g_state.fexStarted = true;
+        CleanupAll();
         VEXA_LOGI(env, "FEX", "FEX Started, sending OK", "{}");
         return {Vexa::Common::Code::Ok, Vexa::Common::Phase::Init,
                 "Application launched successfully!"};
     }
 
+    static bool g_needsProcessRestart = false;
+
     void StopRuntime() {
+        if (!g_state.fexStarted || g_needsProcessRestart) return;
         CleanupAll();
+    }
+
+    void ReleaseAfterGuestExit() {
+        // FEX already destroyed the parent thread in the guest exit syscall and its
+        // remaining state cannot be torn down safely. Only hand the host signals back
+        // to ART; the worker process must be restarted before the next launch.
+        g_state.parentThread = nullptr;
+        g_state.signalDelegator.reset();
+        (void) g_state.syscallHandler.release();
+        (void) g_state.thunkHandler.release();
+        (void) g_state.stackTracker.release();
+        (void) g_state.ctx.release();
+        g_needsProcessRestart = true;
     }
 }
