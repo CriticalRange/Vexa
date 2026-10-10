@@ -4,6 +4,7 @@ import gzip
 import os
 import shutil
 import subprocess
+import tarfile
 import urllib.request
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -30,11 +31,20 @@ SEEDS = [
     "libegl-dev",
     "libgles-dev",
     "libgl-dev",
+    "vulkan-tools",
+    "mesa-utils-bin",
+    "libxkbcommon0",
+    "libxkbcommon-x11-0",
+    "libdecor-0-0",
+    "libwayland-client0",
+    "libvulkan1",
 ]
 MIRROR = "http://archive.ubuntu.com/ubuntu/"
-CLANG = r"C:\Users\Ahmet\AppData\Local\Android\Sdk\ndk\29.0.14206865\toolchains\llvm\prebuilt\windows-x86_64\bin\clang.exe"
+SDK = os.environ.get("ANDROID_SDK_ROOT") or os.environ.get("ANDROID_HOME") or os.path.join(os.environ.get("LOCALAPPDATA", ""), "Android", "Sdk")
+CLANG = os.environ.get("VEXA_GUEST_CC") or os.path.join(SDK, "ndk", "29.0.14206865", "toolchains", "llvm", "prebuilt", "windows-x86_64", "bin", "clang.exe")
 TAR = r"C:\Windows\System32\tar.exe" if os.name == "nt" else "tar"
 FAKE_X11 = os.path.normpath(os.path.join(ROOT, "..", "x11-fake", "libX11_fake.c"))
+FAKE_XCB = os.path.normpath(os.path.join(ROOT, "..", "x11-fake", "libxcb_fake.c"))
 GLMARK = os.path.join(ROOT, "tree", "usr", "share", "glmark2")
 
 
@@ -83,6 +93,44 @@ def dep_names(depends):
         if name and name[0].isalnum():
             names.append(name)
     return names
+
+
+def extract_data(data, root, links):
+    # Windows cannot create the package symlinks without extra privileges, so record them and copy later.
+    with tarfile.open(data) as archive:
+        for member in archive:
+            if member.issym() or member.islnk():
+                target = member.linkname if member.issym() else "/" + member.linkname.lstrip("./")
+                links.append((member.name, target))
+                continue
+            try:
+                archive.extract(member, root, filter="fully_trusted")
+            except OSError as error:
+                print(f"skip {member.name}: {error}", flush=True)
+
+
+def materialize_links(root, links):
+    pending = links
+    while pending:
+        left = []
+        for name, target in pending:
+            dest = os.path.normpath(os.path.join(root, name))
+            if os.path.lexists(dest):
+                continue
+            base = root if target.startswith("/") else os.path.dirname(dest)
+            src = os.path.normpath(os.path.join(base, target.lstrip("/")))
+            if os.path.isfile(src):
+                os.makedirs(os.path.dirname(dest), exist_ok=True)
+                shutil.copy2(src, dest)
+            elif os.path.isdir(src):
+                shutil.copytree(src, dest, dirs_exist_ok=True)
+            else:
+                left.append((name, target))
+        if len(left) == len(pending):
+            for name, target in left:
+                print(f"dangling {name} -> {target}", flush=True)
+            break
+        pending = left
 
 
 def rewrite_linker_scripts(root):
@@ -176,6 +224,41 @@ def compile_fake_x11(root):
             raise SystemExit("fake libX11 is not an ELF")
 
 
+def compile_fake_xcb(root):
+    """Replace Ubuntu libxcb with the VEXA connection shim.
+
+    find_elf() prefers the largest libxcb.so.1* file, so the real
+    libxcb.so.1.1.0 has to go or the APK would keep the socket client.
+    """
+    dest_dir = os.path.join(root, "usr", "lib", "x86_64-linux-gnu")
+    os.makedirs(dest_dir, exist_ok=True)
+    for name in os.listdir(dest_dir):
+        if name == "libxcb.so" or name.startswith("libxcb.so."):
+            os.remove(os.path.join(dest_dir, name))
+    dest = os.path.join(dest_dir, "libxcb.so.1")
+    cmd = [
+        CLANG,
+        "--target=x86_64-linux-gnu",
+        f"--sysroot={root}",
+        "-fPIC",
+        "-shared",
+        "-fno-stack-protector",
+        "-O2",
+        "-fuse-ld=lld",
+        "-Wl,-soname,libxcb.so.1",
+        "-Wl,--no-undefined",
+        FAKE_XCB,
+        "-o",
+        dest,
+        "-lc",
+    ]
+    print("compile libxcb.so.1", flush=True)
+    subprocess.check_call(cmd)
+    with open(dest, "rb") as handle:
+        if handle.read(4) != b"\x7fELF":
+            raise SystemExit("fake libxcb is not an ELF")
+
+
 def copy_glmark(root):
     dest = os.path.join(root, "usr", "share", "glmark2")
     if os.path.isdir(dest):
@@ -219,6 +302,7 @@ def main():
     if os.path.isdir(ROOTFS):
         shutil.rmtree(ROOTFS)
     os.makedirs(ROOTFS)
+    links = []
     for name in wanted:
         filename = packages[name]["Filename"]
         deb = os.path.join(DEBS, os.path.basename(filename))
@@ -235,14 +319,16 @@ def main():
                 break
         if not data:
             raise SystemExit(f"no data.tar in {name}")
-        subprocess.check_call([TAR, "-xf", data, "-C", ROOTFS])
+        extract_data(data, ROOTFS, links)
         shutil.rmtree(staging)
         print(f"extracted {name}", flush=True)
 
+    materialize_links(ROOTFS, links)
     rewrite_linker_scripts(ROOTFS)
     ensure_loader(ROOTFS)
     copy_glmark(ROOTFS)
     compile_fake_x11(ROOTFS)
+    compile_fake_xcb(ROOTFS)
     with open(MARKER, "w", encoding="utf-8") as handle:
         handle.write("vexa-graphics-1\n")
     print("ROOTFS_READY", flush=True)

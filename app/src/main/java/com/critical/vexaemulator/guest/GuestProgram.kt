@@ -70,9 +70,9 @@ object GuestCatalog {
             "glmark2",
             listOf("-b", "build:duration=5", "--data-path", "/usr/share/glmark2"),
         ),
-        graphics("vkcube", "vkcube", "Vulkan cube. Needs the Vulkan thunk, which is not in this build yet.", "vkcube", "vkcube"),
+        graphics("vkcube", "vkcube", "Vulkan cube on the Android surface.", "vkcube", "vkcube", listOf("--wsi", "xcb")),
         graphics("vulkaninfo", "vulkaninfo", "Prints Vulkan devices, then exits.", "vulkaninfo", "vulkaninfo"),
-        graphics("vkcubepp", "vkcubepp", "Vulkan cube, C++ build.", "vkcubepp", "vkcubepp"),
+        graphics("vkcubepp", "vkcubepp", "Vulkan cube, C++ build.", "vkcubepp", "vkcubepp", listOf("--wsi", "xcb")),
         graphics("vkgears", "vkgears", "Vulkan gears. Needs Vulkan and its window-system libraries.", "vkgears.x86_64-linux-gnu", "vkgears"),
     )
 
@@ -83,6 +83,7 @@ object GuestCatalog {
         assetFile: String,
         fileName: String,
         args: List<String> = emptyList(),
+        env: List<String> = listOf("DISPLAY=:0"),
     ): GuestProgram = GuestProgram(
         id = id,
         title = title,
@@ -90,7 +91,7 @@ object GuestCatalog {
         assetPath = "guests/$assetFile",
         fileName = fileName,
         args = args,
-        env = listOf("DISPLAY=:0"),
+        env = env,
     )
 
     fun find(id: String): GuestProgram? = programs.find { it.id == id }

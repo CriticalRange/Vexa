@@ -35,7 +35,7 @@ cmake "$FEX_ROOT" \
   -DVEXA_SDL3_PREFIX=/home/critical/vexa/third_party/install-android-arm64/sdl3 \
   -DVEXA_SDL3_IMAGE_PREFIX=/home/critical/vexa/third_party/install-android-arm64/sdl3_image \
   -DVEXA_OPENAL_PREFIX=/home/critical/vexa/third_party/install-android-arm64/openal \
-  -DENABLE_VULKAN_THUNKS=OFF \
+  -DENABLE_VULKAN_THUNKS=ON \
   -DENABLE_ASSERTIONS=ON \
   -DANDROID_ABI=arm64-v8a \
   -DANDROID_PLATFORM=android-30 \
