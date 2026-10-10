@@ -131,6 +131,15 @@ namespace Vexa::Runtime::Init {
             AddDirProbeOverlays(glesOverlays, gameDir, "GLESv2");
             AddDirProbeOverlays(glesOverlays, gameDirAlias, "GLESv2");
 
+            std::vector<std::string> vulkanOverlays = {
+                    "@PREFIX_LIB@/libvulkan.so",
+                    "@PREFIX_LIB@/libvulkan.so.1",
+                    "/proc/libvulkan.so",
+                    "/proc/libvulkan.so.1",
+            };
+            AddDirProbeOverlays(vulkanOverlays, gameDir, "vulkan", true);
+            AddDirProbeOverlays(vulkanOverlays, gameDirAlias, "vulkan", true);
+
             std::ostringstream json;
             json << "{\n"
                  << "  \"DB\": {\n"
@@ -157,6 +166,10 @@ namespace Vexa::Runtime::Init {
                  << "    \"GLESv2\": {\n"
                  << "      \"Library\": \"libGLESv2-guest.so\",\n"
                  << "      \"Overlay\": " << BuildJsonArray(glesOverlays) << "\n"
+                 << "    },\n"
+                 << "    \"Vulkan\": {\n"
+                 << "      \"Library\": \"libvulkan-guest.so\",\n"
+                 << "      \"Overlay\": " << BuildJsonArray(vulkanOverlays) << "\n"
                  << "    }\n"
                  << "  }\n"
                  << "}\n";
@@ -178,7 +191,8 @@ namespace Vexa::Runtime::Init {
                  << "    \"openal\": " << ThunkGuestPresent(paths, "libopenal-guest.so") << ",\n"
                  << "    \"GL\": " << ThunkGuestPresent(paths, "libGL-guest.so") << ",\n"
                  << "    \"EGL\": " << ThunkGuestPresent(paths, "libEGL-guest.so") << ",\n"
-                 << "    \"GLESv2\": " << ThunkGuestPresent(paths, "libGLESv2-guest.so") << "\n"
+                 << "    \"GLESv2\": " << ThunkGuestPresent(paths, "libGLESv2-guest.so") << ",\n"
+                 << "    \"Vulkan\": " << ThunkGuestPresent(paths, "libvulkan-guest.so") << "\n"
                  << "  }\n"
                  << "}\n";
             return json.str();

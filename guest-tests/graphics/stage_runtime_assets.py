@@ -5,6 +5,7 @@ needs the loader, the shared libraries the graphics programs link, glmark2's
 data, and the GL/EGL/GLES thunk libraries when those builds exist.
 """
 
+import hashlib
 import os
 import shutil
 import sys
@@ -72,6 +73,8 @@ THUNKS = (
     "libGL-guest.so",
     "libEGL-guest.so",
     "libGLESv2-guest.so",
+    "libvulkan-host.so",
+    "libvulkan-guest.so",
 )
 
 
@@ -165,8 +168,17 @@ def main():
         copy_file(src, dest)
         print(f"thunk {name}", flush=True)
 
+    # The installer re-copies the runtime whenever this content hash changes.
+    digest = hashlib.sha256()
+    for dirpath, dirs, files in os.walk(runtime):
+        dirs.sort()
+        for name in sorted(files):
+            path = os.path.join(dirpath, name)
+            digest.update(os.path.relpath(path, runtime).replace(os.sep, "/").encode())
+            with open(path, "rb") as handle:
+                digest.update(handle.read())
     with open(os.path.join(runtime, "STAMP"), "w", encoding="utf-8") as handle:
-        handle.write("vexa-graphics-1\n")
+        handle.write(f"vexa-graphics-1:{digest.hexdigest()[:16]}\n")
     print("ASSETS_READY", flush=True)
 
 

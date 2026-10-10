@@ -81,6 +81,10 @@ val hostNinja = providers.provider {
     val bundled = if (sdkDirPath.isNotBlank()) File(sdkDirPath, "cmake/3.22.1/bin/$name") else null
     if (bundled != null && bundled.exists()) bundled.absolutePath else "ninja"
 }
+val pythonExe: String =
+    (findProperty("PYTHON") as? String)?.takeIf { it.isNotBlank() }
+        ?: System.getenv("PYTHON")?.takeIf { it.isNotBlank() }
+        ?: if (isWindowsHost) "python" else "python3"
 val buildThunks =
     providers.environmentVariable("BUILD_THUNKS").orElse("OFF")
 val enableRuntimeShaderTranslator =
@@ -206,7 +210,7 @@ val ensureThirdPartySources by tasks.registering {
                 updateSubmodules = true
             )
             run(
-                "python3",
+                pythonExe,
                 shadercDir.resolve("utils/git-sync-deps").absolutePath,
                 cwd = rootProject.rootDir
             )
@@ -239,7 +243,7 @@ tasks.registering(org.gradle.api.tasks.Exec::class) {
         "-DCMAKE_BUILD_TYPE=RelWithDebInfo",
         "-DTUNE_CPU=none",
         "-DPKG_CONFIG_EXECUTABLE=${pkgConfig.absolutePath}",
-        "-DPython_EXECUTABLE=C:/Program Files/WindowsApps/PythonSoftwareFoundation.Python.3.12_3.12.2800.0_x64__qbz5n2kfra8p0/python3.12.exe",
+        "-DPython_EXECUTABLE=$pythonExe",
         "-DENABLE_ASSERTIONS=ON",
         "-DANDROID_ABI=arm64-v8a",
         "-DANDROID_PLATFORM=android-30",
@@ -265,7 +269,7 @@ tasks.registering(org.gradle.api.tasks.Exec::class) {
             "-DENABLE_CLANG_THUNKS=ON",
             "-DENABLE_DESKTOP_GL_THUNKS=ON",
             "-DENABLE_EGL_THUNKS=ON",
-            "-DENABLE_VULKAN_THUNKS=OFF",
+            "-DENABLE_VULKAN_THUNKS=ON",
             "-DENABLE_WAYLAND_THUNKS=OFF",
             "-DENABLE_VDSO_THUNKS=OFF",
             "-DVEXA_ENABLE_RUNTIME_SHADER_TRANSLATOR=${enableRuntimeShaderTranslator.get()}",
@@ -307,6 +311,7 @@ val buildFEXCore = tasks.register<org.gradle.api.tasks.Exec>("buildFEXCore") {
             "--target", "GL-host-64",
             "--target", "EGL-host-64",
             "--target", "GLESv2-host-64",
+            "--target", "vulkan-host-64",
             "--target", "guest-libs"
         )
     }
@@ -345,6 +350,8 @@ android {
             cmake {
                 cppFlags += ""
                 arguments += listOf(
+                    // Host thunks and FEX are built against c++_shared; this also packages libc++_shared.so.
+                    "-DANDROID_STL=c++_shared",
                     "-DFEX_ROOT=${cmakePath(fexRoot.get())}",
                     "-DFEX_BUILD=${cmakePath(fexBuildDir.get())}",
                 )
@@ -408,7 +415,7 @@ val stageGuestRuntime by tasks.registering(Exec::class) {
     dependsOn(buildFEXCore)
     environment("REQUIRE_THUNKS", if (buildThunks.get() == "ON") "1" else "0")
     commandLine(
-        "C:/Program Files/WindowsApps/PythonSoftwareFoundation.Python.3.12_3.12.2800.0_x64__qbz5n2kfra8p0/python3.12.exe",
+        pythonExe,
         rootProject.file("guest-tests/graphics/stage_runtime_assets.py").absolutePath,
     )
 }

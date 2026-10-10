@@ -41,7 +41,11 @@ object GuestInstaller {
 
     private fun ensureRuntime(context: Context, root: File) {
         val stamp = File(root, "runtime.stamp")
-        if (stamp.isFile && stamp.readText() == RUNTIME_STAMP) {
+        // runtime/STAMP carries a content hash, so updated thunks/rootfs replace the old copy.
+        val expected = runCatching {
+            context.assets.open("runtime/STAMP").bufferedReader().use { it.readText().trim() }
+        }.getOrDefault(RUNTIME_STAMP)
+        if (stamp.isFile && stamp.readText() == expected) {
             return
         }
         if (context.assets.list("runtime").isNullOrEmpty()) {
@@ -50,7 +54,7 @@ object GuestInstaller {
         copyAssetTree(context, "runtime/rootfs", File(root, "rootfs"))
         copyAssetTree(context, "runtime/thunks/host", File(root, "thunks/host"))
         copyAssetTree(context, "runtime/thunks/guest", File(root, "thunks/guest"))
-        stamp.writeText(RUNTIME_STAMP)
+        stamp.writeText(expected)
     }
 
     private fun copyAssetTree(context: Context, assetPath: String, dest: File) {
