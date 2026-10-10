@@ -70,18 +70,36 @@ object RootLogCollector {
         private val onLog: (level: String, message: String) -> Unit,
     ) {
         private var dmesgProcess: Process? = null
+        private var dmesgPid: Int? = null
 
         fun start() {
             artifactDir.mkdirs()
             val streamFile = File(artifactDir, DMESG_STREAM_NAME)
-            val cmd = "exec dmesg -w > '${streamFile.absolutePath}' 2>/dev/null"
-            dmesgProcess = runCatching {
+            // The su shell doubles as a watchdog: it echoes the dmesg pid, then
+            // polls the worker pid and kills dmesg when the worker exits. This
+            // keeps the stream bounded to the run even when the worker dies via
+            // a native exit() that never reaches Kotlin teardown code.
+            val cmd = "dmesg -w > '${streamFile.absolutePath}' 2>/dev/null & " +
+                "echo \$!; " +
+                "while kill -0 $workerPid 2>/dev/null; do sleep 2; done; " +
+                "kill \$! 2>/dev/null"
+            val proc = runCatching {
                 ProcessBuilder(suCmd, "-c", cmd).start()
             }.getOrNull()
+            dmesgPid = proc?.let {
+                runCatching {
+                    it.inputStream.bufferedReader().readLine()?.trim()?.toIntOrNull()
+                }.getOrNull()
+            }
+            dmesgProcess = proc
             if (dmesgProcess == null) {
                 onLog("WARN", "Root dmesg stream failed to start")
             } else {
-                onLog("INFO", "Root dmesg stream started -> ${streamFile.name}")
+                onLog(
+                    "INFO",
+                    "Root dmesg stream started -> ${streamFile.name}" +
+                        (dmesgPid?.let { " (pid $it)" } ?: "")
+                )
             }
             remediateCpuset()
             snapshot("start")
@@ -135,10 +153,22 @@ object RootLogCollector {
             )
         }
 
+        @Synchronized
         fun stop(tag: String) {
             snapshot(tag)
+            // destroy() alone orphans the dmesg child (su is only its parent);
+            // kill the captured pid first, then tear down the watchdog shell.
+            dmesgPid?.let { pid ->
+                runCatching {
+                    val p = ProcessBuilder(suCmd, "-c", "kill $pid")
+                        .redirectErrorStream(true)
+                        .start()
+                    p.waitFor(5, TimeUnit.SECONDS)
+                }
+            }
             runCatching { dmesgProcess?.destroy() }
             dmesgProcess = null
+            dmesgPid = null
         }
 
         private fun snapshotScript(pid: Int): String = """

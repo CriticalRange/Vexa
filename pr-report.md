@@ -144,3 +144,104 @@ Modified: `VexaLogger.kt`, `LogCategory.kt`, `native_log.cpp`,
 `RuntimeService.kt`, `RuntimeWorkerService.kt`, `MainActivity.kt`,
 `stage_rootfs.py`, `stage_runtime_assets.py`, `docs/DEBUGGING_STRATEGY.md`
 (new "Root-Level Diagnostics" section).
+
+---
+
+# Phase 2 — UI overhaul + physical-device bugfix pass
+
+Driven end-to-end on the real S23 FE via ADB: install → tap → screencap →
+inspect → fix → rebuild → reinstall. Every fix below was reproduced and
+verified on the physical device.
+
+## UI redesign
+
+- New design system: `ui/theme/` (Color/Shape/Type/Theme tokens — `VexaBlack`
+  base, cyan→violet accent gradient, `MonospaceTypography`) plus 14 shared
+  components in `ui/` (`Brand`, `Buttons`, `Panels`, `Labels`, `Logs`,
+  `Metadata`, `Pickers`, `Stats`, `Switches`, `Loaders`, `Hud`, `Effects`,
+  `Previews`, `LogColors`). Launcher and debug panel now share one visual
+  language; zero hardcoded hex colors remain in screens.
+- Adaptive `>_` launcher icon (`ic_launcher_foreground.xml`, monochrome mask).
+- `docs/UI_DESIGN.md` documents the token/component contract.
+- Functional bugs in the old UI fixed along the way: `PickerCard` had no
+  `onSelect` (dropdown could never actually select), and
+  `formatLogTimestamp` rendered epoch ms as elapsed time
+  (`29860809:10`) — now wall-clock `HH:mm:ss.SSS`.
+
+## Bugs found during device runs — fixed
+
+- **Loading overlay never dismissed** (`GameActivity.kt`).
+  `showLoading` was initialized `true` and *never set false* — harmless
+  when the old overlay was a transparent Box, but the new opaque overlay
+  permanently covered the running guest (glmark2 scored 89 behind a
+  spinner). Now dismisses on the first guest stdout/stderr line, on worker
+  disconnect, or via a 12 s watchdog; `AnimatedVisibility` fades it out.
+- **Orphaned `dmesg -w` processes** (`RootLogCollector.kt`).
+  `stop()` called `Process.destroy()` which only killed the `su` wrapper —
+  the `dmesg` child was reparented to init and kept appending (8 orphans,
+  43 MB+ logs found on device). Worse, when the guest self-exited
+  (EXIT_SELF → native `exit()`), `onDestroy`/`stop` never ran at all.
+  Fixes:
+  - the `su -c` command now runs a **watchdog shell**:
+    `dmesg -w > file & echo $!; while kill -0 <workerPid>; do sleep 2; done;
+    kill $!` — the stream dies with the worker regardless of exit path,
+  - the real dmesg pid is captured from stdout and `stop()` kills it
+    explicitly (no pkill self-match),
+  - `stop("exit")` runs when `RuntimeBridge.startRuntime` returns, so
+    EXIT_SELF runs get a `root_snapshot_exit.txt` too.
+  Verified: `pgrep -x dmesg` → 0 after runs; exit snapshot written.
+- **Debug panel header squeeze** (`GameDebugPanel.kt`). Title, stats and
+  action buttons shared one crowded Row — "DEBUG CONSOLE" wrapped one
+  letter per line and Close/Filters were crushed. Split into a title+actions
+  row and a separate stats row (`logs / err / filtered` chips).
+- **Debug panel scroll jank** (`LogStore.kt`, `GameDebugPanel.kt`,
+  `Logs.kt`). Three compounding causes, all fixed:
+  - `LogStore.append` copied the whole list per log line
+    (`_entries.value + entry`) **on the main thread** — during thunk log
+    bursts (~100+ lines/s) that was O(n²) work blocking frames. Now appends
+    are O(1) into a buffer; a daemon flusher publishes a snapshot at most
+    every 120 ms; entries are capped at 4000 (ring-buffer semantics).
+  - `entries.filter` + `entries.count` ran two O(n) scans per emission —
+    folded into a single `remember` pass.
+  - New snapshots still interrupted in-flight scroll gestures mid-frame —
+    the panel now **holds list updates while scrolling**
+    (`snapshotFlow { isScrollInProgress }.first { !it }`), a standard
+    log-viewer behavior; appends apply when the gesture ends without
+    shifting the viewport (keyed items).
+- **Debug chip unreachable / dead HUD** — same dismiss fix; the top
+  debug pill was removed from the loading overlay per feedback.
+
+## New UI features this pass
+
+- **Scrollbar** in `LogList` (launcher + debug panel): estimated-height
+  cyan thumb + track on the right edge, brightens while scrolling
+  (`isScrollInProgress` → alpha 0.30→0.85), auto-hides when content fits,
+  `contentPadding(end=8dp)` so rows never sit under the bar.
+- **Fade transitions**: loading overlay fades out (450 ms) as HUD chips
+  fade in (500 ms); debug panel `fadeIn(300)+scaleIn(0.97)` /
+  `fadeOut(220)+scaleOut(0.97)`.
+- `Modifier.animateItem()` on log rows — new entries slide in smoothly.
+
+## On-device verification (S23 FE, KernelSU)
+
+- `vkcube --wsi xcb` renders live on `Samsung Xclipse 920`; debug panel
+  opens over the running guest, scrolls smoothly through 1100+ entries,
+  `[ROOT]` entries visible in-panel (dmesg pid, cpuset remediation,
+  snapshot writes).
+- `glmark2-es2`: `glmark2 Score: 89`, `FPS: 90`, clean EXIT_SELF
+  (importance=100 → `oom_score_adj` fix confirmed).
+- `vexa-hello`: output logged, overlay dismissed, `root_snapshot_exit.txt`
+  produced.
+- Post-run `pgrep -x dmesg` → 0; worker `/proc/<pid>/cpuset` =
+  `/top-app` during runs.
+- Device identity confirmed again as S23 FE (r11s / Exynos 2200) despite
+  spoofed `ro.product.*` ASUS props.
+
+## Files (phase 2)
+
+Modified: `GameActivity.kt`, `ui/GameLoadingOverlay.kt`,
+`ui/GameDebugPanel.kt`, `ui/Logs.kt`, `logging/LogStore.kt`,
+`runtime/RootLogCollector.kt`, `runtime/RuntimeWorkerService.kt`.
+New: `ui/theme/*`, `ui/{Brand,Buttons,Panels,Labels,Logs,Metadata,Pickers,
+Stats,Switches,Loaders,Hud,Effects,Previews,LogColors}.kt`,
+`res/drawable*/ic_launcher*`, `docs/UI_DESIGN.md`.
