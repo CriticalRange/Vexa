@@ -17,6 +17,7 @@
 
 #include "../../logging/native_log.h"
 #include "../../logging/crash_signals.h"
+#include "../surface_bridge.h"
 #include "config.h"
 
 namespace Vexa::Runtime::Init {
@@ -307,6 +308,11 @@ namespace Vexa::Runtime::Init {
                 /*envp=*/nullptr, // don't scan raw envp on Android runtime_worker
                                 portableInfo);
         FEXCore::Config::ReloadMetaLayer(); // Apply Meta Config Changes
+        Vexa_SetGuestRootfs(paths.rootfs.c_str());
+        // libxkbcommon logs an error when this directory is missing. vkgears
+        // compiles its keymap from a string, so the directory can be empty.
+        std::error_code xkb_dir_error;
+        std::filesystem::create_directories(paths.rootfs + "/usr/share/X11/xkb", xkb_dir_error);
         FEXCore::Config::Set(FEXCore::Config::CONFIG_ROOTFS, paths.rootfs);
         FEXCore::Config::Set(FEXCore::Config::CONFIG_THUNKHOSTLIBS, paths.thunkHost);
         FEXCore::Config::Set(FEXCore::Config::CONFIG_THUNKGUESTLIBS, paths.thunkGuest);

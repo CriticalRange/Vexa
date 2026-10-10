@@ -7,12 +7,16 @@
 #include <android/native_window.h>
 #include <android/native_window_jni.h>
 #include <atomic>
+#include <cstdio>
 #include <mutex>
+#include <string>
+#include <sys/stat.h>
 
 namespace {
     std::mutex g_mutex;
     ANativeWindow *g_window{};
     std::atomic<uint64_t> g_surface_serial{1};
+    std::string g_guest_rootfs;
 }
 
 namespace Vexa::Runtime::SurfaceBridge {
@@ -64,6 +68,73 @@ ANativeWindow *Vexa_GetRuntimeNativeWindowRetained() {
 extern "C" __attribute__((visibility("default")))
 uint64_t Vexa_GetRuntimeSurfaceSerial() {
     return g_surface_serial.load(std::memory_order_acquire);
+}
+
+extern "C" __attribute__((visibility("default")))
+void Vexa_SetGuestRootfs(const char *rootfs) {
+    if (!rootfs || !rootfs[0]) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(g_mutex);
+    g_guest_rootfs = rootfs;
+}
+
+extern "C" __attribute__((visibility("default")))
+void Vexa_PublishGuestWindowSize(int width, int height) {
+    if (width <= 1 || height <= 1) {
+        return;
+    }
+    std::string root;
+    {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        root = g_guest_rootfs;
+    }
+    if (root.empty()) {
+        std::fprintf(stderr, "[VEXA][WINDOW] no rootfs for window size\n");
+        return;
+    }
+    const std::string dir = root + "/tmp";
+    mkdir(dir.c_str(), 0755);
+    const std::string path = dir + "/vexa-window-size";
+    FILE *file = std::fopen(path.c_str(), "w");
+    if (!file) {
+        std::fprintf(stderr, "[VEXA][WINDOW] cannot write %s\n", path.c_str());
+        return;
+    }
+    std::fprintf(file, "%d %d\n", width, height);
+    std::fclose(file);
+    std::fprintf(stderr, "[VEXA][WINDOW] guest size %dx%d\n", width, height);
+}
+
+// Cover crop the GL host applied, in the guest rootfs. Ten integers:
+// content x0 y0 cw ch, crop sx sy src_w src_h, surface sw sh.
+// Identity (src == surface, origin 0) means a touch is already a window pixel.
+extern "C" __attribute__((visibility("default")))
+void Vexa_PublishPresentMap(int x0, int y0, int cw, int ch, int sx, int sy, int src_w, int src_h, int sw, int sh) {
+    if (sw < 2 || sh < 2 || cw < 1 || ch < 1 || src_w < 1 || src_h < 1) {
+        return;
+    }
+    std::string root;
+    {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        root = g_guest_rootfs;
+    }
+    if (root.empty()) {
+        return;
+    }
+    const std::string dir = root + "/tmp";
+    mkdir(dir.c_str(), 0755);
+    const std::string path = dir + "/vexa-present";
+    const std::string tmp = path + ".tmp";
+    FILE *file = std::fopen(tmp.c_str(), "w");
+    if (!file) {
+        return;
+    }
+    std::fprintf(file, "%d %d %d %d %d %d %d %d %d %d\n", x0, y0, cw, ch, sx, sy, src_w, src_h, sw, sh);
+    std::fclose(file);
+    if (std::rename(tmp.c_str(), path.c_str()) != 0) {
+        std::remove(tmp.c_str());
+    }
 }
 
 extern "C" __attribute__((visibility("default")))

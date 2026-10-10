@@ -29,4 +29,10 @@ ANativeWindow *Vexa_GetRuntimeNativeWindowRetained();
 extern "C" __attribute__((visibility("default")))
 uint64_t Vexa_GetRuntimeSurfaceSerial();
 
+extern "C" __attribute__((visibility("default")))
+void Vexa_SetGuestRootfs(const char *rootfs);
+
+extern "C" __attribute__((visibility("default")))
+void Vexa_PublishGuestWindowSize(int width, int height);
+
 #endif //VEXA_EMULATOR_SURFACE_BRIDGE_H

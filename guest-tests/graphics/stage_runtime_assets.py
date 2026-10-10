@@ -31,6 +31,14 @@ SONAMES = (
     "libjpeg.so.8",
     "libpng16.so.16",
     "libX11.so.6",
+    "libXcursor.so.1",
+    "libXinerama.so.1",
+    "libXext.so.6",
+    "libXrandr.so.2",
+    "libXrender.so.1",
+    "libXi.so.6",
+    "libdbus-1.so.3",
+    "libsteam_api.so",
     "libvulkan.so.1",
     "libwayland-client.so.0",
     "libxcb.so.1",
@@ -42,6 +50,7 @@ SONAMES = (
     "libxkbcommon.so.0",
     "libxkbcommon-x11.so.0",
     "libdecor-0.so.0",
+    "libasound.so.2",
 )
 REQUIRED = (
     "ld-linux-x86-64.so.2",
@@ -53,6 +62,14 @@ REQUIRED = (
     "libjpeg.so.8",
     "libpng16.so.16",
     "libX11.so.6",
+    "libXcursor.so.1",
+    "libXinerama.so.1",
+    "libXext.so.6",
+    "libXrandr.so.2",
+    "libXrender.so.1",
+    "libXi.so.6",
+    "libdbus-1.so.3",
+    "libsteam_api.so",
 )
 PROGRAMS = (
     "es2gears_x11.x86_64-linux-gnu",
@@ -75,6 +92,8 @@ THUNKS = (
     "libGLESv2-guest.so",
     "libvulkan-host.so",
     "libvulkan-guest.so",
+    "libopenal-host.so",
+    "libopenal-guest.so",
 )
 
 
@@ -105,6 +124,23 @@ def find_elf(soname):
     return best
 
 
+# Guest libs that must be the VEXA shims (compile_fake_* in stage_rootfs.py),
+# not the real Ubuntu socket clients. The shims stamp "VEXA" into their
+# vendor/setup bytes; the real libs never carry that string.
+FAKE_LIB_MARKERS = {
+    "libxcb.so.1": b"VEXA",
+    "libX11.so.6": b"VEXA",
+}
+
+
+def has_marker(path, marker):
+    try:
+        with open(path, "rb") as handle:
+            return marker in handle.read()
+    except OSError:
+        return False
+
+
 def copy_file(src, dest):
     os.makedirs(os.path.dirname(dest), exist_ok=True)
     shutil.copy2(src, dest)
@@ -124,6 +160,18 @@ def main():
             else:
                 print(f"skip {soname}", flush=True)
             continue
+        marker = FAKE_LIB_MARKERS.get(soname)
+        if marker and not has_marker(found, marker):
+            raise SystemExit(
+                f"staging real {soname} socket client instead of the VEXA shim: "
+                f"{found}\n"
+                "find_elf prefers the largest match, so a stale guest rootfs "
+                "silently breaks XCB/X11 guests (vkcube: 'Cannot connect to XCB').\n"
+                "Rebuild the rootfs so compile_fake_*() replaces the lib:\n"
+                "  rm -f guest-tests/graphics/rootfs/.vexa-rootfs-ready\n"
+                "  rm -rf guest-tests/graphics/rootfs\n"
+                "  python guest-tests/graphics/stage_rootfs.py"
+            )
         copy_file(found, os.path.join(lib_dest, soname))
         print(f"lib {soname} <= {found}", flush=True)
     if missing:
@@ -167,6 +215,15 @@ def main():
             continue
         copy_file(src, dest)
         print(f"thunk {name}", flush=True)
+
+    openal_host = os.path.normpath(
+        os.path.join(VEXA, "third_party", "openal-soft-android", "build-android-arm64", "libopenal.so")
+    )
+    if is_elf(openal_host):
+        copy_file(openal_host, os.path.join(runtime, "thunks", "host", "libopenal.so"))
+        print("host libopenal.so", flush=True)
+    else:
+        print("skip host libopenal.so", flush=True)
 
     # The installer re-copies the runtime whenever this content hash changes.
     digest = hashlib.sha256()

@@ -22,9 +22,20 @@ class RuntimeWorkerService : Service() {
     private var supervisorMessenger: Messenger? = null
     private var currentSurface: Surface? = null
     private var pendingStartRequest: LaunchRequest? = null
+    private var rootSession: RootLogCollector.Session? = null
 
     private fun startRuntimeAsync(request: LaunchRequest) {
         workerExecutor.execute {
+            val cpuset = runCatching {
+                File("/proc/self/cpuset").readText().trim()
+            }.getOrDefault("?")
+            sendWorkerLog(
+                "INFO",
+                "BOOT",
+                "Runtime worker process state",
+                """{"pid":"${android.os.Process.myPid()}","cpuset":"$cpuset","oomAdj":${runCatching { File("/proc/self/oom_score_adj").readText().trim() }.getOrDefault("?")}}"""
+            )
+
             val cleaned = resetArtifactsDir(request.artifactDirectory)
             if (!cleaned) {
                 sendWorkerLog(
@@ -42,7 +53,20 @@ class RuntimeWorkerService : Service() {
                 )
             }
 
+            if (RootLogCollector.isEnabled(request.launchEnv, applicationContext.filesDir)) {
+                rootSession = RootLogCollector.startSession(
+                    artifactDir = File(request.artifactDirectory),
+                    filesDir = applicationContext.filesDir,
+                    workerPid = android.os.Process.myPid(),
+                    onLog = { level, message ->
+                        sendWorkerLog(level, "ROOT", message)
+                    }
+                )
+            }
+
             val code = RuntimeBridge.startRuntime(request)
+            runCatching { rootSession?.stop("exit") }
+            rootSession = null
             sendToSupervisor(RuntimeIpc.MSG_WORKER_START_RESULT) {
                 putInt(RuntimeIpc.KEY_CODE, code)
             }
@@ -71,21 +95,24 @@ class RuntimeWorkerService : Service() {
         if (path.isBlank()) return false
 
         return try {
-            val expected =
+            val base =
                 File(applicationContext.filesDir, "artifacts")
             val requested = File(path)
+            val baseNorm = normalizePath(base)
+            val reqNorm = normalizePath(requested)
 
-            if (normalizePath(requested) !=
-                normalizePath(expected)
+            // Only directories inside files/artifacts may be reset.
+            if (reqNorm != baseNorm &&
+                !reqNorm.startsWith(baseNorm + File.separator)
             ) return false
-            if (expected.exists() && !
-                expected.isDirectory
+            if (requested.exists() && !
+                requested.isDirectory
             ) return false
-            if (!expected.exists() && !
-                expected.mkdirs()
+            if (!requested.exists() && !
+                requested.mkdirs()
             ) return false
 
-            expected.listFiles()?.forEach { child ->
+            requested.listFiles()?.forEach { child ->
                 if (!child.deleteRecursively()) return false
             }
 
@@ -96,7 +123,7 @@ class RuntimeWorkerService : Service() {
                 "shaders/translated"
             )
             for (rel in requiredDirs) {
-                val dir = File(expected, rel)
+                val dir = File(requested, rel)
                 if (!dir.exists() && !dir.mkdirs())
                     return false
             }
@@ -248,6 +275,8 @@ class RuntimeWorkerService : Service() {
 
                 RuntimeIpc.MSG_WORKER_STOP_RUNTIME -> {
                     workerExecutor.execute {
+                        rootSession?.stop("stop")
+                        rootSession = null
                         RuntimeBridge.stopRuntime()
                     }
                 }
@@ -261,15 +290,6 @@ class RuntimeWorkerService : Service() {
         Messenger(incomingHandler)
 
     override fun onCreate() {
-        sendToSupervisor(RuntimeIpc.MSG_LOG_EVENT) {
-            putString(RuntimeIpc.KEY_LEVEL, "INFO")
-            putString(RuntimeIpc.KEY_CATEGORY, "CATEGORY")
-            putString(RuntimeIpc.KEY_MESSAGE, "MESSAGE")
-            putString(
-                RuntimeIpc.KEY_FIELDS_JSON,
-                """{"workerPid":"${android.os.Process.myPid()}","workerProcess":"${android.app.Application.getProcessName()}"}"""
-            )
-        }
         super.onCreate()
         System.loadLibrary("vexa")
         RuntimeBridge.setNativeLogSink(nativeSink)
@@ -279,6 +299,8 @@ class RuntimeWorkerService : Service() {
         serviceMessenger.binder
 
     override fun onDestroy() {
+        runCatching { rootSession?.stop("destroy") }
+        rootSession = null
         RuntimeBridge.setNativeLogSink(null)
         RuntimeBridge.setRuntimeSurface(null)
         currentSurface?.release()

@@ -26,7 +26,9 @@
         </activity>
         <activity
             android:name=".GameActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"
             android:exported="false"
+            android:screenOrientation="sensorLandscape"
             android:theme="@style/Theme.VexaEmulator" />
 
         <service

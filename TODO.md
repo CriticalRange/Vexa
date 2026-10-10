@@ -236,6 +236,13 @@ VEXA is a general-purpose Linux x86_64 runner. Older items that name one game ar
   documented.)
 - [ ] Run incremental test matrix: startup, window
   init, input, audio, teardown, relaunch stability.
+- [x] Redo libalsa support. The generated desktop
+  `libasound` thunk stays disabled on Android. Guests
+  that dlopen `libasound.so.2` (Godot ALSA) get a new
+  guest library: the symbol surface the loader expects,
+  with playback forwarded through the OpenAL thunk to
+  host `openal-soft` (OpenSL). Pulse is left absent so
+  the title falls through to this ALSA entry.
 - [-] Android audio backend plan: keep desktop
   `libasound` thunks disabled in Android builds and
   use `openal-soft` as primary audio replacement;
