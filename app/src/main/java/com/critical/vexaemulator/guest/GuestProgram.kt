@@ -84,6 +84,19 @@ object GuestCatalog {
             env = listOf("DISPLAY=:0", "SteamAppId=1942280"),
             preinstalled = true,
         ),
+        GuestProgram(
+            id = "prismlauncher",
+            title = "Prism Launcher",
+            summary = "Qt6 Minecraft launcher (sharun portable build). Offscreen smoke test — no X server, GUI is not expected to render.",
+            assetPath = "",
+            fileName = "bin/prismlauncher",
+            env = listOf(
+                "QT_QPA_PLATFORM=offscreen",
+                "QT_DEBUG_PLUGINS=1",
+                "PRISMLAUNCHER_DISABLE_GLVULKAN=1",
+            ),
+            preinstalled = true,
+        ),
     )
 
     private fun graphics(
