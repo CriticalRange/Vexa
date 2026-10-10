@@ -25,28 +25,23 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.Button
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -60,7 +55,10 @@ import com.critical.vexaemulator.runtime.LaunchRequest
 import com.critical.vexaemulator.runtime.RuntimeIpc
 import com.critical.vexaemulator.runtime.RuntimeService
 import com.critical.vexaemulator.ui.GameDebugPanel
+import com.critical.vexaemulator.ui.GameHudChip
 import com.critical.vexaemulator.ui.GameLoadingOverlay
+import com.critical.vexaemulator.ui.theme.Ink
+import com.critical.vexaemulator.ui.theme.VexaBlack
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -136,6 +134,7 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
                             (message.contains("Runtime worker disconnected") ||
                                     message.contains("Runtime worker binding died"))
                         ) {
+                            showLoading = false
                             Handler(Looper.getMainLooper()).post {
                                 logLatestRuntimeExitInfo("worker_event_t0")
                             }
@@ -564,6 +563,17 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
         )
         startGuestOutputTail(java.io.File(request.artifactDirectory))
         lifecycleScope.launch {
+            delay(12000)
+            if (showLoading) {
+                showLoading = false
+                VexaLogger.log(
+                    LogLevel.WARN,
+                    LogCategory.ACTIVITY,
+                    "Loading overlay dismissed by watchdog timeout"
+                )
+            }
+        }
+        lifecycleScope.launch {
             if (!runtimeBound || serviceMessenger == null) {
                 pendingLaunchRequest = request
                 VexaLogger.log(
@@ -692,6 +702,9 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
             null
         } ?: return position
         val (read, text) = chunk
+        if (showLoading) {
+            withContext(Dispatchers.Main.immediate) { showLoading = false }
+        }
         text.lineSequence().map { it.trimEnd() }.filter { it.isNotEmpty() }.forEach { line ->
             VexaLogger.log(LogLevel.INFO, LogCategory.RUNTIME, "$label: $line")
         }
@@ -719,81 +732,63 @@ private fun GameScreen(
     onHideFilters: () -> Unit,
     onBack: () -> Unit,
 ) {
-    val entries by LogStore.entries.collectAsState()
-    Box(modifier = Modifier.fillMaxSize()) {
+    Box(modifier = Modifier.fillMaxSize().background(VexaBlack)) {
         AndroidView( // Shows actual game content
             factory = { surfaceView },
             modifier = Modifier.fillMaxSize()
         )
 
         AnimatedVisibility(
-            // Fade in/out animations for showing/hiding overlay
             visible = showLoading,
-            enter = fadeIn(animationSpec = tween(durationMillis = 500)),
-            exit = fadeOut(animationSpec = tween(durationMillis = 500)),
+            enter = fadeIn(tween(450)),
+            exit = fadeOut(tween(450)),
         ) {
             GameLoadingOverlay(
+                message = "Starting the program",
                 isDebugMenuOpen = showDebugMenu,
                 onToggleDebugMenu = onToggleDebugMenu,
                 onHideFilters = onHideFilters
             )
         }
 
-        if (!showDebugMenu) {
-            Column(
+        AnimatedVisibility(
+            visible = !showLoading,
+            enter = fadeIn(tween(500)),
+            exit = fadeOut(tween(300)),
+            modifier = Modifier.align(Alignment.TopCenter),
+        ) {
+            Row(
                 modifier = Modifier
-                    .align(Alignment.BottomCenter)
                     .fillMaxWidth()
-                    .background(Color(0xEE111111))
-                    .padding(16.dp)
+                    .padding(horizontal = 12.dp, vertical = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("Output", color = Color.White, fontSize = 16.sp)
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(220.dp)
-                        .padding(top = 8.dp)
-                ) {
-                    if (entries.isEmpty()) {
-                        item {
-                            Text(
-                                "Waiting for the program.",
-                                color = Color(0xFF9A9A9A),
-                                fontFamily = FontFamily.Monospace,
-                                fontSize = 12.sp,
-                            )
-                        }
-                    } else {
-                        items(entries.takeLast(12), key = { it.id }) { entry ->
-                            Text(
-                                text = "${entry.level} ${entry.category}: ${entry.message}",
-                                color = if (entry.level == LogLevel.ERROR || entry.level == LogLevel.FATAL) {
-                                    Color(0xFFFF8A80)
-                                } else {
-                                    Color(0xFFD7D7D7)
-                                },
-                                fontFamily = FontFamily.Monospace,
-                                fontSize = 12.sp,
-                            )
-                        }
-                    }
-                }
-                Button(
+                GameHudChip(
+                    text = "◂ Exit",
+                    color = Ink,
                     onClick = onBack,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 8.dp)
-                ) {
-                    Text("Back")
-                }
+                )
+                Spacer(modifier = Modifier.weight(1f))
+                GameHudChip(
+                    text = if (showDebugMenu) "Debug ▸" else "◂ Debug",
+                    color = Ink,
+                    onClick = onToggleDebugMenu,
+                )
             }
         }
 
-        if (showDebugMenu) {
+        AnimatedVisibility(
+            visible = showDebugMenu,
+            enter = fadeIn(tween(300)) +
+                scaleIn(initialScale = 0.97f, animationSpec = tween(300)),
+            exit = fadeOut(tween(220)) +
+                scaleOut(targetScale = 0.97f, animationSpec = tween(220)),
+        ) {
             GameDebugPanel(
+                hideFilters = hideFilters,
                 onClose = onToggleDebugMenu,
                 onHideFilters = onHideFilters,
-                hideFilters = hideFilters
             )
         }
     }

@@ -65,6 +65,8 @@ class RuntimeWorkerService : Service() {
             }
 
             val code = RuntimeBridge.startRuntime(request)
+            runCatching { rootSession?.stop("exit") }
+            rootSession = null
             sendToSupervisor(RuntimeIpc.MSG_WORKER_START_RESULT) {
                 putInt(RuntimeIpc.KEY_CODE, code)
             }

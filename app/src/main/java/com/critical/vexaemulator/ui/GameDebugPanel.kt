@@ -6,7 +6,6 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -19,33 +18,30 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Button
-import androidx.compose.material3.Checkbox
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.flow.first
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.critical.vexaemulator.logging.LogCategory
 import com.critical.vexaemulator.logging.LogLevel
 import com.critical.vexaemulator.logging.LogStore
-import com.critical.vexaemulator.logging.VexaLogEntry
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
+import com.critical.vexaemulator.ui.theme.Cyan
+import com.critical.vexaemulator.ui.theme.Edge
+import com.critical.vexaemulator.ui.theme.Error
+import com.critical.vexaemulator.ui.theme.Info
+import com.critical.vexaemulator.ui.theme.Success
+import com.critical.vexaemulator.ui.theme.SurfaceBase
 
 @Composable
 fun GameDebugPanel(
@@ -53,233 +49,147 @@ fun GameDebugPanel(
     onClose: () -> Unit,
     onHideFilters: () -> Unit
 ) {
-    val entries = LogStore.entries.collectAsState().value
+    val rawEntries by LogStore.entries.collectAsState()
 
     var selectedLevels by remember { mutableStateOf(setOf<LogLevel>()) }
     var selectedCategories by remember { mutableStateOf(setOf<LogCategory>()) }
 
-    val filteredEntries = remember(entries, selectedLevels, selectedCategories) {
-        entries.filter { entry ->
+    // Freeze the list while the user scrolls: new log bursts wait for the
+    // gesture to end instead of forcing a recomposition + O(n) filter pass
+    // mid-frame. The gate also covers the stats and LazyColumn relayout.
+    val listState = rememberLazyListState()
+    var displayedEntries by remember { mutableStateOf(rawEntries) }
+    LaunchedEffect(rawEntries) {
+        if (listState.isScrollInProgress) {
+            snapshotFlow { listState.isScrollInProgress }.first { !it }
+        }
+        displayedEntries = rawEntries
+    }
+    val entries = displayedEntries
+
+    val (filteredEntries, errorCount) = remember(entries, selectedLevels, selectedCategories) {
+        var errors = 0
+        val filtered = entries.filter { entry ->
+            if (entry.level.ordinal >= LogLevel.ERROR.ordinal) errors++
             val levelMatches = selectedLevels.isEmpty() || entry.level in selectedLevels
             val categoryMatches =
                 selectedCategories.isEmpty() || entry.category in selectedCategories
             levelMatches && categoryMatches
         }
+        filtered to errors
     }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0x99000000))
+            .background(Color.Black.copy(alpha = 0.6f))
     ) {
-        Column(
+        PanelSurface(
             modifier = Modifier
                 .align(Alignment.Center)
-                .fillMaxWidth(0.96f)
-                .fillMaxHeight(0.94f)
-                .background(
-                    color = Color(0xFF111111),
-                    shape = RoundedCornerShape(14.dp)
-                )
-                .border(
-                    width = 1.dp,
-                    color = Color(0xFF3A3A3A),
-                    shape = RoundedCornerShape(14.dp)
-                )
-                .padding(14.dp)
+                .fillMaxWidth(0.94f)
+                .fillMaxHeight(0.9f),
+            color = SurfaceBase.copy(alpha = 0.98f),
+            borderColor = Edge,
+            accentEdge = AccentEdge.Top,
         ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    text = "Debug Console",
-                    color = Color.White,
-                    fontSize = 20.sp
-                )
+            Column(modifier = Modifier.padding(14.dp)) {
                 Row(
-                    verticalAlignment = Alignment.CenterVertically
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Button(
-                        onClick = onHideFilters
-                    ) {
-                        Text("Filters")
-                    }
+                    SectionLabel(
+                        text = "Debug Console",
+                        modifier = Modifier.weight(1f),
+                    )
+                    GhostButton(text = "Filters", onClick = onHideFilters)
                     Spacer(modifier = Modifier.width(8.dp))
-                    Button(
-                        onClick = onClose
-                    ) {
-                        Text("Close")
-                    }
+                    GhostButton(text = "Close", onClick = onClose)
                 }
-            }
 
-            Spacer(modifier = Modifier.height(12.dp))
-            HorizontalDivider(color = Color(0xFF2E2E2E))
-            Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(10.dp))
+                StatRow(
+                    stats = listOf(
+                        Triple("logs", entries.size.toString(), Info),
+                        Triple(
+                            "err",
+                            errorCount.toString(),
+                            if (errorCount == 0) Success else Error,
+                        ),
+                        Triple("filtered", filteredEntries.size.toString(), Cyan),
+                    ),
+                )
 
-            AnimatedVisibility(
-                visible = !hideFilters,
-                enter = fadeIn() + expandVertically(),
-                exit = fadeOut() + shrinkVertically()
-            ) {
-                Column {
-                    Text(
-                        text = "Levels",
-                        color = Color(0xFFE0E0E0),
-                        fontSize = 14.sp
-                    )
-
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState()),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        LogLevel.entries.forEach { level ->
-                            FilterToggle(
-                                label = level.name,
-                                checked = level in selectedLevels,
-                                onCheckedChange = { checked ->
-                                    selectedLevels = if (checked) {
-                                        selectedLevels + level
-                                    } else {
-                                        selectedLevels - level
+                AnimatedVisibility(
+                    visible = !hideFilters,
+                    enter = fadeIn() + expandVertically(),
+                    exit = fadeOut() + shrinkVertically()
+                ) {
+                    Column {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        SectionLabel(text = "Levels")
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            LogLevel.entries.forEach { level ->
+                                LogFilterChip(
+                                    label = level.name,
+                                    color = level.toColor(),
+                                    selected = level in selectedLevels,
+                                    onClick = {
+                                        selectedLevels = if (level in selectedLevels) {
+                                            selectedLevels - level
+                                        } else {
+                                            selectedLevels + level
+                                        }
                                     }
-                                }
-                            )
+                                )
+                            }
                         }
-                    }
 
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    Text(
-                        text = "Categories",
-                        color = Color(0xFFE0E0E0),
-                        fontSize = 14.sp
-                    )
-
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState()),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        LogCategory.entries.forEach { category ->
-                            FilterToggle(
-                                label = category.name,
-                                checked = category in selectedCategories,
-                                onCheckedChange = { checked ->
-                                    selectedCategories = if (checked) {
-                                        selectedCategories + category
-                                    } else {
-                                        selectedCategories - category
+                        Spacer(modifier = Modifier.height(10.dp))
+                        SectionLabel(text = "Categories")
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            LogCategory.entries.forEach { category ->
+                                LogFilterChip(
+                                    label = category.name,
+                                    color = category.toColor(),
+                                    selected = category in selectedCategories,
+                                    onClick = {
+                                        selectedCategories =
+                                            if (category in selectedCategories) {
+                                                selectedCategories - category
+                                            } else {
+                                                selectedCategories + category
+                                            }
                                     }
-                                }
-                            )
+                                )
+                            }
                         }
+                        Spacer(modifier = Modifier.height(4.dp))
                     }
-                    Spacer(modifier = Modifier.height(12.dp))
-                    HorizontalDivider(color = Color(0xFF2E2E2E))
-                    Spacer(modifier = Modifier.height(12.dp))
                 }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                LogList(
+                    entries = filteredEntries,
+                    modifier = Modifier.fillMaxSize(),
+                    listState = listState,
+                )
             }
-
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                items(
-                    items = filteredEntries,
-                    key = { "${it.id}-${it.timestampMs}-${it.category}-${it.message}" }
-                ) { entry ->
-                    LogEntryRow(entry = entry)
-                }
-            }
-
         }
-    }
-}
-
-@Composable
-private fun FilterToggle(
-    label: String,
-    checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit
-) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.padding(end = 8.dp)
-    ) {
-        Checkbox(
-            checked = checked,
-            onCheckedChange = onCheckedChange
-        )
-        Text(
-            text = label,
-            color = Color.White,
-            fontSize = 13.sp
-        )
-    }
-}
-
-@Composable
-private fun LogEntryRow(
-    entry: VexaLogEntry
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(Color(0xFF181818), RoundedCornerShape(10.dp))
-            .padding(10.dp)
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                text = formatTimestamp(entry.timestampMs),
-                color = Color(0xFF9E9E9E),
-                fontSize = 12.sp,
-                fontFamily = FontFamily.Monospace
-            )
-            Spacer(modifier = Modifier.width(8.dp))
-            Text(
-                text = entry.level.name,
-                color = levelColor(entry.level),
-                fontSize = 12.sp,
-                fontFamily = FontFamily.Monospace
-            )
-        }
-        Spacer(modifier = Modifier.height(4.dp))
-        Text(
-            text = entry.message,
-            color = Color.White,
-            fontSize = 14.sp,
-            modifier = Modifier.fillMaxWidth()
-        )
-        if (entry.fields.isNotEmpty()) {
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = entry.fields.entries.joinToString("  ") { "${it.key}=${it.value}" },
-                color = Color(0xFFBDBDBD),
-                fontSize = 12.sp,
-                fontFamily = FontFamily.Monospace,
-                modifier = Modifier.fillMaxWidth()
-            )
-        }
-    }
-}
-
-private fun formatTimestamp(timestampMs: Long): String {
-    val formatter = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
-    return formatter.format(Date(timestampMs))
-}
-
-private fun levelColor(level: LogLevel): Color {
-    return when (level) {
-        LogLevel.DEBUG -> Color(0xFF9E9E9E)
-        LogLevel.INFO -> Color(0xFF64B5F6)
-        LogLevel.WARN -> Color(0xFFFFB74D)
-        LogLevel.ERROR -> Color(0xFFE57373)
-        LogLevel.FATAL -> Color(0xFFFF5252)
     }
 }
