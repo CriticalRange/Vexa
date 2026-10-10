@@ -275,7 +275,8 @@ tasks.registering(org.gradle.api.tasks.Exec::class) {
             "-DVEXA_ENABLE_RUNTIME_SHADER_TRANSLATOR=${enableRuntimeShaderTranslator.get()}",
             "-DVEXA_GUEST_CC=${cmakePath(File(ndkPrebuilt, "bin/clang.exe").absolutePath)}",
             "-DVEXA_GUEST_CXX=${cmakePath(File(ndkPrebuilt, "bin/clang++.exe").absolutePath)}",
-            "-DANDROID_NDK_SYSROOT=${cmakePath(File(ndkPrebuilt, "sysroot").absolutePath)}"
+            "-DANDROID_NDK_SYSROOT=${cmakePath(File(ndkPrebuilt, "sysroot").absolutePath)}",
+            "-DVEXA_OPENAL_PREFIX=${cmakePath(rootProject.file("third_party/openal-soft-android").absolutePath)}"
         )
     }
     commandLine(configureArgs)
@@ -312,6 +313,7 @@ val buildFEXCore = tasks.register<org.gradle.api.tasks.Exec>("buildFEXCore") {
             "--target", "EGL-host-64",
             "--target", "GLESv2-host-64",
             "--target", "vulkan-host-64",
+            "--target", "openal-host-64",
             "--target", "guest-libs"
         )
     }
@@ -362,6 +364,9 @@ android {
     packaging {
         jniLibs {
             keepDebugSymbols += "**/*.so"
+            /* wrap.sh is only honored for a debuggable APK, and the preload
+             * .so has to be a real file next to it. Debug builds extract libs. */
+            useLegacyPackaging = true
         }
     }
 

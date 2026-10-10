@@ -12,6 +12,8 @@
 #include <xcb/xcb.h>
 
 #include <ctype.h>
+#include <stddef.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -23,6 +25,8 @@ _Static_assert(sizeof(xcb_depth_t) == 8, "xcb_depth_t layout");
 _Static_assert(sizeof(xcb_visualtype_t) == 24, "xcb_visualtype_t layout");
 _Static_assert(sizeof(xcb_void_cookie_t) == sizeof(unsigned int), "cookie layout");
 _Static_assert(sizeof(xcb_intern_atom_cookie_t) == sizeof(unsigned int), "atom cookie");
+_Static_assert(sizeof(xcb_configure_notify_event_t) <= 32, "configure event fits a wire event");
+_Static_assert(offsetof(xcb_configure_notify_event_t, width) == 20, "configure width offset");
 
 #define VEXA_XID_BASE 0x00200000u
 #define VEXA_XID_MASK 0x001fffffu
@@ -59,7 +63,11 @@ struct xcb_connection_t {
   int event_count;
   struct vexa_pending_atom pending[VEXA_MAX_PENDING];
   int pending_count;
+  xcb_window_t last_window;
 };
+
+static int g_announced_width;
+static int g_announced_height;
 
 static struct vexa_atom g_atoms[VEXA_MAX_ATOMS];
 static int g_atom_count;
@@ -190,6 +198,52 @@ static xcb_void_cookie_t vexa_cookie(xcb_connection_t* connection) {
   return cookie;
 }
 
+static void vexa_enqueue(xcb_connection_t* connection, const xcb_generic_event_t* event);
+
+static void vexa_enqueue_configure(xcb_connection_t* connection, uint16_t width, uint16_t height) {
+  xcb_configure_notify_event_t configure;
+  xcb_generic_event_t event;
+  memset(&configure, 0, sizeof(configure));
+  configure.response_type = XCB_CONFIGURE_NOTIFY;
+  configure.event = connection->last_window;
+  configure.window = connection->last_window;
+  configure.width = width;
+  configure.height = height;
+  memset(&event, 0, sizeof(event));
+  memcpy(&event, &configure, sizeof(configure));
+  vexa_enqueue(connection, &event);
+}
+
+/* The host writes this after the Android window has a real size. vkgears
+   creates its swapchain at the size passed to xcb_create_window (300x300) and
+   only looks at ConfigureNotify once the frame loop is running. */
+static void vexa_note_window_size(xcb_connection_t* connection) {
+  FILE* file;
+  int width = 0;
+  int height = 0;
+  if (!connection || connection->error) {
+    return;
+  }
+  file = fopen("/tmp/vexa-window-size", "r");
+  if (!file) {
+    return;
+  }
+  if (fscanf(file, "%d %d", &width, &height) != 2) {
+    fclose(file);
+    return;
+  }
+  fclose(file);
+  if (width <= 1 || height <= 1 || width > 65535 || height > 65535) {
+    return;
+  }
+  if (width == g_announced_width && height == g_announced_height) {
+    return;
+  }
+  g_announced_width = width;
+  g_announced_height = height;
+  vexa_enqueue_configure(connection, (uint16_t)width, (uint16_t)height);
+}
+
 static void vexa_enqueue(xcb_connection_t* connection, const xcb_generic_event_t* event) {
   int slot;
   if (!connection || connection->error || connection->event_count >= VEXA_MAX_EVENTS) {
@@ -310,7 +364,6 @@ xcb_void_cookie_t xcb_create_window(xcb_connection_t* c, uint8_t depth, xcb_wind
                                     int16_t y, uint16_t width, uint16_t height, uint16_t border_width, uint16_t _class,
                                     xcb_visualid_t visual, uint32_t value_mask, const void* value_list) {
   (void)depth;
-  (void)wid;
   (void)parent;
   (void)x;
   (void)y;
@@ -321,6 +374,9 @@ xcb_void_cookie_t xcb_create_window(xcb_connection_t* c, uint8_t depth, xcb_wind
   (void)visual;
   (void)value_mask;
   (void)value_list;
+  if (c && !c->error) {
+    c->last_window = wid;
+  }
   return vexa_cookie(c);
 }
 
@@ -338,7 +394,9 @@ xcb_void_cookie_t xcb_configure_window(xcb_connection_t* c, xcb_window_t window,
 
 xcb_void_cookie_t xcb_map_window(xcb_connection_t* c, xcb_window_t window) {
   xcb_generic_event_t event;
-  (void)window;
+  if (c && !c->error) {
+    c->last_window = window;
+  }
   memset(&event, 0, sizeof(event));
   event.response_type = XCB_MAP_NOTIFY;
   vexa_enqueue(c, &event);
@@ -450,6 +508,7 @@ xcb_intern_atom_reply_t* xcb_intern_atom_reply(xcb_connection_t* c, xcb_intern_a
 
 xcb_generic_event_t* xcb_poll_for_event(xcb_connection_t* c) {
   xcb_generic_event_t* event;
+  vexa_note_window_size(c);
   if (!c || c->error || c->event_count == 0) {
     return NULL;
   }

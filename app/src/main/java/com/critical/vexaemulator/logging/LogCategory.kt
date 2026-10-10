@@ -7,5 +7,6 @@ enum class LogCategory {
     SURFACE,
     RUNTIME,
     CONFIG,
-    FAILURE
+    FAILURE,
+    ROOT
 }

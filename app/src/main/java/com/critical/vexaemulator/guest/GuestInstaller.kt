@@ -12,11 +12,25 @@ object GuestInstaller {
         ensureRuntime(context, root)
         val guestDir = File(root, "guests/${program.id}").apply { mkdirs() }
         val executable = File(guestDir, program.fileName)
-        context.assets.open(program.assetPath).use { input ->
-            executable.outputStream().use { output -> input.copyTo(output) }
+        if (program.preinstalled) {
+            if (!executable.isFile) {
+                throw IllegalStateException("Missing ${executable.absolutePath}")
+            }
+            guestDir.listFiles()?.forEach { file ->
+                file.setReadable(true, false)
+            }
+        } else {
+            context.assets.open(program.assetPath).use { input ->
+                executable.outputStream().use { output -> input.copyTo(output) }
+            }
         }
         executable.setReadable(true, false)
         executable.setExecutable(true, false)
+        val launchEnv = if (program.preinstalled && program.env.none { it.startsWith("HOME=") }) {
+            program.env + "HOME=${guestDir.absolutePath}"
+        } else {
+            program.env
+        }
 
         val rootfs = File(root, "rootfs").apply { mkdirs() }
         val thunkHost = File(root, "thunks/host").apply { mkdirs() }
@@ -35,7 +49,7 @@ object GuestInstaller {
             workingDirectory = guestDir.absolutePath,
             artifactDirectory = artifacts.absolutePath,
             launchArgs = program.args,
-            launchEnv = program.env,
+            launchEnv = launchEnv,
         )
     }
 

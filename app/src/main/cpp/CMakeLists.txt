@@ -52,7 +52,7 @@ set(FEX_BUILD "/home/critical/FEX/build-android-arm64-ninja" CACHE PATH "Path to
 if(NOT EXISTS "${FEX_ROOT}/FEXCore/include/FEXCore/Core/Context.h")
     message(FATAL_ERROR "Invalid FEX_ROOT: ${FEX_ROOT}")
 endif()
-if(NOT EXISTS "${FEX_BUILD}/FEXCore/Source/libFEXCore.so")
+if(NOT EXISTS "${FEX_BUILD}/FEXCore/Source/libFEXCore.a")
     message(FATAL_ERROR "Invalid FEX_BUILD: ${FEX_BUILD}")
 endif()
 
@@ -85,11 +85,9 @@ add_library(FEXCommonTools STATIC IMPORTED)
 set_target_properties(FEXCommonTools PROPERTIES IMPORTED_LOCATION "${FEX_BUILD}/Source/Tools/CommonTools/libCommonTools.a")
 add_library(LinuxEmulation STATIC IMPORTED)
 set_target_properties(LinuxEmulation PROPERTIES IMPORTED_LOCATION "${FEX_BUILD}/Source/Tools/LinuxEmulation/libLinuxEmulation.a")
-add_library(FEXCore SHARED IMPORTED)
-set_target_properties(FEXCore PROPERTIES IMPORTED_LOCATION "${FEX_BUILD}/FEXCore/Source/libFEXCore.so")
-add_library(FEXCoreBase SHARED IMPORTED)
+add_library(FEXCoreBase STATIC IMPORTED)
 set_target_properties(FEXCoreBase PROPERTIES IMPORTED_LOCATION "${FEX_BUILD}/FEXCore/Source/libFEXCore_Base.a")
-add_library(FEXCoreStatic SHARED IMPORTED)
+add_library(FEXCoreStatic STATIC IMPORTED)
 set_target_properties(FEXCoreStatic PROPERTIES IMPORTED_LOCATION "${FEX_BUILD}/FEXCore/Source/libFEXCore.a")
 
 target_compile_features(${CMAKE_PROJECT_NAME} PRIVATE cxx_std_20)
@@ -122,3 +120,8 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
           atomic
           m
     )
+
+# Preloaded by wrap.sh before ART creates its heap. Reserves the low VA
+# range Brotato's ET_EXEC image needs.
+add_library(vexareserve SHARED reserve/vexa_reserve_low.c)
+target_link_libraries(vexareserve log)

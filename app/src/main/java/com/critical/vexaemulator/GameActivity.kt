@@ -6,6 +6,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
+import android.content.pm.ActivityInfo
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -14,39 +15,49 @@ import android.os.Looper
 import android.os.Message
 import android.os.Messenger
 import android.os.Process
+import android.os.SystemClock
+import android.view.MotionEvent
 import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.WindowManager
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.Button
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -60,7 +71,15 @@ import com.critical.vexaemulator.runtime.LaunchRequest
 import com.critical.vexaemulator.runtime.RuntimeIpc
 import com.critical.vexaemulator.runtime.RuntimeService
 import com.critical.vexaemulator.ui.GameDebugPanel
+import com.critical.vexaemulator.ui.GameHudChip
 import com.critical.vexaemulator.ui.GameLoadingOverlay
+import com.critical.vexaemulator.ui.theme.Error as ThemeError
+import com.critical.vexaemulator.ui.theme.Ink
+import com.critical.vexaemulator.ui.theme.InkMuted
+import com.critical.vexaemulator.ui.theme.MonospaceTypography
+import com.critical.vexaemulator.ui.theme.SurfaceHi
+import com.critical.vexaemulator.ui.theme.VexaAccent
+import com.critical.vexaemulator.ui.theme.VexaBlack
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -81,6 +100,16 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
     private var runtimeBound = false
     private var pendingLaunchRequest: LaunchRequest? = null
     private var lastReportedRuntimeExitKey: String? = null
+    private var runtimeStarted = false
+    private var surfaceWidth = 0
+    private var surfaceHeight = 0
+    private var guestRootfs: String? = null
+    private var pointerDown = false
+    private var lastPointerX = -1
+    private var lastPointerY = -1
+    private var lastPointerAtMs = 0L
+    private var loggedTouch = false
+    private val pointerRecord = ByteBuffer.allocate(16).order(ByteOrder.LITTLE_ENDIAN)
 
     private fun closeGameActivity() {
         if (isExiting) return
@@ -136,6 +165,7 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
                             (message.contains("Runtime worker disconnected") ||
                                     message.contains("Runtime worker binding died"))
                         ) {
+                            showLoading = false
                             Handler(Looper.getMainLooper()).post {
                                 logLatestRuntimeExitInfo("worker_event_t0")
                             }
@@ -172,11 +202,115 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
 
 
     private fun tryLaunchWithSurface(request: LaunchRequest): Boolean {
+        if (runtimeStarted) return true
         val surface = latestSurface
         if (surface == null || !surface.isValid) return false
+        // Portrait sizes are the activity before sensorLandscape applies. Publishing
+        // one would lock the guest to the wrong resolution.
+        if (surfaceWidth <= 1 || surfaceHeight <= 1 || surfaceHeight > surfaceWidth) {
+            VexaLogger.log(
+                LogLevel.INFO,
+                LogCategory.SURFACE,
+                "Waiting for a landscape surface",
+                mapOf("width" to surfaceWidth.toString(), "height" to surfaceHeight.toString())
+            )
+            return false
+        }
+        guestRootfs = request.rootfsPath
+        if (!publishGuestWindowSize(request.rootfsPath, surfaceWidth, surfaceHeight)) return false
+        runtimeStarted = true
         sendSurfaceCreated(surface)
         sendStartRuntime(request)
+        // The full-screen overlay sits on top of the guest surface and costs composition time every frame.
+        showLoading = false
         return true
+    }
+
+    private fun publishGuestWindowSize(rootfs: String, width: Int, height: Int): Boolean {
+        return try {
+            val dir = java.io.File(rootfs, "tmp")
+            if (!dir.isDirectory && !dir.mkdirs()) return false
+            java.io.File(dir, "vexa-window-size").writeText("$width $height\n")
+            java.io.File(dir, "vexa-pointer").writeBytes(ByteArray(0))
+            java.io.File(dir, "vexa-present").writeText("0 0 $width $height 0 0 $width $height $width $height\n")
+            VexaLogger.log(
+                LogLevel.INFO,
+                LogCategory.SURFACE,
+                "Published guest window size",
+                mapOf("width" to width.toString(), "height" to height.toString())
+            )
+            true
+        } catch (error: Exception) {
+            VexaLogger.log(
+                LogLevel.ERROR,
+                LogCategory.FAILURE,
+                "Could not publish guest window size",
+                mapOf("error" to (error.message ?: error.javaClass.simpleName))
+            )
+            false
+        }
+    }
+
+    // 16-byte little-endian records: type, x, y, state. X11 types are
+    // ButtonPress=4, ButtonRelease=5, MotionNotify=6. Button1Mask is 256.
+    private fun writePointer(type: Int, x: Int, y: Int, state: Int) {
+        val root = guestRootfs ?: return
+        val file = java.io.File(root, "tmp/vexa-pointer")
+        try {
+            file.parentFile?.mkdirs()
+            if (file.length() > 1_000_000L) {
+                file.writeBytes(ByteArray(0))
+            }
+            pointerRecord.clear()
+            pointerRecord.putInt(type)
+            pointerRecord.putInt(x)
+            pointerRecord.putInt(y)
+            pointerRecord.putInt(state)
+            java.io.FileOutputStream(file, true).use { it.write(pointerRecord.array()) }
+            if (!loggedTouch) {
+                loggedTouch = true
+                VexaLogger.log(
+                    LogLevel.INFO,
+                    LogCategory.SURFACE,
+                    "Game touch",
+                    mapOf("type" to type.toString(), "x" to x.toString(), "y" to y.toString())
+                )
+            }
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun handleGameTouch(event: MotionEvent) {
+        val maxX = (surfaceWidth - 1).coerceAtLeast(0)
+        val maxY = (surfaceHeight - 1).coerceAtLeast(0)
+        val x = event.x.toInt().coerceIn(0, maxX)
+        val y = event.y.toInt().coerceIn(0, maxY)
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                pointerDown = true
+                writePointer(6, x, y, 0)
+                writePointer(4, x, y, 0)
+                lastPointerX = x
+                lastPointerY = y
+                lastPointerAtMs = SystemClock.uptimeMillis()
+            }
+            MotionEvent.ACTION_MOVE -> {
+                if (!pointerDown) return
+                val now = SystemClock.uptimeMillis()
+                val moved = kotlin.math.abs(x - lastPointerX) >= 4 || kotlin.math.abs(y - lastPointerY) >= 4
+                if (!moved && now - lastPointerAtMs < 8L) return
+                writePointer(6, x, y, 256)
+                lastPointerX = x
+                lastPointerY = y
+                lastPointerAtMs = now
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                if (!pointerDown) return
+                pointerDown = false
+                writePointer(6, x, y, 256)
+                writePointer(5, x, y, 256)
+            }
+        }
     }
 
     private fun sendRegister() {
@@ -478,14 +612,16 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
             )
         )
 
+        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        requestHighestRefreshRate()
         hideSystemBars()
         VexaLogger.log(
             level = LogLevel.INFO,
             category = LogCategory.ACTIVITY,
             message = "GameActivity window configured",
             fields = mapOf(
-                "orientation" to "unspecified",
+                "orientation" to "sensorLandscape",
                 "keepScreenOn" to "true"
             )
         )
@@ -493,7 +629,14 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
         gameSurfaceView = SurfaceView(this).also { sv ->
             sv.setZOrderOnTop(false)
             sv.holder.addCallback(this)
-            sv.holder.setFormat(android.graphics.PixelFormat.TRANSLUCENT)
+            // Opaque lets SurfaceFlinger scan the guest buffer out directly instead of blending it every frame.
+            sv.holder.setFormat(android.graphics.PixelFormat.OPAQUE)
+            sv.isClickable = true
+            sv.isFocusable = true
+            sv.setOnTouchListener { _, event ->
+                handleGameTouch(event)
+                true
+            }
         }
         VexaLogger.log(
             level = LogLevel.INFO,
@@ -519,6 +662,25 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
             level = LogLevel.INFO,
             category = LogCategory.SURFACE,
             message = "SurfaceView object attached"
+        )
+    }
+
+    // Guests present through eglSwapBuffers, so the display rate caps their frame rate.
+    private fun requestHighestRefreshRate() {
+        val display = display ?: return
+        val current = display.mode
+        val best = display.supportedModes
+            .filter { it.physicalWidth == current.physicalWidth && it.physicalHeight == current.physicalHeight }
+            .maxByOrNull { it.refreshRate } ?: return
+        window.attributes = window.attributes.apply {
+            preferredDisplayModeId = best.modeId
+            preferredRefreshRate = best.refreshRate
+        }
+        VexaLogger.log(
+            LogLevel.INFO,
+            LogCategory.ACTIVITY,
+            "Requested display mode",
+            mapOf("modeId" to best.modeId.toString(), "refreshRate" to best.refreshRate.toString())
         )
     }
 
@@ -564,6 +726,17 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
         )
         startGuestOutputTail(java.io.File(request.artifactDirectory))
         lifecycleScope.launch {
+            delay(12000)
+            if (showLoading) {
+                showLoading = false
+                VexaLogger.log(
+                    LogLevel.WARN,
+                    LogCategory.ACTIVITY,
+                    "Loading overlay dismissed by watchdog timeout"
+                )
+            }
+        }
+        lifecycleScope.launch {
             if (!runtimeBound || serviceMessenger == null) {
                 pendingLaunchRequest = request
                 VexaLogger.log(
@@ -594,6 +767,11 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
 
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
         latestSurface = holder.surface
+        surfaceWidth = width
+        surfaceHeight = height
+        if (width > height) {
+            requestHighestRefreshRate()
+        }
         sendSurfaceChanged(format, width, height)
 
         pendingLaunchRequest?.let { req ->
@@ -692,6 +870,9 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
             null
         } ?: return position
         val (read, text) = chunk
+        if (showLoading) {
+            withContext(Dispatchers.Main.immediate) { showLoading = false }
+        }
         text.lineSequence().map { it.trimEnd() }.filter { it.isNotEmpty() }.forEach { line ->
             VexaLogger.log(LogLevel.INFO, LogCategory.RUNTIME, "$label: $line")
         }
@@ -720,19 +901,65 @@ private fun GameScreen(
     onBack: () -> Unit,
 ) {
     val entries by LogStore.entries.collectAsState()
-    Box(modifier = Modifier.fillMaxSize()) {
-        AndroidView( // Shows actual game content
+    var outputOpen by remember { mutableStateOf(true) }
+    var bootDone by remember { mutableStateOf(false) }
+    var wakeAbove by remember { mutableIntStateOf(Int.MAX_VALUE) }
+    var timerArmed by remember { mutableStateOf(false) }
+    var generation by remember { mutableIntStateOf(0) }
+
+    LaunchedEffect(Unit) {
+        kotlinx.coroutines.delay(5_000)
+        bootDone = true
+        if (outputOpen) {
+            wakeAbove = entries.size
+            outputOpen = false
+        }
+    }
+    LaunchedEffect(entries.size, bootDone) {
+        if (!bootDone) return@LaunchedEffect
+        if (entries.size > wakeAbove) {
+            outputOpen = true
+            wakeAbove = Int.MAX_VALUE
+            timerArmed = true
+            generation++
+        } else if (outputOpen && timerArmed) {
+            generation++
+        }
+    }
+    LaunchedEffect(generation, timerArmed) {
+        if (!timerArmed || generation == 0) return@LaunchedEffect
+        kotlinx.coroutines.delay(5_000)
+        wakeAbove = entries.size
+        outputOpen = false
+        timerArmed = false
+    }
+
+    fun showOutput() {
+        outputOpen = true
+        wakeAbove = Int.MAX_VALUE
+        timerArmed = true
+        generation++
+    }
+
+    fun hideOutput() {
+        outputOpen = false
+        wakeAbove = entries.size
+        timerArmed = false
+    }
+
+    Box(modifier = Modifier.fillMaxSize().background(VexaBlack)) {
+        AndroidView(
             factory = { surfaceView },
             modifier = Modifier.fillMaxSize()
         )
 
         AnimatedVisibility(
-            // Fade in/out animations for showing/hiding overlay
             visible = showLoading,
-            enter = fadeIn(animationSpec = tween(durationMillis = 500)),
-            exit = fadeOut(animationSpec = tween(durationMillis = 500)),
+            enter = fadeIn(tween(450)),
+            exit = fadeOut(tween(450)),
         ) {
             GameLoadingOverlay(
+                message = "Starting the program",
                 isDebugMenuOpen = showDebugMenu,
                 onToggleDebugMenu = onToggleDebugMenu,
                 onHideFilters = onHideFilters
@@ -740,60 +967,97 @@ private fun GameScreen(
         }
 
         if (!showDebugMenu) {
-            Column(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .fillMaxWidth()
-                    .background(Color(0xEE111111))
-                    .padding(16.dp)
+            AnimatedVisibility(
+                visible = outputOpen,
+                enter = fadeIn(tween(180)) + expandVertically(),
+                exit = fadeOut(tween(180)) + shrinkVertically(),
+                modifier = Modifier.align(Alignment.BottomCenter),
             ) {
-                Text("Output", color = Color.White, fontSize = 16.sp)
-                LazyColumn(
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(220.dp)
-                        .padding(top = 8.dp)
+                        .background(SurfaceHi.copy(alpha = 0.94f))
+                        .padding(12.dp)
                 ) {
-                    if (entries.isEmpty()) {
-                        item {
-                            Text(
-                                "Waiting for the program.",
-                                color = Color(0xFF9A9A9A),
-                                fontFamily = FontFamily.Monospace,
-                                fontSize = 12.sp,
-                            )
-                        }
-                    } else {
-                        items(entries.takeLast(12), key = { it.id }) { entry ->
-                            Text(
-                                text = "${entry.level} ${entry.category}: ${entry.message}",
-                                color = if (entry.level == LogLevel.ERROR || entry.level == LogLevel.FATAL) {
-                                    Color(0xFFFF8A80)
-                                } else {
-                                    Color(0xFFD7D7D7)
-                                },
-                                fontFamily = FontFamily.Monospace,
-                                fontSize = 12.sp,
-                            )
+                    Text("Output", color = Ink, style = MonospaceTypography.titleSmall)
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(120.dp)
+                            .padding(top = 8.dp)
+                    ) {
+                        if (entries.isEmpty()) {
+                            item {
+                                Text(
+                                    "Waiting for the program.",
+                                    color = InkMuted,
+                                    style = MonospaceTypography.bodySmall,
+                                )
+                            }
+                        } else {
+                            items(entries.takeLast(12), key = { it.id }) { entry ->
+                                Text(
+                                    text = "${entry.level} ${entry.category}: ${entry.message}",
+                                    color = if (entry.level == LogLevel.ERROR || entry.level == LogLevel.FATAL) {
+                                        ThemeError
+                                    } else {
+                                        Ink
+                                    },
+                                    style = MonospaceTypography.bodySmall,
+                                )
+                            }
                         }
                     }
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        GameHudChip(text = "Hide", color = Ink, onClick = { hideOutput() })
+                        GameHudChip(text = "Debug", color = VexaAccent, onClick = onToggleDebugMenu)
+                        GameHudChip(text = "Back", color = Ink, onClick = onBack)
+                    }
                 }
-                Button(
-                    onClick = onBack,
+            }
+            AnimatedVisibility(
+                visible = !outputOpen,
+                enter = fadeIn(tween(180)),
+                exit = fadeOut(tween(120)),
+                modifier = Modifier.align(Alignment.BottomCenter),
+            ) {
+                Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(top = 8.dp)
+                        .height(44.dp)
+                        .background(SurfaceHi.copy(alpha = 0.88f))
+                        .padding(horizontal = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Text("Back")
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxSize()
+                            .clickable { showOutput() },
+                        contentAlignment = Alignment.CenterStart,
+                    ) {
+                        Text("Output", color = Ink, style = MonospaceTypography.labelLarge)
+                    }
+                    GameHudChip(text = "Debug", color = VexaAccent, onClick = onToggleDebugMenu)
                 }
             }
         }
 
-        if (showDebugMenu) {
+        AnimatedVisibility(
+            visible = showDebugMenu,
+            enter = fadeIn(tween(300)) + scaleIn(initialScale = 0.97f, animationSpec = tween(300)),
+            exit = fadeOut(tween(220)) + scaleOut(targetScale = 0.97f, animationSpec = tween(220)),
+        ) {
             GameDebugPanel(
+                hideFilters = hideFilters,
                 onClose = onToggleDebugMenu,
                 onHideFilters = onHideFilters,
-                hideFilters = hideFilters
             )
         }
     }

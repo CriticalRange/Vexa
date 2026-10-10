@@ -44,7 +44,19 @@ SDK = os.environ.get("ANDROID_SDK_ROOT") or os.environ.get("ANDROID_HOME") or os
 CLANG = os.environ.get("VEXA_GUEST_CC") or os.path.join(SDK, "ndk", "29.0.14206865", "toolchains", "llvm", "prebuilt", "windows-x86_64", "bin", "clang.exe")
 TAR = r"C:\Windows\System32\tar.exe" if os.name == "nt" else "tar"
 FAKE_X11 = os.path.normpath(os.path.join(ROOT, "..", "x11-fake", "libX11_fake.c"))
+FAKE_X11_DIR = os.path.normpath(os.path.join(ROOT, "..", "x11-fake"))
+X11_EXTRAS = (
+    ("libXcursor_fake.c", "libXcursor.so.1"),
+    ("libXinerama_fake.c", "libXinerama.so.1"),
+    ("libXext_fake.c", "libXext.so.6"),
+    ("libXrandr_fake.c", "libXrandr.so.2"),
+    ("libXrender_fake.c", "libXrender.so.1"),
+    ("libXi_fake.c", "libXi.so.6"),
+    ("libdbus_fake.c", "libdbus-1.so.3"),
+)
 FAKE_XCB = os.path.normpath(os.path.join(ROOT, "..", "x11-fake", "libxcb_fake.c"))
+FAKE_XKB = os.path.normpath(os.path.join(ROOT, "..", "x11-fake", "libxkbcommon_x11_fake.c"))
+FAKE_XKB_MAP = os.path.normpath(os.path.join(ROOT, "..", "x11-fake", "libxkbcommon_x11_fake.map")).replace("\\", "/")
 GLMARK = os.path.join(ROOT, "tree", "usr", "share", "glmark2")
 
 
@@ -95,9 +107,24 @@ def dep_names(depends):
     return names
 
 
+def open_data_tar(data):
+    # Ubuntu noble ships data.tar.zst; tarfile only reads zst on Python 3.14+.
+    if data.endswith(".zst"):
+        try:
+            import zstandard
+        except ImportError as error:
+            raise SystemExit("data.tar.zst needs the zstandard package") from error
+        raw = open(data, "rb")
+        reader = zstandard.ZstdDecompressor().stream_reader(raw)
+        archive = tarfile.open(fileobj=reader, mode="r|")
+        return archive, raw
+    return tarfile.open(data), None
+
+
 def extract_data(data, root, links):
     # Windows cannot create the package symlinks without extra privileges, so record them and copy later.
-    with tarfile.open(data) as archive:
+    archive, raw = open_data_tar(data)
+    with archive:
         for member in archive:
             if member.issym() or member.islnk():
                 target = member.linkname if member.issym() else "/" + member.linkname.lstrip("./")
@@ -107,6 +134,8 @@ def extract_data(data, root, links):
                 archive.extract(member, root, filter="fully_trusted")
             except OSError as error:
                 print(f"skip {member.name}: {error}", flush=True)
+    if raw is not None:
+        raw.close()
 
 
 def materialize_links(root, links):
@@ -224,6 +253,47 @@ def compile_fake_x11(root):
             raise SystemExit("fake libX11 is not an ELF")
 
 
+def compile_fake_x11_extras(root):
+    """Ship the X extension SONAMEs Godot links, without Ubuntu's libX11.
+
+    find_elf() keeps the largest match, so a real libXext.so.6.4.0 has to go
+    before the smaller shim is copied into the APK.
+    """
+    dest_dir = os.path.join(root, "usr", "lib", "x86_64-linux-gnu")
+    os.makedirs(dest_dir, exist_ok=True)
+    for source_name, soname in X11_EXTRAS:
+        stem = soname.split(".so", 1)[0]
+        doomed = []
+        for dirpath, _, files in os.walk(root):
+            for name in files:
+                if name == stem + ".so" or name.startswith(stem + ".so."):
+                    doomed.append(os.path.join(dirpath, name))
+        for path in doomed:
+            os.remove(path)
+        dest = os.path.join(dest_dir, soname)
+        cmd = [
+            CLANG,
+            "--target=x86_64-linux-gnu",
+            f"--sysroot={root}",
+            "-fPIC",
+            "-shared",
+            "-fno-stack-protector",
+            "-O2",
+            "-fuse-ld=lld",
+            f"-Wl,-soname,{soname}",
+            "-Wl,--no-undefined",
+            os.path.join(FAKE_X11_DIR, source_name),
+            "-o",
+            dest,
+            "-lc",
+        ]
+        print(f"compile {soname}", flush=True)
+        subprocess.check_call(cmd)
+        with open(dest, "rb") as handle:
+            if handle.read(4) != b"\x7fELF":
+                raise SystemExit(f"fake {soname} is not an ELF")
+
+
 def compile_fake_xcb(root):
     """Replace Ubuntu libxcb with the VEXA connection shim.
 
@@ -257,6 +327,45 @@ def compile_fake_xcb(root):
     with open(dest, "rb") as handle:
         if handle.read(4) != b"\x7fELF":
             raise SystemExit("fake libxcb is not an ELF")
+
+
+def compile_fake_xkbcommon_x11(root):
+    """Replace Ubuntu libxkbcommon-x11 with a keymap that does not query X.
+
+    find_elf() prefers the largest libxkbcommon-x11.so.0* file, so both the
+    real soname and the .0.0.0 sibling have to go. The shim links the real
+    libxkbcommon and must not link libxcb-xkb: that library calls
+    xcb_send_request on a connection this rootfs does not implement.
+    """
+    dest_dir = os.path.join(root, "usr", "lib", "x86_64-linux-gnu")
+    os.makedirs(dest_dir, exist_ok=True)
+    for name in os.listdir(dest_dir):
+        if name == "libxkbcommon-x11.so" or name.startswith("libxkbcommon-x11.so."):
+            os.remove(os.path.join(dest_dir, name))
+    dest = os.path.join(dest_dir, "libxkbcommon-x11.so.0")
+    cmd = [
+        CLANG,
+        "--target=x86_64-linux-gnu",
+        f"--sysroot={root}",
+        "-fPIC",
+        "-shared",
+        "-fno-stack-protector",
+        "-O2",
+        "-fuse-ld=lld",
+        "-Wl,-soname,libxkbcommon-x11.so.0",
+        "-Wl,--version-script," + FAKE_XKB_MAP,
+        "-Wl,--no-undefined",
+        FAKE_XKB,
+        "-o",
+        dest,
+        "-l:libxkbcommon.so.0",
+        "-lc",
+    ]
+    print("compile libxkbcommon-x11.so.0", flush=True)
+    subprocess.check_call(cmd)
+    with open(dest, "rb") as handle:
+        if handle.read(4) != b"\x7fELF":
+            raise SystemExit("fake libxkbcommon-x11 is not an ELF")
 
 
 def copy_glmark(root):
@@ -328,7 +437,9 @@ def main():
     ensure_loader(ROOTFS)
     copy_glmark(ROOTFS)
     compile_fake_x11(ROOTFS)
+    compile_fake_x11_extras(ROOTFS)
     compile_fake_xcb(ROOTFS)
+    compile_fake_xkbcommon_x11(ROOTFS)
     with open(MARKER, "w", encoding="utf-8") as handle:
         handle.write("vexa-graphics-1\n")
     print("ROOTFS_READY", flush=True)

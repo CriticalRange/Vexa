@@ -27,8 +27,8 @@ namespace Vexa::Runtime {
         }
         Init::TeardownThreadHandlers(g_state);
         Init::ShutdownAllocator();
+        // SetSyscallHandler(nullptr) dereferences the handler; the context is destroyed below anyway.
         if (g_state.ctx) {
-            g_state.ctx->SetSyscallHandler(nullptr);
             g_state.ctx->SetThunkHandler(nullptr);
         }
         g_state.syscallHandler.reset();

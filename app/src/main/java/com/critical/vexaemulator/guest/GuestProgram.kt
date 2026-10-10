@@ -8,6 +8,7 @@ data class GuestProgram(
     val fileName: String,
     val args: List<String> = emptyList(),
     val env: List<String> = emptyList(),
+    val preinstalled: Boolean = false,
 )
 
 object GuestCatalog {
@@ -74,6 +75,15 @@ object GuestCatalog {
         graphics("vulkaninfo", "vulkaninfo", "Prints Vulkan devices, then exits.", "vulkaninfo", "vulkaninfo"),
         graphics("vkcubepp", "vkcubepp", "Vulkan cube, C++ build.", "vkcubepp", "vkcubepp", listOf("--wsi", "xcb")),
         graphics("vkgears", "vkgears", "Vulkan gears. Needs Vulkan and its window-system libraries.", "vkgears.x86_64-linux-gnu", "vkgears"),
+        GuestProgram(
+            id = "brotato",
+            title = "Brotato",
+            summary = "Godot game. OpenGL on the Android surface. The Linux build is already in the app files directory.",
+            assetPath = "",
+            fileName = "Brotato.x86_64",
+            env = listOf("DISPLAY=:0", "SteamAppId=1942280"),
+            preinstalled = true,
+        ),
     )
 
     private fun graphics(
