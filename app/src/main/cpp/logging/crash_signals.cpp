@@ -21,6 +21,7 @@
 #include <FEXCore/Core/Context.h>
 #include <FEXCore/Utils/TypeDefines.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 #if __has_include(<android/set_abort_message.h>)
 
@@ -73,6 +74,19 @@ namespace {
     static bool g_capture_to_log = false;
     constexpr size_t kAltStackSize = 64 * 1024;
     constexpr uint32_t kMaxCrashRecords = 32;
+
+    // FEX recovers from several signals without crashing: it emulates unaligned
+    // atomics (ldapr/stlr) raised from JIT code, and its dispatcher stubs run a
+    // deliberate hlt/brk "fault dance" to return from guest signals. All of
+    // these reach this hook. Cache anonymous executable ranges (JIT code and
+    // dispatcher stubs) to tell these handled fixups apart from real faults.
+    struct JitRange {
+        uintptr_t lo;
+        uintptr_t hi;
+    };
+    static JitRange g_jit_ranges[32]{};
+    static size_t g_jit_range_count = 0;
+    static uint32_t g_fixup_count = 0;
 
     static inline void WriteFd(int fd, const char *s, size_t n) {
         if (fd < 0 || !s || n == 0) return;
@@ -216,6 +230,106 @@ namespace {
         }
     }
 
+    static void ScanJitRanges() {
+        g_jit_range_count = 0;
+        if (g_maps_fd >= 0) {
+            if (lseek(g_maps_fd, 0, SEEK_SET) == 0) {
+                static char buf[1024 * 1024];
+                size_t used = 0;
+                for (;;) {
+                    const ssize_t n = read(g_maps_fd, buf + used, sizeof(buf) - used - 1);
+                    if (n < 0) {
+                        if (errno == EINTR) continue;
+                        break;
+                    }
+                    if (n == 0) break;
+                    used += static_cast<size_t>(n);
+                    if (used >= sizeof(buf) - 1) break;
+                }
+                buf[used] = '\0';
+
+                char *line = buf;
+                while (*line) {
+                    char *eol = line;
+                    while (*eol && *eol != '\n') ++eol;
+                    char *end = nullptr;
+                    const uintptr_t lo = strtoull(line, &end, 16);
+                    uintptr_t hi = 0;
+                    char *perms = nullptr;
+                    if (end && *end == '-') {
+                        hi = strtoull(end + 1, &end, 16);
+                        perms = end;
+                        while (*perms == ' ') ++perms;
+                    }
+                    if (perms && perms[2] == 'x' &&
+                        g_jit_range_count < sizeof(g_jit_ranges) / sizeof(g_jit_ranges[0])) {
+                        // FEX JIT code buffers are anonymous executable pages,
+                        // shown empty or as [anon:*] tags in maps. File-backed
+                        // and other named mappings are host libraries.
+                        char *tail = eol;
+                        while (tail > perms && (tail[-1] == ' ' || tail[-1] == '\t')) --tail;
+                        char *name = tail;
+                        while (name > perms && name[-1] != ' ' && name[-1] != '\t') --name;
+                        const bool anon_tag = (tail - name) >= 6 && memcmp(name, "[anon:", 6) == 0;
+                        // Anonymous regions leave the inode field as the last
+                        // token (a digit); named files end in a path.
+                        const bool inode_tail = (name < tail) && (*name >= '0' && *name <= '9');
+                        if (anon_tag || inode_tail) {
+                            g_jit_ranges[g_jit_range_count].lo = lo;
+                            g_jit_ranges[g_jit_range_count].hi = hi;
+                            ++g_jit_range_count;
+                        }
+                    }
+                    line = *eol ? eol + 1 : eol;
+                }
+            }
+        }
+    }
+
+    static bool PcInJitRegion(uintptr_t pc) {
+        for (size_t i = 0; i < g_jit_range_count; ++i) {
+            if (pc >= g_jit_ranges[i].lo && pc < g_jit_ranges[i].hi) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    static bool IsHandledJitAtomicFixup(int sig, const siginfo_t *si, const ucontext_t *uc) {
+#if defined(__aarch64__)
+        if (!si || !uc) {
+            return false;
+        }
+        switch (sig) {
+        case SIGBUS:
+            if (si->si_code != BUS_ADRALN) {
+                return false;
+            }
+            break;
+        case SIGILL:
+        case SIGTRAP:
+            // FEX's dispatcher stubs end every handled guest signal with a
+            // deliberate hlt/brk "fault dance" back into JIT code, and guest
+            // SIGILL/SIGTRAP delivery uses the same trampolines — all handled.
+            break;
+        default:
+            return false;
+        }
+        const uintptr_t pc = static_cast<uintptr_t>(uc->uc_mcontext.pc);
+        if (PcInJitRegion(pc)) {
+            return true;
+        }
+        // JIT may have allocated a new code buffer since the last scan.
+        ScanJitRanges();
+        return PcInJitRegion(pc);
+#else
+        (void) sig;
+        (void) si;
+        (void) uc;
+        return false;
+#endif
+    }
+
     static inline void WriteKeyHex(const char *key, uint64_t v) {
         WriteLit("[VEXA][CRASH] ");
         WriteCStr(key);
@@ -249,16 +363,20 @@ namespace {
         return fault < 0x10000u || pc < 0x10000u;
     }
 
+    // Scudo keeps an MTE/TBI tag in the top byte. Kernel si_addr does not.
+    static inline uintptr_t UntagHostPtr(uintptr_t Ptr) {
+        return Ptr & 0x00FFFFFFFFFFFFFFULL;
+    }
+
     static bool IsInternalFexFault(FEXCore::Core::InternalThreadState *Thread,
                                    int sig,
                                    const siginfo_t *si) {
         if (sig != SIGSEGV || !si || !Thread || si->si_code != SEGV_ACCERR) return false;
-        const auto addr = reinterpret_cast<uintptr_t>(si->si_addr);
-        const auto fault = reinterpret_cast<uintptr_t>(&Thread->InterruptFaultPage);
+        const auto addr = UntagHostPtr(reinterpret_cast<uintptr_t>(si->si_addr));
+        const auto fault = UntagHostPtr(reinterpret_cast<uintptr_t>(&Thread->InterruptFaultPage));
         if (addr >= fault && addr < fault + FEXCore::Utils::FEX_PAGE_SIZE) return true;
-        if (Thread->JITGuardPage != 0 &&
-            addr >= Thread->JITGuardPage &&
-            addr < Thread->JITGuardPage + FEXCore::Utils::FEX_PAGE_SIZE) {
+        const auto guard = UntagHostPtr(Thread->JITGuardPage);
+        if (guard != 0 && addr >= guard && addr < guard + FEXCore::Utils::FEX_PAGE_SIZE) {
             return true;
         }
         return false;
@@ -490,6 +608,20 @@ namespace {
     static void EarlyThunkHook(int sig, void *info, void *uctx) {
         const auto *si = static_cast<const siginfo_t *>(info);
         const auto *uc = static_cast<const ucontext_t *>(uctx);
+        if (IsHandledJitAtomicFixup(sig, si, uc)) {
+            const uint32_t count = __atomic_add_fetch(&g_fixup_count, 1u, __ATOMIC_RELAXED);
+            if ((count & 0xFF) == 1) {
+                BeginCapture(true);
+                WriteLit("[VEXA][CRASH] handled_fixup count=");
+                WriteU32(count);
+                WriteLit(" signal=");
+                WriteU32(static_cast<unsigned>(sig));
+                WriteLit("\n");
+                WriteSigName(sig);
+                EndCapture();
+            }
+            return;
+        }
         if (!ShouldCaptureEarly(sig, si, uc)) return;
         if (__atomic_exchange_n(&g_early_busy, 1, __ATOMIC_ACQ_REL) != 0) return;
 
@@ -513,6 +645,20 @@ namespace {
         if (IsInternalFexFault(Thread, Signal, si)) {
             return false;
         }
+#if defined(__aarch64__)
+        // Deliberate FEX faults: the InterruptFaultPage write and the JIT guard
+        // page are FEX's own signaling mechanism. They must reach FEX's signal
+        // handlers instead of being dumped and killed as host-code faults.
+        if (Thread && si && Signal == SIGSEGV) {
+            const uintptr_t faultAddr = reinterpret_cast<uintptr_t>(si->si_addr) & 0x00FF'FFFF'FFFF'FFFFULL;
+            const uintptr_t interruptPage = reinterpret_cast<uintptr_t>(&Thread->InterruptFaultPage) & 0x00FF'FFFF'FFFF'FFFFULL;
+            const uintptr_t jitGuard = static_cast<uintptr_t>(Thread->JITGuardPage) & 0x00FF'FFFF'FFFF'FFFFULL;
+            if (faultAddr == interruptPage ||
+                (jitGuard != 0 && faultAddr >= jitGuard && faultAddr < jitGuard + 0x1000)) {
+                return false;
+            }
+        }
+#endif
         if (__atomic_exchange_n(&g_in_handler, 1, __ATOMIC_ACQ_REL) != 0) {
             // Re-entry. Let FEX continue.
             return false;
@@ -520,6 +666,18 @@ namespace {
 
         const uint32_t seq = __atomic_add_fetch(&g_fex_crash_seq, 1u, __ATOMIC_RELAXED);
         const auto *uc = reinterpret_cast<const ucontext_t *>(uctx);
+
+        // Faults raised while executing host code (syscall handlers, thunk
+        // code, FEX internals) can never be fixed up by the guest handler.
+        // Letting FEX deliver them to the guest just refaults ~30x until the
+        // deferred-signal vector overflows. Dump once and die instead.
+        bool hostCodeFault = false;
+#if defined(__aarch64__)
+        if (uc && Thread && Thread->CTX) {
+            const uintptr_t pc = static_cast<uintptr_t>(uc->uc_mcontext.pc);
+            hostCodeFault = !Thread->CTX->IsAddressInCodeBuffer(Thread, pc);
+        }
+#endif
 
         BeginCapture(seq <= kMaxCrashRecords);
         WriteLit("[VEXA][CRASH] === crash dump begin ===\n");
@@ -549,11 +707,17 @@ namespace {
         WriteProbableReason(Signal, si, uc);
         DumpHostState(uc);
         DumpGuestStateRaw(Thread);
+        if (hostCodeFault) {
+            WriteLit("[VEXA][CRASH] fatal=host-code-fault\n");
+        }
         WriteLit("[VEXA][CRASH] === crash dump end ===\n");
         EndCapture();
         CopyMaps();
 
         __atomic_store_n(&g_in_handler, 0, __ATOMIC_RELEASE);
+        if (hostCodeFault) {
+            _exit(128 + Signal);
+        }
         return false; // let FEX Continue handling
     }
 

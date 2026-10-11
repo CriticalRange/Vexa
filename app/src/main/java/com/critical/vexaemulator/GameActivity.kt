@@ -16,6 +16,7 @@ import android.os.Message
 import android.os.Messenger
 import android.os.Process
 import android.os.SystemClock
+import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.Surface
 import android.view.SurfaceHolder
@@ -62,6 +63,10 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.lifecycleScope
+import com.critical.vexaemulator.input.GuestKeyboard
+import com.critical.vexaemulator.input.GuestPadOverlay
+import com.critical.vexaemulator.input.GuestPadState
+import com.critical.vexaemulator.input.PadSink
 import com.critical.vexaemulator.logging.LogCategory
 import com.critical.vexaemulator.logging.LogLevel
 import com.critical.vexaemulator.logging.LogStore
@@ -69,6 +74,7 @@ import com.critical.vexaemulator.logging.VexaLogger
 import com.critical.vexaemulator.runtime.LaunchRequest
 import com.critical.vexaemulator.runtime.RuntimeIpc
 import com.critical.vexaemulator.runtime.RuntimeService
+import com.critical.vexaemulator.steam.SteamLink
 import com.critical.vexaemulator.guest.GuestProgram
 import com.critical.vexaemulator.ui.EdgeHandle
 import com.critical.vexaemulator.ui.GameDebugPanel
@@ -100,6 +106,8 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
     private var serviceMessenger: Messenger? = null
     private var runtimeBound = false
     private var pendingLaunchRequest: LaunchRequest? = null
+    private var guestLaunchStarted = false
+    private val pad = GuestPadState()
     private var lastReportedRuntimeExitKey: String? = null
     private var runtimeStarted = false
     private var surfaceWidth = 0
@@ -302,6 +310,7 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
     }
 
     private fun handleGameTouch(event: MotionEvent) {
+        if (pad.overlay) return
         val maxX = (surfaceWidth - 1).coerceAtLeast(0)
         val maxY = (surfaceHeight - 1).coerceAtLeast(0)
         val x = event.x.toInt().coerceIn(0, maxX)
@@ -635,6 +644,17 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
             )
         )
 
+        pad.onFaceKey = { down, keysym -> writePointer(if (down) 2 else 3, keysym, 0, 0) }
+        lifecycleScope.launch {
+            val sink = object : PadSink {
+                override fun pointer(type: Int, x: Int, y: Int, state: Int) = writePointer(type, x, y, state)
+                override fun key(down: Boolean, keysym: Int) = writePointer(if (down) 2 else 3, keysym, 0, 0)
+            }
+            while (true) {
+                pad.pump(surfaceWidth, surfaceHeight, sink)
+                delay(32)
+            }
+        }
         requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         requestHighestRefreshRate()
@@ -688,6 +708,7 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
                     hideFilters = hideFilters,
                     onHideFilters = { hideFilters = !hideFilters },
                     onBack = { closeGameActivity() },
+                    pad = pad,
                 )
             }
         }
@@ -696,6 +717,35 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
             category = LogCategory.SURFACE,
             message = "SurfaceView object attached"
         )
+    }
+
+    override fun dispatchGenericMotionEvent(event: MotionEvent): Boolean {
+        if (pad.onMotion(event)) return true
+        return super.dispatchGenericMotionEvent(event)
+    }
+
+    private val padSink = object : PadSink {
+        override fun pointer(type: Int, x: Int, y: Int, state: Int) = writePointer(type, x, y, state)
+        override fun key(down: Boolean, keysym: Int) = writePointer(if (down) 2 else 3, keysym, 0, 0)
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (pad.onKey(event, padSink)) {
+            return true
+        }
+        if (forwardKeyboardEvent(event)) {
+            return true
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
+    private fun forwardKeyboardEvent(event: KeyEvent): Boolean {
+        if (!GuestKeyboard.isKeyboardSource(event)) return false
+        if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount > 0) return true
+        val keysym = GuestKeyboard.keysym(event.keyCode)
+        if (keysym == 0) return false
+        padSink.key(event.action == KeyEvent.ACTION_DOWN, keysym)
+        return true
     }
 
     // Guests present through eglSwapBuffers, so the display rate caps their frame rate.
@@ -746,31 +796,47 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
             )
             return
         }
-        val request = com.critical.vexaemulator.guest.GuestInstaller.install(this, program)
-        bootInstalled = true
-        VexaLogger.log(
-            level = LogLevel.INFO,
-            category = LogCategory.BOOT,
-            message = "Launching ${program.title}",
-            fields = mapOf(
-                "id" to program.id,
-                "executable" to request.executablePath,
-                "args" to request.launchArgs.joinToString(" "),
-            )
-        )
-        startGuestOutputTail(java.io.File(request.artifactDirectory))
+        if (guestLaunchStarted) return
+        guestLaunchStarted = true
         lifecycleScope.launch {
-            delay(12000)
-            if (showLoading) {
-                showLoading = false
-                VexaLogger.log(
-                    LogLevel.WARN,
-                    LogCategory.ACTIVITY,
-                    "Loading overlay dismissed by watchdog timeout"
-                )
+            val steamAppId = program.env.firstOrNull { it.startsWith("SteamAppId=") }
+                ?.substringAfter("=")
+                .orEmpty()
+            if (steamAppId.isNotEmpty()) {
+                VexaLogger.log(LogLevel.INFO, LogCategory.BOOT, "Reading Steam session")
+                val session = withContext(Dispatchers.IO) { SteamLink.ensureOnline(this@GameActivity) }
+                if (session == null) {
+                    VexaLogger.log(
+                        LogLevel.WARN,
+                        LogCategory.BOOT,
+                        "Steam session file is missing or the account did not connect",
+                    )
+                }
             }
-        }
-        lifecycleScope.launch {
+            val request = com.critical.vexaemulator.guest.GuestInstaller.install(this@GameActivity, program)
+            bootInstalled = true
+            VexaLogger.log(
+                level = LogLevel.INFO,
+                category = LogCategory.BOOT,
+                message = "Launching ${program.title}",
+                fields = mapOf(
+                    "id" to program.id,
+                    "executable" to request.executablePath,
+                    "args" to request.launchArgs.joinToString(" "),
+                )
+            )
+            startGuestOutputTail(java.io.File(request.artifactDirectory))
+            launch {
+                delay(12000)
+                if (showLoading) {
+                    showLoading = false
+                    VexaLogger.log(
+                        LogLevel.WARN,
+                        LogCategory.ACTIVITY,
+                        "Loading overlay dismissed by watchdog timeout"
+                    )
+                }
+            }
             if (!runtimeBound || serviceMessenger == null) {
                 pendingLaunchRequest = request
                 VexaLogger.log(
@@ -795,8 +861,6 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
                 message = "Game Surface successfully created"
             )
         }
-
-
     }
 
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
@@ -939,6 +1003,7 @@ private fun GameScreen(
     hideFilters: Boolean,
     onHideFilters: () -> Unit,
     onBack: () -> Unit,
+    pad: GuestPadState,
 ) {
     val c = VexaTheme.colors
     val entries by LogStore.entries.collectAsState()
@@ -968,6 +1033,9 @@ private fun GameScreen(
             factory = { surfaceView },
             modifier = Modifier.fillMaxSize()
         )
+        if (!showLoading) {
+            GuestPadOverlay(pad)
+        }
 
         if (!showLoading && !showDebugMenu) {
             val open = drawer.value
@@ -1003,6 +1071,8 @@ private fun GameScreen(
                         onOpenDebug = { openDebug(emptySet()) },
                         onOpenLogs = openDebug,
                         onExit = onBack,
+                        padOn = pad.overlay,
+                        onTogglePad = { pad.overlay = !pad.overlay },
                     )
                 }
             }

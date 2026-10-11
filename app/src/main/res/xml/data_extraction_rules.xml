@@ -5,11 +5,11 @@
 -->
 <data-extraction-rules>
     <cloud-backup>
-        <!-- TODO: Use <include> and <exclude> to control what is backed up.
-        <include .../>
-        <exclude .../>
-        -->
+        <exclude domain="file" path="steam"/>
     </cloud-backup>
+    <device-transfer>
+        <exclude domain="file" path="steam"/>
+    </device-transfer>
     <!--
     <device-transfer>
         <include .../>

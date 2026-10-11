@@ -125,3 +125,8 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
 # range Brotato's ET_EXEC image needs.
 add_library(vexareserve SHARED reserve/vexa_reserve_low.c)
 target_link_libraries(vexareserve log)
+
+# Loads a user-supplied Steamworks androidarm64 library. The .so itself is not
+# in the repo; this target only calls the documented SteamAPI exports.
+add_library(vexasteam SHARED steam/steamworks_host.cpp)
+target_link_libraries(vexasteam log dl)

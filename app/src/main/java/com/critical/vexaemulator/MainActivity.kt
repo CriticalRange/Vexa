@@ -90,6 +90,7 @@ import com.critical.vexaemulator.ui.MetadataRow
 import com.critical.vexaemulator.ui.PanelSurface
 import com.critical.vexaemulator.ui.SectionCard
 import com.critical.vexaemulator.ui.SectionLabel
+import com.critical.vexaemulator.ui.SteamCard
 import com.critical.vexaemulator.ui.StatusDot
 import com.critical.vexaemulator.ui.SwitchRow
 import com.critical.vexaemulator.ui.ThemeRevealHost
@@ -248,6 +249,8 @@ private fun LauncherScreen(
             )
             Spacer(Modifier.height(14.dp))
             ProgramDetailCard(program = selected, modifier = Modifier.staggerIn(3))
+            Spacer(Modifier.height(22.dp))
+            SteamCard(modifier = Modifier.fillMaxWidth().staggerIn(4))
             Spacer(Modifier.height(16.dp))
             VexaButton(
                 text = if (selected.preinstalled) "Launch game" else "Run program",

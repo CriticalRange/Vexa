@@ -2,6 +2,7 @@
    Field stores use the Ubuntu Xlibint.h layout this file is compiled against. */
 #define _GNU_SOURCE
 #include <X11/X.h>
+#include <X11/Xatom.h>
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #include <X11/Xlibint.h>
@@ -34,7 +35,60 @@ static int g_pointer_logs;
 static off_t g_pointer_off;
 static int g_map[10];
 static int g_map_on;
+static KeySym g_sym_by_code[256];
+static unsigned char g_key_down[32];
+static unsigned int g_mod_state;
+static int g_keys_ready;
 static volatile int g_lock;
+
+/* X keycodes match the evdev map in libxkbcommon_x11_fake.c. SDL and Godot
+   look these up by keycode, so ASCII (W = 119) is not a valid W. */
+static const struct {
+  unsigned int code;
+  KeySym sym;
+} k_key_table[] = {
+    {9, 0xff1b},   /* Escape */
+    {22, 0xff08},  /* BackSpace */
+    {23, 0xff09},  /* Tab */
+    {24, 0x71},    /* q */
+    {25, 0x77},    /* w */
+    {26, 0x65},    /* e */
+    {27, 0x72},    /* r */
+    {28, 0x74},    /* t */
+    {29, 0x79},    /* y */
+    {30, 0x75},    /* u */
+    {31, 0x69},    /* i */
+    {32, 0x6f},    /* o */
+    {33, 0x70},    /* p */
+    {36, 0xff0d},  /* Return */
+    {37, 0xffe3},  /* Control_L */
+    {38, 0x61},    /* a */
+    {39, 0x73},    /* s */
+    {40, 0x64},    /* d */
+    {41, 0x66},    /* f */
+    {42, 0x67},    /* g */
+    {43, 0x68},    /* h */
+    {44, 0x6a},    /* j */
+    {45, 0x6b},    /* k */
+    {46, 0x6c},    /* l */
+    {50, 0xffe1},  /* Shift_L */
+    {52, 0x7a},    /* z */
+    {53, 0x78},    /* x */
+    {54, 0x63},    /* c */
+    {55, 0x76},    /* v */
+    {56, 0x62},    /* b */
+    {57, 0x6e},    /* n */
+    {58, 0x6d},    /* m */
+    {62, 0xffe2},  /* Shift_R */
+    {64, 0xffe9},  /* Alt_L */
+    {65, 0x20},    /* space */
+    {105, 0xffe4}, /* Control_R */
+    {108, 0xffea}, /* Alt_R */
+    {111, 0xff52}, /* Up */
+    {113, 0xff51}, /* Left */
+    {114, 0xff53}, /* Right */
+    {116, 0xff54}, /* Down */
+};
 
 #define VEXA_Q 64
 static XEvent g_q[VEXA_Q];
@@ -143,6 +197,10 @@ static int vexa_event_matches(const XEvent* event, long mask, Window window, int
         return 1;
       }
       return 0;
+    case KeyPress:
+      return (mask & KeyPressMask) != 0;
+    case KeyRelease:
+      return (mask & KeyReleaseMask) != 0;
     case ConfigureNotify:
       return (mask & StructureNotifyMask) != 0;
     case Expose:
@@ -230,6 +288,101 @@ static void vexa_enqueue_configure(Display* dpy) {
   vexa_q_push(&event);
 }
 
+/* Tracked client-window geometry and WM-style acknowledgements. A real server
+   answers every configure/map/property request with the matching event; SDL's
+   window bookkeeping (and therefore Unity's Screen.resolutions /
+   currentResolution) only advances when those events arrive. */
+static int g_win_x;
+static int g_win_y;
+static int g_win_w;
+static int g_win_h;
+static int g_win_valid;
+
+static void vexa_push_configure(Display* dpy, int x, int y, int w, int h) {
+  XEvent event;
+  /* SDL only emits SDL_WINDOWEVENT_MOVED (which is what Unity listens to for
+     refreshing Screen.resolutions / the native desktop resolution cache) when
+     the reported position actually changes from its zero-initialized tracking
+     state. A (0,0) report is a no-op for it, so nudge the position by one
+     pixel — the window stays inside the display bounds either way. */
+  if (x == 0 && y == 0) {
+    y = 1;
+  }
+  if (w < 1) {
+    w = g_screen.width;
+  }
+  if (h < 1) {
+    h = g_screen.height;
+  }
+  memset(&event, 0, sizeof(event));
+  event.type = ConfigureNotify;
+  event.xconfigure.display = dpy;
+  event.xconfigure.window = 1;
+  event.xconfigure.event = 1;
+  event.xconfigure.x = x;
+  event.xconfigure.y = y;
+  event.xconfigure.width = w;
+  event.xconfigure.height = h;
+  event.xconfigure.border_width = 0;
+  event.xconfigure.above = None;
+  event.xconfigure.override_redirect = False;
+  vexa_q_push(&event);
+}
+
+static void vexa_push_map(Display* dpy, int mapped) {
+  XEvent event;
+  memset(&event, 0, sizeof(event));
+  event.type = mapped ? MapNotify : UnmapNotify;
+  if (mapped) {
+    event.xmap.display = dpy;
+    event.xmap.window = 1;
+    event.xmap.event = 1;
+    event.xmap.override_redirect = False;
+  } else {
+    event.xunmap.display = dpy;
+    event.xunmap.window = 1;
+    event.xunmap.event = 1;
+  }
+  vexa_q_push(&event);
+}
+
+static void vexa_push_property(Display* dpy, Atom atom, int state) {
+  XEvent event;
+  memset(&event, 0, sizeof(event));
+  event.type = PropertyNotify;
+  event.xproperty.display = dpy;
+  event.xproperty.window = 1;
+  event.xproperty.atom = atom;
+  event.xproperty.state = state;
+  event.xproperty.time = 1;
+  vexa_q_push(&event);
+}
+
+static void vexa_configure(Display* dpy, int x, int y, int w, int h) {
+  if (x < -100000 || x > 100000) {
+    x = 0;
+  }
+  if (y < -100000 || y > 100000) {
+    y = 0;
+  }
+  /* Never propagate a 0-size request: a 0x0 ConfigureNotify makes SDL report a
+     0x0 window and Unity then skips all draw submission. Clamp to the real
+     screen geometry instead. */
+  if (w < 1) {
+    w = g_screen.width;
+  }
+  if (h < 1) {
+    h = g_screen.height;
+  }
+  g_win_x = x;
+  g_win_y = y;
+  g_win_w = w;
+  g_win_h = h;
+  g_win_valid = 1;
+  fprintf(stderr, "[VEXA][X11] win_configure %d,%d %dx%d\n", x, y, w, h);
+  vexa_push_configure(dpy, x, y, w, h);
+}
+
 static void vexa_read_present(void) {
   char buf[160];
   int fd;
@@ -312,6 +465,106 @@ static void vexa_map_pointer(int* x, int* y) {
   *y = wy;
 }
 
+static void vexa_init_keys(void) {
+  unsigned int i;
+  if (g_keys_ready) {
+    return;
+  }
+  for (i = 0; i < sizeof(k_key_table) / sizeof(k_key_table[0]); i++) {
+    unsigned int code = k_key_table[i].code;
+    if (code < 256) {
+      g_sym_by_code[code] = k_key_table[i].sym;
+    }
+  }
+  g_keys_ready = 1;
+}
+
+static unsigned int vexa_code_for_sym(KeySym sym) {
+  unsigned int i;
+  vexa_init_keys();
+  for (i = 0; i < sizeof(k_key_table) / sizeof(k_key_table[0]); i++) {
+    if (k_key_table[i].sym == sym) {
+      return k_key_table[i].code;
+    }
+  }
+  return 0;
+}
+
+static KeySym vexa_sym_for_code(unsigned int code, int level) {
+  KeySym sym;
+  vexa_init_keys();
+  if (code >= 256) {
+    return NoSymbol;
+  }
+  sym = g_sym_by_code[code];
+  if (level == 1 && sym >= (KeySym)'a' && sym <= (KeySym)'z') {
+    return sym - ('a' - 'A');
+  }
+  if (level != 0) {
+    return NoSymbol;
+  }
+  return sym;
+}
+
+static unsigned int vexa_mod_bit(unsigned int code) {
+  if (code == 50 || code == 62) {
+    return ShiftMask;
+  }
+  if (code == 37 || code == 105) {
+    return ControlMask;
+  }
+  if (code == 64 || code == 108) {
+    return Mod1Mask;
+  }
+  return 0;
+}
+
+static void vexa_note_key(unsigned int code, int down) {
+  unsigned int bit;
+  if (code == 0 || code >= 256) {
+    return;
+  }
+  bit = vexa_mod_bit(code);
+  if (down) {
+    g_key_down[code >> 3] |= (unsigned char)(1u << (code & 7));
+    g_mod_state |= bit;
+  } else {
+    g_key_down[code >> 3] &= (unsigned char)~(1u << (code & 7));
+    g_mod_state &= ~bit;
+  }
+}
+
+static void vexa_fill_key(XEvent* event, Display* dpy, int type, KeySym sym, unsigned int state) {
+  memset(event, 0, sizeof(*event));
+  event->type = type;
+  event->xkey.display = dpy;
+  event->xkey.window = 1;
+  event->xkey.root = 1;
+  event->xkey.state = state | g_mod_state;
+  event->xkey.keycode = vexa_code_for_sym(sym);
+  event->xkey.same_screen = True;
+}
+
+static int vexa_lookup_key(XKeyEvent* event, char* buffer, int bytes, KeySym* keysym) {
+  KeySym sym = event ? vexa_sym_for_code(event->keycode, 0) : NoSymbol;
+  if (keysym) {
+    *keysym = sym;
+  }
+  if (buffer && bytes > 0 && sym >= 32 && sym < 127) {
+    buffer[0] = (char)sym;
+    return 1;
+  }
+  return 0;
+}
+
+static unsigned int vexa_pointer_button(int state) {
+  unsigned int button = ((unsigned int)state >> 24) & 0xffu;
+  if (button < 1 || button > 5) {
+    return 1;
+  }
+  return button;
+}
+
 static void vexa_fill_pointer(XEvent* event, Display* dpy, int type, int x, int y, int state) {
   memset(event, 0, sizeof(*event));
   event->type = type;
@@ -323,12 +576,12 @@ static void vexa_fill_pointer(XEvent* event, Display* dpy, int type, int x, int 
   event->xbutton.x_root = x;
   event->xbutton.y_root = y;
   if (type == MotionNotify) {
-    event->xmotion.state = (unsigned int)state;
+    event->xmotion.state = (unsigned int)state & 0x00ffffffu;
     event->xmotion.is_hint = NotifyNormal;
     event->xmotion.same_screen = True;
   } else {
-    event->xbutton.state = (unsigned int)state;
-    event->xbutton.button = 1;
+    event->xbutton.state = (unsigned int)state & 0x00ffffffu;
+    event->xbutton.button = vexa_pointer_button(state);
     event->xbutton.same_screen = True;
   }
 }
@@ -367,6 +620,18 @@ static void vexa_poll_pointer(Display* dpy) {
     memcpy(&y, buf + 8, 4);
     memcpy(&state, buf + 12, 4);
     g_pointer_off += (off_t)sizeof(buf);
+    if (type == KeyPress || type == KeyRelease) {
+      vexa_fill_key(&event, dpy, (int)type, (KeySym)x, (unsigned int)state);
+      vexa_note_key(event.xkey.keycode, type == KeyPress);
+      if (g_pointer_logs < 8) {
+        g_pointer_logs++;
+        fprintf(stderr, "[VEXA][X11] key %s sym=0x%x code=%u\n", type == KeyPress ? "down" : "up", (unsigned)x,
+                event.xkey.keycode);
+      }
+      vexa_q_push_locked(&event);
+      got++;
+      continue;
+    }
     if (type != ButtonPress && type != ButtonRelease && type != MotionNotify) {
       continue;
     }
@@ -483,6 +748,11 @@ Window XCreateWindow(Display* dpy, Window parent, int x, int y, unsigned int wid
     g_screen.width = (int)width;
     g_screen.height = (int)height;
   }
+  g_win_x = (x < -100000 || x > 100000) ? 0 : x;
+  g_win_y = (y < -100000 || y > 100000) ? 0 : y;
+  g_win_w = (int)width;
+  g_win_h = (int)height;
+  g_win_valid = 1;
   vexa_enqueue_configure(dpy);
   return 1;
 }
@@ -503,8 +773,11 @@ Colormap XCreateColormap(Display* dpy, Window window, Visual* visual, int alloc)
 }
 
 int XMapWindow(Display* dpy, Window window) {
-  (void)dpy;
   (void)window;
+  fprintf(stderr, "[VEXA][X11] map_window %lu\n", (unsigned long)window);
+  vexa_push_map(dpy, 1);
+  vexa_push_configure(dpy, g_win_x, g_win_y, g_win_w > 1 ? g_win_w : g_screen.width,
+                      g_win_h > 1 ? g_win_h : g_screen.height);
   return 1;
 }
 
@@ -512,9 +785,67 @@ int XMapRaised(Display* dpy, Window window) {
   return XMapWindow(dpy, window);
 }
 
-int XUnmapWindow(Display* dpy, Window window) {
+int XRaiseWindow(Display* dpy, Window window) {
   (void)dpy;
   (void)window;
+  return 1;
+}
+
+int XLowerWindow(Display* dpy, Window window) {
+  (void)dpy;
+  (void)window;
+  return 1;
+}
+
+int XRestackWindows(Display* dpy, Window* windows, int nwindows) {
+  (void)dpy;
+  (void)windows;
+  (void)nwindows;
+  return 1;
+}
+
+int XCirculateSubwindows(Display* dpy, Window window, int direction) {
+  (void)dpy;
+  (void)window;
+  (void)direction;
+  return 1;
+}
+
+Status XQueryTree(Display* dpy, Window window, Window* root, Window* parent, Window** children, unsigned int* nchildren) {
+  (void)dpy;
+  (void)window;
+  if (root) {
+    *root = 1;
+  }
+  if (parent) {
+    *parent = 1;
+  }
+  if (children) {
+    *children = NULL;
+  }
+  if (nchildren) {
+    *nchildren = 0;
+  }
+  return 1;
+}
+
+int XIconifyWindow(Display* dpy, Window window, int screen) {
+  (void)dpy;
+  (void)window;
+  (void)screen;
+  return 1;
+}
+
+int XWithdrawWindow(Display* dpy, Window window, int screen) {
+  (void)dpy;
+  (void)window;
+  (void)screen;
+  return 1;
+}
+
+int XUnmapWindow(Display* dpy, Window window) {
+  (void)window;
+  vexa_push_map(dpy, 0);
   return 1;
 }
 
@@ -637,21 +968,20 @@ Atom XInternAtom(Display* dpy, const char* name, Bool only_if_exists) {
 }
 
 int XChangeProperty(Display* dpy, Window window, Atom property, Atom type, int format, int mode, const unsigned char* data, int nelements) {
-  (void)dpy;
   (void)window;
-  (void)property;
   (void)type;
   (void)format;
   (void)mode;
   (void)data;
-  (void)nelements;
+  fprintf(stderr, "[VEXA][X11] change_property w=%lu prop=%lu n=%d\n", (unsigned long)window,
+          (unsigned long)property, nelements);
+  vexa_push_property(dpy, property, PropertyNewValue);
   return 1;
 }
 
 int XDeleteProperty(Display* dpy, Window window, Atom property) {
-  (void)dpy;
   (void)window;
-  (void)property;
+  vexa_push_property(dpy, property, PropertyDelete);
   return 1;
 }
 
@@ -727,20 +1057,15 @@ Status XSetWMProtocols(Display* dpy, Window window, Atom* protocols, int count) 
 }
 
 int XLookupString(XKeyEvent* event, char* buffer, int bytes, KeySym* keysym, XComposeStatus* status) {
-  (void)event;
-  (void)buffer;
-  (void)bytes;
   (void)status;
-  if (keysym) {
-    *keysym = 0;
-  }
-  return 0;
+  return vexa_lookup_key(event, buffer, bytes, keysym);
 }
 
 KeySym XLookupKeysym(XKeyEvent* event, int index) {
-  (void)event;
-  (void)index;
-  return 0;
+  if (!event || index < 0) {
+    return NoSymbol;
+  }
+  return vexa_sym_for_code(event->keycode, index);
 }
 
 int XParseGeometry(const char* string, int* x, int* y, unsigned int* width, unsigned int* height) {
@@ -809,10 +1134,10 @@ Status XGetWindowAttributes(Display* dpy, Window window, XWindowAttributes* attr
     return 0;
   }
   memset(attrs, 0, sizeof(*attrs));
-  attrs->x = 0;
-  attrs->y = 0;
-  attrs->width = g_screen.width;
-  attrs->height = g_screen.height;
+  attrs->x = g_win_valid ? g_win_x : 0;
+  attrs->y = g_win_valid ? g_win_y : 0;
+  attrs->width = g_win_valid && g_win_w > 0 ? g_win_w : g_screen.width;
+  attrs->height = g_win_valid && g_win_h > 0 ? g_win_h : g_screen.height;
   attrs->depth = 24;
   attrs->visual = &g_visual;
   attrs->class = TrueColor;
@@ -830,16 +1155,16 @@ Status XGetGeometry(Display* dpy, Drawable drawable, Window* root, int* x, int* 
     *root = 1;
   }
   if (x) {
-    *x = 0;
+    *x = g_win_valid ? g_win_x : 0;
   }
   if (y) {
-    *y = 0;
+    *y = g_win_valid ? g_win_y : 0;
   }
   if (width) {
-    *width = (unsigned int)g_screen.width;
+    *width = (unsigned int)(g_win_valid && g_win_w > 0 ? g_win_w : g_screen.width);
   }
   if (height) {
-    *height = (unsigned int)g_screen.height;
+    *height = (unsigned int)(g_win_valid && g_win_h > 0 ? g_win_h : g_screen.height);
   }
   if (border) {
     *border = 0;
@@ -851,20 +1176,19 @@ Status XGetGeometry(Display* dpy, Drawable drawable, Window* root, int* x, int* 
 }
 
 int XResizeWindow(Display* dpy, Window window, unsigned int width, unsigned int height) {
-  (void)dpy;
   (void)window;
+  fprintf(stderr, "[VEXA][X11] resize_window w=%lu %ux%u\n", (unsigned long)window, width, height);
   if (!g_published && width > 1 && height > 1) {
     g_screen.width = (int)width;
     g_screen.height = (int)height;
   }
+  vexa_configure(dpy, g_win_x, g_win_y, (int)width, (int)height);
   return 1;
 }
 
 int XMoveWindow(Display* dpy, Window window, int x, int y) {
-  (void)dpy;
   (void)window;
-  (void)x;
-  (void)y;
+  vexa_configure(dpy, x, y, g_win_w, g_win_h);
   return 1;
 }
 
@@ -1062,7 +1386,6 @@ int XGetWindowProperty(Display* dpy, Window window, Atom property, long long_off
   (void)long_offset;
   (void)long_length;
   (void)delete;
-  (void)req_type;
   if (actual_type_return) {
     *actual_type_return = None;
   }
@@ -1077,6 +1400,30 @@ int XGetWindowProperty(Display* dpy, Window window, Atom property, long long_off
   }
   if (prop_return) {
     *prop_return = NULL;
+  }
+  /* All interned atoms collapse to 1 in this fake, so a one-atom XA_ATOM
+     property always "contains" whatever atom the caller is looking for —
+     _NET_SUPPORTED lists every EWMH feature as supported and _NET_WM_STATE
+     lists _NET_WM_STATE_FULLSCREEN as set. */
+  if (req_type == XA_ATOM || req_type == 0) {
+    Atom* atoms = (Atom*)malloc(sizeof(Atom));
+    if (atoms) {
+      atoms[0] = 1;
+      if (actual_type_return) {
+        *actual_type_return = XA_ATOM;
+      }
+      if (actual_format_return) {
+        *actual_format_return = 32;
+      }
+      if (nitems_return) {
+        *nitems_return = 1;
+      }
+      if (prop_return) {
+        *prop_return = (unsigned char*)atoms;
+      } else {
+        free(atoms);
+      }
+    }
   }
   return Success;
 }
@@ -1102,9 +1449,36 @@ int XGrabPointer(Display* dpy, Window grab_window, Bool owner_events, unsigned i
 }
 
 int XMoveResizeWindow(Display* dpy, Window window, int x, int y, unsigned int width, unsigned int height) {
-  (void)x;
-  (void)y;
-  return XResizeWindow(dpy, window, width, height);
+  (void)window;
+  fprintf(stderr, "[VEXA][X11] move_resize_window w=%lu %d,%d %ux%u\n", (unsigned long)window, x, y, width,
+          height);
+  vexa_configure(dpy, x, y, (int)width, (int)height);
+  return 1;
+}
+
+int XConfigureWindow(Display* dpy, Window window, unsigned int valuemask, XWindowChanges* values) {
+  int x = g_win_x;
+  int y = g_win_y;
+  int w = g_win_w;
+  int h = g_win_h;
+  (void)window;
+  if (values) {
+    if (valuemask & CWX) {
+      x = values->x;
+    }
+    if (valuemask & CWY) {
+      y = values->y;
+    }
+    if (valuemask & CWWidth) {
+      w = values->width;
+    }
+    if (valuemask & CWHeight) {
+      h = values->height;
+    }
+  }
+  fprintf(stderr, "[VEXA][X11] configure_window w=%lu %d,%d %dx%d\n", (unsigned long)window, x, y, w, h);
+  vexa_configure(dpy, x, y, w, h);
+  return 1;
 }
 
 Bool XQueryExtension(Display* dpy, const char* name, int* major, int* event, int* error) {
@@ -1119,12 +1493,24 @@ Bool XQueryExtension(Display* dpy, const char* name, int* major, int* event, int
     *error = 0;
   }
   // Godot 3.7 refuses to start unless XInput2 is present. Other extensions
-  // stay absent so their reply structs are never read.
+  // stay absent so their reply structs are never read. RANDR and XINERAMA are
+  // backed by the fake client libs, so report them present for clients that
+  // gate display enumeration on XQueryExtension.
   if (name && strcmp(name, "XInputExtension") == 0) {
     if (major) {
       *major = 131;
     }
     return True;
+  }
+  if (name && (strcmp(name, "RANDR") == 0 || strcmp(name, "XINERAMA") == 0)) {
+    if (major) {
+      *major = 1;
+    }
+    fprintf(stderr, "[VEXA][X11] query_extension %s -> yes\n", name);
+    return True;
+  }
+  if (name) {
+    fprintf(stderr, "[VEXA][X11] query_extension %s -> no\n", name);
   }
   return False;
 }
@@ -1171,11 +1557,21 @@ Region XPolygonRegion(XPoint* points, int n, int fill_rule) {
 }
 
 Status XSendEvent(Display* dpy, Window window, Bool propagate, long event_mask, XEvent* event) {
-  (void)dpy;
   (void)window;
   (void)propagate;
   (void)event_mask;
-  (void)event;
+  fprintf(stderr, "[VEXA][X11] send_event type=%d\n", event ? event->type : -1);
+  if (event && event->type == ClientMessage) {
+    /* A real WM consumes EWMH client messages (e.g. _NET_WM_STATE fullscreen
+       toggles) and answers with _NET_WM_STATE property notification plus a
+       ConfigureNotify at the display bounds. SDL waits on exactly that pair
+       before it reports the window as fullscreen/on-display. */
+    fprintf(stderr, "[VEXA][X11] wm_ack client_message fmt=%d l0=%ld\n", event->xclient.format,
+            (long)event->xclient.data.l[0]);
+    vexa_push_property(dpy, event->xclient.message_type, PropertyNewValue);
+    vexa_read_window_size();
+    vexa_configure(dpy, 0, 0, g_screen.width, g_screen.height);
+  }
   return 1;
 }
 
@@ -1321,17 +1717,13 @@ XVaNestedList XVaCreateNestedList(int unused, ...) {
 }
 
 int Xutf8LookupString(XIC ic, XKeyPressedEvent* event, char* buffer, int bytes, KeySym* keysym, Status* status) {
+  int n;
   (void)ic;
-  (void)event;
-  (void)buffer;
-  (void)bytes;
-  if (keysym) {
-    *keysym = NoSymbol;
-  }
+  n = vexa_lookup_key((XKeyEvent*)event, buffer, bytes, keysym);
   if (status) {
-    *status = XLookupNone;
+    *status = n > 0 ? XLookupBoth : XLookupNone;
   }
-  return 0;
+  return n;
 }
 
 XkbDescPtr XkbAllocKeyboard(void) {
@@ -1415,10 +1807,90 @@ Status XkbGetState(Display* dpy, unsigned int device, XkbStatePtr state) {
 
 KeySym XkbKeycodeToKeysym(Display* dpy, KeyCode keycode, int group, int level) {
   (void)dpy;
-  (void)keycode;
-  (void)group;
-  (void)level;
-  return NoSymbol;
+  if (group != 0) {
+    return NoSymbol;
+  }
+  return vexa_sym_for_code(keycode, level);
+}
+
+KeySym XKeycodeToKeysym(Display* dpy, KeyCode keycode, int index) {
+  return XkbKeycodeToKeysym(dpy, keycode, 0, index);
+}
+
+KeyCode XKeysymToKeycode(Display* dpy, KeySym keysym) {
+  (void)dpy;
+  return (KeyCode)vexa_code_for_sym(keysym);
+}
+
+int XDisplayKeycodes(Display* dpy, int* min_keycodes_return, int* max_keycodes_return) {
+  (void)dpy;
+  if (min_keycodes_return) {
+    *min_keycodes_return = 8;
+  }
+  if (max_keycodes_return) {
+    *max_keycodes_return = 255;
+  }
+  return 1;
+}
+
+KeySym* XGetKeyboardMapping(Display* dpy, KeyCode first_keycode, int keycode_count, int* keysyms_per_keycode_return) {
+  int i;
+  KeySym* out;
+  (void)dpy;
+  if (keysyms_per_keycode_return) {
+    *keysyms_per_keycode_return = 2;
+  }
+  if (keycode_count < 0) {
+    keycode_count = 0;
+  }
+  out = (KeySym*)calloc((size_t)keycode_count * 2 + 1, sizeof(KeySym));
+  if (!out) {
+    return NULL;
+  }
+  for (i = 0; i < keycode_count; i++) {
+    out[i * 2] = vexa_sym_for_code((unsigned int)first_keycode + (unsigned int)i, 0);
+    out[i * 2 + 1] = vexa_sym_for_code((unsigned int)first_keycode + (unsigned int)i, 1);
+  }
+  return out;
+}
+
+int XQueryKeymap(Display* dpy, char keys_return[32]) {
+  (void)dpy;
+  vexa_lock();
+  memcpy(keys_return, g_key_down, 32);
+  vexa_unlock();
+  return 1;
+}
+
+XModifierKeymap* XGetModifierMapping(Display* dpy) {
+  XModifierKeymap* map;
+  (void)dpy;
+  map = (XModifierKeymap*)calloc(1, sizeof(*map));
+  if (!map) {
+    return NULL;
+  }
+  map->max_keypermod = 2;
+  map->modifiermap = (KeyCode*)calloc(8 * 2, sizeof(KeyCode));
+  if (!map->modifiermap) {
+    free(map);
+    return NULL;
+  }
+  map->modifiermap[0] = 50;  /* Shift_L */
+  map->modifiermap[1] = 62;  /* Shift_R */
+  map->modifiermap[4] = 37;  /* Control_L */
+  map->modifiermap[5] = 105; /* Control_R */
+  map->modifiermap[6] = 64;  /* Alt_L */
+  map->modifiermap[7] = 108; /* Alt_R */
+  return map;
+}
+
+int XFreeModifiermap(XModifierKeymap* map) {
+  if (!map) {
+    return 0;
+  }
+  free(map->modifiermap);
+  free(map);
+  return 1;
 }
 
 Bool XkbLockGroup(Display* dpy, unsigned int device, unsigned int group) {

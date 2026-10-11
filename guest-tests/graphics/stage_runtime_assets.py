@@ -51,6 +51,17 @@ SONAMES = (
     "libxkbcommon-x11.so.0",
     "libdecor-0.so.0",
     "libasound.so.2",
+    "libogg.so.0",
+    "libvorbis.so.0",
+    "libvorbisfile.so.3",
+    "libdrm.so.2",
+    "libwayland-egl.so.1",
+    "libwayland-cursor.so.0",
+    "libpulse.so.0",
+    "libXfixes.so.3",
+    "libXss.so.1",
+    "libXxf86vm.so.1",
+    "libgbm.so.1",
 )
 REQUIRED = (
     "ld-linux-x86-64.so.2",
@@ -87,9 +98,13 @@ THUNKS = (
     "libGL-host.so",
     "libEGL-host.so",
     "libGLESv2-host.so",
+    "libSDL3-host.so",
+    "libSDL3_image-host.so",
     "libGL-guest.so",
     "libEGL-guest.so",
     "libGLESv2-guest.so",
+    "libSDL3-guest.so",
+    "libSDL3_image-guest.so",
     "libvulkan-host.so",
     "libvulkan-guest.so",
     "libopenal-host.so",
@@ -148,8 +163,9 @@ def copy_file(src, dest):
 
 def main():
     runtime = os.path.join(ASSETS, "runtime")
-    if os.path.isdir(runtime):
+    if os.environ.get("RESET_RUNTIME_ASSETS") == "1" and os.path.isdir(runtime):
         shutil.rmtree(runtime)
+    os.makedirs(runtime, exist_ok=True)
     lib_dest = os.path.join(runtime, "rootfs", "usr", "lib", "x86_64-linux-gnu")
     missing = []
     for soname in SONAMES:
@@ -186,7 +202,11 @@ def main():
     data_src = os.path.join(ROOTFS, "usr", "share", "glmark2")
     if not os.path.isdir(data_src):
         raise SystemExit(f"missing glmark2 data: {data_src}")
-    shutil.copytree(data_src, os.path.join(runtime, "rootfs", "usr", "share", "glmark2"))
+    shutil.copytree(
+        data_src,
+        os.path.join(runtime, "rootfs", "usr", "share", "glmark2"),
+        dirs_exist_ok=True,
+    )
 
     bin_dir = os.path.join(ROOTFS, "usr", "bin")
     guest_assets = os.path.join(ASSETS, "guests")
@@ -224,6 +244,22 @@ def main():
         print("host libopenal.so", flush=True)
     else:
         print("skip host libopenal.so", flush=True)
+
+    sdl3_host_libraries = (
+        ("sdl3/lib/libSDL3.so", "libSDL3.so"),
+        ("sdl3/lib/libSDL3.so", "libSDL3.so.1"),
+        ("sdl3_image/lib/libSDL3_image.so", "libSDL3_image.so"),
+    )
+    host_thunk_dir = os.path.join(runtime, "thunks", "host")
+    for relative, name in sdl3_host_libraries:
+        source = os.path.join(VEXA, "third_party", "install-android-arm64", relative)
+        if is_elf(source):
+            copy_file(source, os.path.join(host_thunk_dir, name))
+            print(f"host {name}", flush=True)
+        elif require:
+            raise SystemExit(f"missing Android host library: {source}")
+        else:
+            print(f"skip host {name}", flush=True)
 
     # The installer re-copies the runtime whenever this content hash changes.
     digest = hashlib.sha256()

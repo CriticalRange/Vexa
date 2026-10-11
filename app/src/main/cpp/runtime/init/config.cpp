@@ -41,7 +41,8 @@ namespace Vexa::Runtime::Init {
 
         void AddDirProbeOverlays(std::vector<std::string> &dst, const std::string &dir,
                                  const std::string &stem,
-                                 bool addSo1 = false) {
+                                 bool addSo1 = false,
+                                 bool addSo0 = false) {
             if (dir.empty()) return;
             PushUnique(dst, dir + "/" + stem + ".so");
             PushUnique(dst, dir + "/lib" + stem + ".so");
@@ -50,6 +51,10 @@ namespace Vexa::Runtime::Init {
             if (addSo1) {
                 PushUnique(dst, dir + "/" + stem + ".so.1");
                 PushUnique(dst, dir + "/lib" + stem + ".so.1");
+            }
+            if (addSo0) {
+                PushUnique(dst, dir + "/" + stem + ".so.0");
+                PushUnique(dst, dir + "/lib" + stem + ".so.0");
             }
         }
 
@@ -82,8 +87,10 @@ namespace Vexa::Runtime::Init {
                     "/proc/SDL3",
                     "/proc/libSDL3",
             };
-            AddDirProbeOverlays(sdl3Overlays, gameDir, "SDL3");
-            AddDirProbeOverlays(sdl3Overlays, gameDirAlias, "SDL3");
+            AddDirProbeOverlays(sdl3Overlays, gameDir, "SDL3", false, true);
+            AddDirProbeOverlays(sdl3Overlays, gameDirAlias, "SDL3", false, true);
+            AddDirProbeOverlays(sdl3Overlays, gameDir + "/lib64", "SDL3", false, true);
+            AddDirProbeOverlays(sdl3Overlays, gameDirAlias + "/lib64", "SDL3", false, true);
 
             std::vector<std::string> sdl3ImageOverlays = {
                     "@PREFIX_LIB@/libSDL3_image.so",
@@ -92,6 +99,25 @@ namespace Vexa::Runtime::Init {
             };
             AddDirProbeOverlays(sdl3ImageOverlays, gameDir, "SDL3_image");
             AddDirProbeOverlays(sdl3ImageOverlays, gameDirAlias, "SDL3_image");
+
+            // SDL2's real SONAME is libSDL2-2.0.so.0, so probe both the "SDL2"
+            // and "SDL2-2.0" stems (stem "SDL2" alone only yields libSDL2.so.0).
+            std::vector<std::string> sdl2Overlays = {
+                    "@PREFIX_LIB@/libSDL2-2.0.so.0",
+                    "@PREFIX_LIB@/libSDL2.so",
+                    "/proc/libSDL2-2.0.so.0",
+                    "/proc/libSDL2.so",
+                    "/proc/SDL2",
+                    "/proc/libSDL2",
+            };
+            AddDirProbeOverlays(sdl2Overlays, gameDir, "SDL2", false, true);
+            AddDirProbeOverlays(sdl2Overlays, gameDirAlias, "SDL2", false, true);
+            AddDirProbeOverlays(sdl2Overlays, gameDir + "/lib64", "SDL2", false, true);
+            AddDirProbeOverlays(sdl2Overlays, gameDirAlias + "/lib64", "SDL2", false, true);
+            AddDirProbeOverlays(sdl2Overlays, gameDir, "SDL2-2.0", false, true);
+            AddDirProbeOverlays(sdl2Overlays, gameDirAlias, "SDL2-2.0", false, true);
+            AddDirProbeOverlays(sdl2Overlays, gameDir + "/lib64", "SDL2-2.0", false, true);
+            AddDirProbeOverlays(sdl2Overlays, gameDirAlias + "/lib64", "SDL2-2.0", false, true);
 
             std::vector<std::string> openalOverlays = {
                     "@PREFIX_LIB@/libopenal.so",
@@ -152,6 +178,10 @@ namespace Vexa::Runtime::Init {
                  << "      \"Library\": \"libSDL3_image-guest.so\",\n"
                  << "      \"Overlay\": " << BuildJsonArray(sdl3ImageOverlays) << "\n"
                  << "    },\n"
+                 << "    \"SDL2\": {\n"
+                 << "      \"Library\": \"libSDL2-guest.so\",\n"
+                 << "      \"Overlay\": " << BuildJsonArray(sdl2Overlays) << "\n"
+                 << "    },\n"
                  << "    \"openal\": {\n"
                  << "      \"Library\": \"libopenal-guest.so\",\n"
                  << "      \"Overlay\": " << BuildJsonArray(openalOverlays) << "\n"
@@ -189,6 +219,7 @@ namespace Vexa::Runtime::Init {
                  << "  \"ThunksDB\": {\n"
                  << "    \"SDL3\": " << ThunkGuestPresent(paths, "libSDL3-guest.so") << ",\n"
                  << "    \"SDL3_image\": " << ThunkGuestPresent(paths, "libSDL3_image-guest.so") << ",\n"
+                 << "    \"SDL2\": " << ThunkGuestPresent(paths, "libSDL2-guest.so") << ",\n"
                  << "    \"openal\": " << ThunkGuestPresent(paths, "libopenal-guest.so") << ",\n"
                  << "    \"GL\": " << ThunkGuestPresent(paths, "libGL-guest.so") << ",\n"
                  << "    \"EGL\": " << ThunkGuestPresent(paths, "libEGL-guest.so") << ",\n"
@@ -335,6 +366,22 @@ namespace Vexa::Runtime::Init {
         // ReloadMetaLayer can overwrite these, so applying them later.
         FEXCore::Config::Set(FEXCore::Config::CONFIG_IS64BIT_MODE, "1");
         FEXCore::Config::Set(FEXCore::Config::CONFIG_ROOTFS, paths.rootfs);
+        // Unaligned (split) guest atomics are emulated in the SIGBUS handler.
+        // Without the strict process-wide split lock the emulation is a plain
+        // read-modify-write, which loses concurrent updates and corrupts
+        // atomic counters (observed: Unity job counters go permanently
+        // negative and PlayerMain waits forever). Serializing split-lock
+        // handling makes the emulation atomic.
+        FEXCore::Config::Set(FEXCore::Config::CONFIG_STRICTINPROCESSSPLITLOCKS, "1");
+
+        // Profiling: per-block JIT symbols ("UnityPlayer.so+0x...") written to
+        // /data/local/tmp/perf-<pid>.map so simpleperf can attribute JIT code
+        // to guest functions. Enable by creating <files>/fex_jitnames.flag.
+        if (::access("/data/data/com.critical.vexaemulator/files/fex_jitnames.flag", F_OK) == 0) {
+            FEXCore::Config::Set(FEXCore::Config::CONFIG_BLOCKJITNAMING, "1");
+            FEXCore::Config::Set(FEXCore::Config::CONFIG_GLOBALJITNAMING, "1");
+            VEXA_LOGW(env, "FEX", "JIT naming enabled (perf map in /data/local/tmp)", "");
+        }
 
         return {Vexa::Common::Code::Ok, Vexa::Common::Phase::Init,
                 "Config initialized"};

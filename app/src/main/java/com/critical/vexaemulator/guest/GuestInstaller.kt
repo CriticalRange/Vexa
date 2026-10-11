@@ -1,7 +1,9 @@
 package com.critical.vexaemulator.guest
 
 import android.content.Context
+import android.system.Os
 import com.critical.vexaemulator.runtime.LaunchRequest
+import com.critical.vexaemulator.steam.SteamworksHost
 import java.io.File
 
 object GuestInstaller {
@@ -24,15 +26,16 @@ object GuestInstaller {
                 executable.outputStream().use { output -> input.copyTo(output) }
             }
         }
+        if (program.steamStub) installSteamStub(context, guestDir)
         executable.setReadable(true, false)
         executable.setExecutable(true, false)
-        val launchEnv = if (program.preinstalled && program.env.none { it.startsWith("HOME=") }) {
+        val baseEnv = if (program.preinstalled && program.env.none { it.startsWith("HOME=") }) {
             program.env + "HOME=${guestDir.absolutePath}"
         } else {
             program.env
         }
-
         val rootfs = File(root, "rootfs").apply { mkdirs() }
+        val launchEnv = withRuntimeDir(rootfs, baseEnv) + SteamworksHost.launchEnvironment(context, baseEnv)
         val thunkHost = File(root, "thunks/host").apply { mkdirs() }
         val thunkGuest = File(root, "thunks/guest").apply { mkdirs() }
         val artifacts = File(root, "artifacts/${program.id}").apply {
@@ -51,6 +54,32 @@ object GuestInstaller {
             launchArgs = program.args,
             launchEnv = launchEnv,
         )
+    }
+
+    // Guests that refuse to start without a Steam client get an x86_64 libsteam_api that reports
+    // a running, logged-in Steam. The game's own copy is kept next to it as .real.
+    private fun installSteamStub(context: Context, guestDir: File) {
+        listOf(guestDir, File(guestDir, "lib64")).forEach { dir ->
+            val target = File(dir, "libsteam_api.so")
+            if (!target.isFile) return@forEach
+            val backup = File(dir, "libsteam_api.so.real")
+            if (!backup.exists()) target.copyTo(backup)
+            context.assets.open("guests/libsteam_api_stub.so").use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            }
+            target.setReadable(true, false)
+        }
+    }
+
+    private fun withRuntimeDir(rootfs: File, env: List<String>): List<String> {
+        val hasDisplay = env.any { it.startsWith("DISPLAY=") && it.substringAfter("=").isNotEmpty() }
+        if (!hasDisplay || env.any { it.startsWith("XDG_RUNTIME_DIR=") }) return env
+        // Wayland's client library exits when this is unset or not mode 0700.
+        // The directory stays empty: there is no Wayland socket here.
+        val runtime = File(rootfs, "tmp/vexa-xdg")
+        runtime.mkdirs()
+        runCatching { Os.chmod(runtime.absolutePath, 448) }
+        return env + "XDG_RUNTIME_DIR=/tmp/vexa-xdg"
     }
 
     private fun ensureRuntime(context: Context, root: File) {

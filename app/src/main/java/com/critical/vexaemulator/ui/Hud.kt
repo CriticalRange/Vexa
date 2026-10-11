@@ -136,6 +136,8 @@ fun QuickPanel(
     onOpenDebug: () -> Unit,
     onOpenLogs: (Set<LogLevel>) -> Unit,
     onExit: () -> Unit,
+    padOn: Boolean = false,
+    onTogglePad: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val c = VexaTheme.colors
@@ -201,6 +203,14 @@ fun QuickPanel(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.End,
             ) {
+                if (onTogglePad != null) {
+                    CircleHudButton(
+                        VexaGlyph.Gamepad,
+                        if (padOn) c.plasma else c.textSecondary,
+                        onClick = onTogglePad,
+                    )
+                    Spacer(Modifier.width(10.dp))
+                }
                 HoldToExitCircle(onExit = onExit)
             }
         }

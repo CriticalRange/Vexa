@@ -3,7 +3,11 @@
 //
 
 #include <FEXCore/HLE/SyscallHandler.h>
+#include <Tools/LinuxEmulation/LinuxSyscalls/GdbServer.h>
 #include <Tools/LinuxEmulation/LinuxSyscalls/Syscalls.h>
+
+#include <cstdlib>
+#include <unistd.h>
 
 #include "syscalls.h"
 #include "resources.h"
@@ -36,6 +40,22 @@ namespace Vexa::Runtime::Init {
         state.linuxSyscallHandler = linuxSyscallHandler;
         state.syscallHandler = std::move(sysHandler);
         state.ctx->SetSyscallHandler(state.syscallHandler.get());
+
+        // Optional in-process gdb server for guest-level backtraces. The FEX
+        // gdb stub serves guest threads/registers over a unix socket — the only
+        // way to see where an x86 guest thread is actually parked. Enable by
+        // creating <files>/fex_gdb.flag in the app data dir.
+        {
+            const char *flagEnv = ::getenv("VEXA_FEX_GDB");
+            const bool enabled =
+                    ::access("/data/data/com.critical.vexaemulator/files/fex_gdb.flag", F_OK) == 0 ||
+                    (flagEnv && flagEnv[0] && flagEnv[0] != '0');
+            if (enabled) {
+                state.gdbServer = new FEX::GdbServer(
+                        state.ctx.get(), state.signalDelegator.get(), state.linuxSyscallHandler);
+                VEXA_LOGI(env, "FEX", "GdbServer started", "{}");
+            }
+        }
 
         VEXA_LOGI(env, "FEX",
                   "Syscall ABI",
