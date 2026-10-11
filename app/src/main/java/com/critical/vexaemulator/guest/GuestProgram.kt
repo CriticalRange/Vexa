@@ -9,7 +9,6 @@ data class GuestProgram(
     val args: List<String> = emptyList(),
     val env: List<String> = emptyList(),
     val preinstalled: Boolean = false,
-    val steamStub: Boolean = false,
 )
 
 object GuestCatalog {
@@ -91,7 +90,14 @@ object GuestCatalog {
             summary = "HashLink game. Native Linux build, OpenGL through its own SDL2. The Linux files are already in the app files directory.",
             assetPath = "",
             fileName = "deadcells",
-            env = listOf("DISPLAY=:0", "LD_LIBRARY_PATH=.", "SteamAppId=588650"),
+            env = listOf(
+                "DISPLAY=:0",
+                "LD_LIBRARY_PATH=.",
+                "SDL_JOYSTICK_DISABLE_UDEV=1",
+                "SDL_HIDAPI_JOYSTICK_DISABLE_UDEV=1",
+                "SDL_JOYSTICK_HIDAPI=0",
+                "SteamAppId=588650",
+            ),
             preinstalled = true,
         ),
         GuestProgram(
@@ -111,7 +117,6 @@ object GuestCatalog {
                 "SteamAppId=105600",
             ),
             preinstalled = true,
-            steamStub = true,
         ),
         GuestProgram(
             id = "celeste",

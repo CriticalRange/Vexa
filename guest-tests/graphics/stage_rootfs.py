@@ -309,6 +309,7 @@ SDL_LOAD_STUBS = (
     ("libXss_stub.c", "libXss.so.1"),
     ("libXxf86vm_stub.c", "libXxf86vm.so.1"),
     ("libgbm_stub.c", "libgbm.so.1"),
+    ("libudev_stub.c", "libudev.so.1"),
 )
 
 

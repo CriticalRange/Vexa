@@ -5,13 +5,16 @@ entry point Steamworks.NET (or any other binding) can ask for resolves. Calls
 succeed and report an empty, offline-but-"logged in" Steam: initialisation and
 ownership checks pass, everything else returns zero.
 
-Usage: python build_steam_stub.py <real libsteam_api.so> [output.so]
+Usage: python build_steam_stub.py <real libsteam_api.so>... [-o output.so]
+
+Multiple input libraries may be passed; the generated stub exports the union of
+all Steam API symbols found across them.
 """
 
+import argparse
 import os
 import re
 import subprocess
-import sys
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 VEXA = os.path.normpath(os.path.join(ROOT, "..", ".."))
@@ -48,6 +51,25 @@ STRINGS = {
 FAKE_STEAM_ID = 76561198000000000
 
 CUSTOM = {
+    "SteamInternal_ContextInit": (
+        "EXPORT void* SteamInternal_ContextInit(void** ctx) {"
+        " trace(\"SteamInternal_ContextInit\");"
+        " if (!ctx || !ctx[0]) return 0;"
+        " if (!ctx[2]) { ((void (*)(void**))ctx[0])(&ctx[2]); ctx[1] = (void*)1; }"
+        " return &ctx[2]; }"
+    ),
+    "SteamInternal_FindOrCreateUserInterface": (
+        "EXPORT void* SteamInternal_FindOrCreateUserInterface(int64_t user, const char* version) {"
+        " trace(\"SteamInternal_FindOrCreateUserInterface\"); return fake_interface_for_version(version); }"
+    ),
+    "SteamInternal_FindOrCreateGameServerInterface": (
+        "EXPORT void* SteamInternal_FindOrCreateGameServerInterface(int64_t user, const char* version) {"
+        " trace(\"SteamInternal_FindOrCreateGameServerInterface\"); return fake_interface_for_version(version); }"
+    ),
+    "SteamInternal_CreateInterface": (
+        "EXPORT void* SteamInternal_CreateInterface(const char* version) {"
+        " trace(\"SteamInternal_CreateInterface\"); return fake_interface_for_version(version); }"
+    ),
     "SteamAPI_RequestCurrentStatsMarker": "",
     "SteamAPI_ISteamUserStats_RequestCurrentStats": (
         "EXPORT int64_t SteamAPI_ISteamUserStats_RequestCurrentStats(void* self) {"
@@ -68,10 +90,19 @@ CUSTOM = {
 DUMMY_PTR = re.compile(r"^SteamAPI_Steam\w+_v\d+$|^SteamGameServer\w*_v\d+$|^SteamInternal_(CreateInterface|ContextInit|FindOrCreate\w+)$|^SteamAPI_ISteamClient_GetISteam\w+$|^SteamAPI_ISteamClient_GetIClient\w+$")
 
 
-def exports(real):
-    out = subprocess.check_output([NM, "-D", "--defined-only", real], text=True)
-    names = {line.split()[-1].split("@")[0] for line in out.splitlines() if line.split() and line.split()[1] in "Tt"}
-    return sorted(n for n in names if n.startswith("Steam"))
+def exports(paths):
+    names = set()
+    for path in paths:
+        out = subprocess.check_output([NM, "-D", "--defined-only", path], text=True)
+        names.update(
+            line.split()[-1].split("@")[0]
+            for line in out.splitlines()
+            if line.split() and line.split()[1] in "Tt"
+        )
+    return sorted(
+        n for n in names
+        if n.startswith("Steam") or n.startswith("GetHSteam")
+    )
 
 
 def render(names):
@@ -88,6 +119,85 @@ def render(names):
         "static stats_received stats_param;",
         "static int pending_stats;",
         "static int64_t appid(void) { const char* v = getenv(\"SteamAppId\"); return v ? atoll(v) : 0; }",
+        "static int64_t vret0(void) { return 0; }",
+        "static int64_t vret1(void) { return 1; }",
+        "static int64_t vret_ff(void) { return 255; }",
+        "static uint64_t vret_steamid(void) { return %dULL; }" % FAKE_STEAM_ID,
+        "static int64_t vret_appid(void) { return appid(); }",
+        "static const char *vret_empty(void) { return \"\"; }",
+        "static const char *vret_name(void) { return \"VEXA\"; }",
+        "static const char *vret_lang(void) { return \"english\"; }",
+        "static const char *vret_country(void) { return \"US\"; }",
+        "#define VT_COUNT 512",
+        "static void *vt_generic[VT_COUNT];",
+        "static void *vt_client[VT_COUNT];",
+        "static void *vt_user[VT_COUNT];",
+        "static void *vt_userstats[VT_COUNT];",
+        "static void *vt_utils[VT_COUNT];",
+        "static void *vt_friends[VT_COUNT];",
+        "static void *vt_apps[VT_COUNT];",
+        "static void *vt_remote[VT_COUNT];",
+        "static void *vt_controller[VT_COUNT];",
+        "static void *vt_matchmaking[VT_COUNT];",
+        "static void *vt_matchservers[VT_COUNT];",
+        "static void *vt_networking[VT_COUNT];",
+        "static void *vt_gameserver[VT_COUNT];",
+        "static void *vt_ugc[VT_COUNT];",
+        "static void *obj_generic[1];",
+        "static void *obj_client[1];",
+        "static void *obj_user[1];",
+        "static void *obj_userstats[1];",
+        "static void *obj_utils[1];",
+        "static void *obj_friends[1];",
+        "static void *obj_apps[1];",
+        "static void *obj_remote[1];",
+        "static void *obj_controller[1];",
+        "static void *obj_matchmaking[1];",
+        "static void *obj_matchservers[1];",
+        "static void *obj_networking[1];",
+        "static void *obj_gameserver[1];",
+        "static void *obj_ugc[1];",
+        "static int vt_ready;",
+        "static void vfill(void **vt) { int i; for (i = 0; i < VT_COUNT; i++) vt[i] = (void*)vret0; }",
+        "static void init_vtables(void) {",
+        " if (vt_ready) return; vt_ready = 1;",
+        " vfill(vt_generic); vfill(vt_client); vfill(vt_user); vfill(vt_userstats);",
+        " vfill(vt_utils); vfill(vt_friends); vfill(vt_apps); vfill(vt_remote);",
+        " vfill(vt_controller); vfill(vt_matchmaking); vfill(vt_matchservers);",
+        " vfill(vt_networking); vfill(vt_gameserver); vfill(vt_ugc);",
+        " vt_user[1] = vret1; vt_user[2] = vret_steamid; vt_user[13] = vret1;",
+        " vt_userstats[0] = vret1; vt_userstats[3] = vret1; vt_userstats[4] = vret1;",
+        " vt_userstats[7] = vret1; vt_userstats[8] = vret1; vt_userstats[10] = vret1;",
+        " vt_userstats[12] = vret_empty; vt_userstats[13] = vret1; vt_userstats[15] = vret_empty;",
+        " vt_utils[4] = vret_country; vt_utils[8] = vret_ff; vt_utils[9] = vret_appid;",
+        " vt_apps[4] = vret_lang; vt_apps[5] = vret_lang;",
+        " vt_friends[0] = vret_name; vt_friends[6] = vret1; vt_friends[7] = vret_name;",
+        " vt_remote[21] = vret0; vt_remote[22] = vret0;",
+        " vt_controller[2] = vret1; vt_controller[4] = vret1; vt_controller[11] = vret1;",
+        " vt_controller[14] = vret1; vt_controller[17] = vret_empty; vt_controller[18] = vret_empty;",
+        " obj_generic[0] = vt_generic; obj_client[0] = vt_client; obj_user[0] = vt_user;",
+        " obj_userstats[0] = vt_userstats; obj_utils[0] = vt_utils; obj_friends[0] = vt_friends;",
+        " obj_apps[0] = vt_apps; obj_remote[0] = vt_remote; obj_controller[0] = vt_controller;",
+        " obj_matchmaking[0] = vt_matchmaking; obj_matchservers[0] = vt_matchservers;",
+        " obj_networking[0] = vt_networking; obj_gameserver[0] = vt_gameserver; obj_ugc[0] = vt_ugc; }",
+        "static void *fake_interface_for_version(const char *v) {",
+        " init_vtables(); if (!v) return obj_generic;",
+        " if (strstr(v, \"UserStats\") || strstr(v, \"USERSTATS\")) return obj_userstats;",
+        " if (strstr(v, \"RemoteStorage\") || strstr(v, \"REMOTESTORAGE\")) return obj_remote;",
+        " if (strstr(v, \"GameServerNetworking\")) return obj_networking;",
+        " if (strstr(v, \"SteamGameServer\") || strstr(v, \"STEAMGAMESERVER\")) return obj_gameserver;",
+        " if (strstr(v, \"MatchmakingServers\") || strstr(v, \"MatchMakingServers\")) return obj_matchservers;",
+        " if (strstr(v, \"Matchmaking\") || strstr(v, \"MatchMaking\") || strstr(v, \"MATCHMAKING\")) return obj_matchmaking;",
+        " if (strstr(v, \"Networking\") || strstr(v, \"NETWORKING\")) return obj_networking;",
+        " if (strstr(v, \"SteamUser\") || strstr(v, \"STEAMUSER\")) return obj_user;",
+        " if (strstr(v, \"Utils\") || strstr(v, \"UTILS\")) return obj_utils;",
+        " if (strstr(v, \"Friends\") || strstr(v, \"FRIENDS\")) return obj_friends;",
+        " if (strstr(v, \"Apps\") || strstr(v, \"APPS\")) return obj_apps;",
+        " if (strstr(v, \"Controller\") || strstr(v, \"CONTROLLER\")) return obj_controller;",
+        " if (strstr(v, \"UGC\")) return obj_ugc;",
+        " if (strstr(v, \"Client\") || strstr(v, \"CLIENT\")) return obj_client;",
+        " return obj_generic; }",
+        "static void *fake_interface_for_export(const char *n) { return fake_interface_for_version(n); }",
         "#define EXPORT __attribute__((visibility(\"default\")))",
     ]
     for n in names:
@@ -106,7 +216,7 @@ def render(names):
         elif n in RETURN_ONE:
             body = "return 1;"
         elif DUMMY_PTR.match(n):
-            lines.append(f"EXPORT void* {n}(void) {{ trace(\"{n}\"); return dummy_object; }}")
+            lines.append(f"EXPORT void* {n}(void) {{ trace(\"{n}\"); return fake_interface_for_export(\"{n}\"); }}")
             continue
         else:
             body = "return 0;"
@@ -115,20 +225,30 @@ def render(names):
 
 
 def main():
-    if len(sys.argv) < 2:
-        raise SystemExit(__doc__)
-    names = exports(sys.argv[1])
-    out = sys.argv[2] if len(sys.argv) > 2 else DEFAULT_OUT
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("real", nargs="+", help="real libsteam_api.so files to union")
+    parser.add_argument("-o", "--output", default=DEFAULT_OUT)
+    args = parser.parse_args()
+
+    names = exports(args.real)
+    out = args.output
+    tmp_out = out + ".tmp"
     os.makedirs(os.path.dirname(out), exist_ok=True)
-    source = out + ".c"
+    source = tmp_out + ".c"
     with open(source, "w", encoding="utf-8", newline="\n") as handle:
         handle.write(render(names))
-    subprocess.check_call([
-        CLANG, "--target=x86_64-linux-gnu", f"--sysroot={SYSROOT}", "-fPIC", "-shared",
-        "-fno-stack-protector", "-O2", "-fuse-ld=lld", "-Wl,-soname,libsteam_api.so",
-        source, "-o", out, "-lc",
-    ])
-    os.remove(source)
+    try:
+        subprocess.check_call([
+            CLANG, "--target=x86_64-linux-gnu", f"--sysroot={SYSROOT}", "-fPIC", "-shared",
+            "-fno-stack-protector", "-O2", "-fuse-ld=lld", "-Wl,-soname,libsteam_api.so",
+            source, "-o", tmp_out, "-lc",
+        ])
+        os.replace(tmp_out, out)
+    finally:
+        if os.path.exists(source):
+            os.remove(source)
+        if os.path.exists(tmp_out):
+            os.remove(tmp_out)
     print(f"built {out} ({len(names)} exports)")
 
 
