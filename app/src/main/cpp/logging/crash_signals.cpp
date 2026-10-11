@@ -292,6 +292,25 @@ namespace {
 #endif
     }
 
+    static bool ReadU64(uintptr_t addr, uint64_t *out) {
+#if defined(SYS_process_vm_readv)
+        if (!out || addr < 0x10000u) return false;
+        struct iovec local {};
+        struct iovec remote {};
+        local.iov_base = out;
+        local.iov_len = sizeof(*out);
+        remote.iov_base = reinterpret_cast<void *>(addr);
+        remote.iov_len = sizeof(*out);
+        const long n = syscall(SYS_process_vm_readv, static_cast<long>(getpid()),
+                               &local, 1L, &remote, 1L, 0L);
+        return n == static_cast<long>(sizeof(*out));
+#else
+        (void) addr;
+        (void) out;
+        return false;
+#endif
+    }
+
     static inline void DumpGuestStateRaw(FEXCore::Core::InternalThreadState *Thread) {
         if (!Thread || !Thread->CurrentFrame) return;
         WriteKeyHex("guest_rip", Thread->CurrentFrame->State.rip);
@@ -304,6 +323,24 @@ namespace {
         WriteKeyHex("guest_rsi", g[6]);
         WriteKeyHex("guest_rdi", g[7]);
         WriteKeyHex("in_syscall_info", Thread->CurrentFrame->InSyscallInfo);
+
+        // Frame-pointer chain: [rbp] = saved rbp, [rbp+8] = return address.
+        uint64_t fp = g[5];
+        for (int i = 0; i < 24 && fp >= 0x10000u && (fp & 7u) == 0; ++i) {
+            uint64_t next = 0, ret = 0;
+            if (!ReadU64(static_cast<uintptr_t>(fp), &next)) break;
+            if (!ReadU64(static_cast<uintptr_t>(fp + 8), &ret)) break;
+            WriteKeyHex("guest_bt_ret", ret);
+            if (next <= fp) break;
+            fp = next;
+        }
+        // Raw stack words (covers frames built without frame pointers).
+        const uint64_t sp = g[4];
+        for (int i = 0; i < 160; ++i) {
+            uint64_t w = 0;
+            if (!ReadU64(static_cast<uintptr_t>(sp + static_cast<uint64_t>(i) * 8u), &w)) break;
+            if (w >= 0x10000u) WriteKeyHex("guest_stk", w);
+        }
     }
 
     static inline void WriteSigName(int sig) {

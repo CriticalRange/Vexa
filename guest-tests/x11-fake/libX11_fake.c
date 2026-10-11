@@ -468,14 +468,13 @@ Window XCreateWindow(Display* dpy, Window parent, int x, int y, unsigned int wid
                      int depth, unsigned int klass, Visual* visual, unsigned long valuemask, XSetWindowAttributes* attrs) {
   (void)dpy;
   (void)parent;
-  (void)x;
-  (void)y;
   (void)border;
   (void)depth;
   (void)klass;
   (void)visual;
   (void)valuemask;
   (void)attrs;
+  fprintf(stderr, "[VEXA][X11] XCreateWindow x=%d y=%d %ux%u\n", x, y, width, height);
   vexa_read_window_size();
   /* Godot asks for the project size (1920x1080). The published surface is the
      real screen, and a later ConfigureNotify makes Godot adopt it. */
@@ -1435,4 +1434,98 @@ Bool XkbSetDetectableAutoRepeat(Display* dpy, Bool detectable, Bool* supported) 
     *supported = False;
   }
   return True;
+}
+
+/* glvnd libGLX.so.0 imports these libX11 internals as DT_NEEDED symbols.
+   Under QT_XCB_GL_INTEGRATION=xcb_egl the GLX code path is never executed;
+   the stubs only have to satisfy the dynamic linker. */
+Bool _XAsyncErrorHandler(Display* dpy, xReply* rep, char* buf, int len, XPointer data) {
+  (void)dpy;
+  (void)rep;
+  (void)buf;
+  (void)len;
+  (void)data;
+  return False;
+}
+
+void _XDeqAsyncHandler(Display* dpy, _XAsyncHandler* handler) {
+  (void)dpy;
+  (void)handler;
+}
+
+void _XEatData(Display* dpy, unsigned long n) {
+  (void)dpy;
+  (void)n;
+}
+
+int _XError(Display* dpy, xError* rep) {
+  (void)dpy;
+  (void)rep;
+  return 0;
+}
+
+void* _XGetRequest(Display* dpy, CARD8 type, size_t len) {
+  (void)type;
+  (void)len;
+  if (dpy) {
+    dpy->request++;
+    return dpy->bufptr;
+  }
+  return NULL;
+}
+
+int _XRead(Display* dpy, char* data, long size) {
+  (void)dpy;
+  (void)data;
+  (void)size;
+  return 0;
+}
+
+Status _XReply(Display* dpy, xReply* rep, int extra, Bool discard) {
+  (void)dpy;
+  (void)rep;
+  (void)extra;
+  (void)discard;
+  return 1;
+}
+
+XExtCodes* XAddExtension(Display* dpy) {
+  (void)dpy;
+  return (XExtCodes*)calloc(1, 256);
+}
+
+int (*XESetCloseDisplay(Display* dpy, int extension, int (*proc)(Display*, XExtCodes*)))(Display*, XExtCodes*) {
+  (void)dpy;
+  (void)extension;
+  return proc;
+}
+
+int XScreenCount(Display* dpy) {
+  (void)dpy;
+  return 1;
+}
+
+void XSetWMName(Display* dpy, Window window, XTextProperty* text_prop) {
+  (void)dpy;
+  (void)window;
+  (void)text_prop;
+}
+
+Status XmbTextListToTextProperty(Display* dpy, char** list, int count, XICCEncodingStyle style, XTextProperty* text_prop) {
+  (void)dpy;
+  (void)list;
+  (void)count;
+  (void)style;
+  if (text_prop) {
+    text_prop->value = NULL;
+    text_prop->encoding = 0;
+    text_prop->format = 0;
+    text_prop->nitems = 0;
+  }
+  return XNoMemory;
+}
+
+int _XDefaultIOError(Display* dpy) {
+  (void)dpy;
+  return 0;
 }

@@ -21,42 +21,45 @@ import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.WindowManager
+import java.net.DatagramPacket
+import java.net.DatagramSocket
+import java.net.InetAddress
+import java.util.concurrent.Executors
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
-import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
@@ -70,16 +73,18 @@ import com.critical.vexaemulator.logging.VexaLogger
 import com.critical.vexaemulator.runtime.LaunchRequest
 import com.critical.vexaemulator.runtime.RuntimeIpc
 import com.critical.vexaemulator.runtime.RuntimeService
+import com.critical.vexaemulator.guest.GuestProgram
+import com.critical.vexaemulator.ui.EdgeHandle
 import com.critical.vexaemulator.ui.GameDebugPanel
-import com.critical.vexaemulator.ui.GameHudChip
 import com.critical.vexaemulator.ui.GameLoadingOverlay
-import com.critical.vexaemulator.ui.theme.Error as ThemeError
-import com.critical.vexaemulator.ui.theme.Ink
-import com.critical.vexaemulator.ui.theme.InkMuted
-import com.critical.vexaemulator.ui.theme.MonospaceTypography
-import com.critical.vexaemulator.ui.theme.SurfaceHi
-import com.critical.vexaemulator.ui.theme.VexaAccent
-import com.critical.vexaemulator.ui.theme.VexaBlack
+import com.critical.vexaemulator.ui.QuickPanel
+import com.critical.vexaemulator.ui.VexaPrefs
+import com.critical.vexaemulator.ui.rememberHaptics
+import com.critical.vexaemulator.ui.theme.VexaEmulatorTheme
+import com.critical.vexaemulator.ui.theme.VexaMotion
+import com.critical.vexaemulator.ui.theme.VexaTheme
+import com.critical.vexaemulator.ui.theme.VoidColors
+import com.critical.vexaemulator.ui.theme.resolveDark
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -88,11 +93,120 @@ import kotlinx.coroutines.withContext
 private const val WORKER_PROCESS = "com.critical.vexaemulator:runtime_worker"
 private const val LOGCAT_TAG_RUNTIME_EXIT = "Vexa-RuntimeExit"
 
-class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
+/**
+ * Qt eglfs cannot reach /dev/input from the app sandbox, so guests get a
+ * TUIO 2Dcur stream instead: Qt's libqtuiotouchplugin binds a UDP socket in
+ * the runtime_worker (a real host socket via FEX passthrough) and we feed it
+ * OSC messages on loopback. x/y are normalized to the surface, Qt scales
+ * them onto the guest screen and synthesizes widget mouse events.
+ */
+private class TuioTouchSender {
+    private var socket: DatagramSocket? = null
+    private var sessionId = 1
+    private var fseq = 0
+    private var loggedSend = false
+    private val io = Executors.newSingleThreadExecutor()
+
+    var log: ((String) -> Unit)? = null
+
+    private fun oscPadded(buf: ByteBuffer, text: String) {
+        val bytes = text.toByteArray(Charsets.US_ASCII)
+        buf.put(bytes)
+        buf.put(0)
+        var pad = (4 - ((bytes.size + 1) % 4)) % 4
+        while (pad-- > 0) buf.put(0)
+    }
+
+    private fun msgSet(id: Int, x: Float, y: Float): ByteArray {
+        val buf = ByteBuffer.allocate(64)
+        oscPadded(buf, "/tuio/2Dcur")
+        oscPadded(buf, ",sifffff")
+        oscPadded(buf, "set")
+        buf.putInt(id)
+        buf.putFloat(x)
+        buf.putFloat(y)
+        buf.putFloat(0f)
+        buf.putFloat(0f)
+        buf.putFloat(0f)
+        return buf.array().copyOf(buf.position())
+    }
+
+    private fun msgAlive(vararg ids: Int): ByteArray {
+        val buf = ByteBuffer.allocate(64)
+        oscPadded(buf, "/tuio/2Dcur")
+        if (ids.isEmpty()) {
+            oscPadded(buf, ",s")
+        } else {
+            oscPadded(buf, ",s" + "i".repeat(ids.size))
+        }
+        oscPadded(buf, "alive")
+        for (id in ids) buf.putInt(id)
+        return buf.array().copyOf(buf.position())
+    }
+
+    private fun msgFseq(frame: Int): ByteArray {
+        val buf = ByteBuffer.allocate(48)
+        oscPadded(buf, "/tuio/2Dcur")
+        oscPadded(buf, ",si")
+        oscPadded(buf, "fseq")
+        buf.putInt(frame)
+        return buf.array().copyOf(buf.position())
+    }
+
+    private fun sendBundle(vararg msgs: ByteArray) {
+        val bodySize = msgs.sumOf { 4 + it.size }
+        val buf = ByteBuffer.allocate(16 + bodySize)
+        buf.put("#bundle\u0000".toByteArray(Charsets.US_ASCII))
+        buf.putLong(1) // timetag: immediately
+        for (m in msgs) {
+            buf.putInt(m.size)
+            buf.put(m)
+        }
+        val bytes = buf.array().copyOf(buf.position())
+        io.execute {
+            try {
+                if (socket == null) socket = DatagramSocket()
+                val addr = InetAddress.getLoopbackAddress()
+                socket?.send(DatagramPacket(bytes, bytes.size, addr, 3333))
+                if (!loggedSend) {
+                    loggedSend = true
+                    log?.invoke("TUIO first send ok, ${bytes.size} bytes to ${addr.hostAddress}:3333")
+                }
+            } catch (e: Exception) {
+                log?.invoke("TUIO send failed: ${e.javaClass.simpleName}: ${e.message}")
+            }
+        }
+    }
+
+    fun touchDown(x: Float, y: Float) {
+        sessionId++
+        val id = sessionId
+        sendBundle(msgAlive(id), msgSet(id, x, y), msgFseq(++fseq))
+    }
+
+    fun touchMove(x: Float, y: Float) {
+        sendBundle(msgAlive(sessionId), msgSet(sessionId, x, y), msgFseq(++fseq))
+    }
+
+    fun touchUp() {
+        sendBundle(msgAlive(), msgFseq(++fseq))
+    }
+
+    /** Single down+up tap at normalized position. */
+    fun tap(x: Float, y: Float) {
+        touchDown(x, y)
+        touchUp()
+    }
+}
+
+class GameActivity : ComponentActivity(), android.view.TextureView.SurfaceTextureListener {
     companion object {
         const val EXTRA_PROGRAM_ID = "programId"
     }
-    private lateinit var gameSurfaceView: SurfaceView
+    private lateinit var gameSurfaceView: android.view.TextureView
+    // TextureView keeps its SurfaceTexture across background trips, so the guest's EGL
+    // surface (bound once, never re-created) stays valid. Released in onDestroy.
+    private var persistentSurface: Surface? = null
     private var isExiting = false
 
     private var latestSurface: Surface? = null
@@ -110,6 +224,11 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
     private var lastPointerAtMs = 0L
     private var loggedTouch = false
     private val pointerRecord = ByteBuffer.allocate(16).order(ByteOrder.LITTLE_ENDIAN)
+    private val tuioTouch = TuioTouchSender().apply {
+        log = { msg ->
+            VexaLogger.log(LogLevel.INFO, LogCategory.SURFACE, msg, emptyMap())
+        }
+    }
 
     private fun closeGameActivity() {
         if (isExiting) return
@@ -196,7 +315,19 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
     private var showLoading by mutableStateOf(true)
     private var showDebugMenu by mutableStateOf(false)
     private var hideFilters by mutableStateOf(true)
-    private var lastRuntimePid: Int? = null
+    private var lastRuntimePid by mutableStateOf<Int?>(null)
+
+    // Boot checklist flags, in the order the loading screen lists them.
+    private var bootInstalled by mutableStateOf(false)
+    private var bootConnected by mutableStateOf(false)
+    private var bootLandscape by mutableStateOf(false)
+    private var bootPublished by mutableStateOf(false)
+    private var bootStarted by mutableStateOf(false)
+    private val bootStep: Int
+        get() = listOf(bootInstalled, bootConnected, bootLandscape, bootPublished, bootStarted)
+            .takeWhile { it }.size
+    private var surfaceSizeLabel by mutableStateOf<String?>(null)
+    private val sessionStartMs = System.currentTimeMillis()
     private var runtimeConnectedAtMs: Long = 0L
     private var lastReportedExitKey: String? = null
 
@@ -216,13 +347,21 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
             )
             return false
         }
+        bootLandscape = true
+        surfaceSizeLabel = "$surfaceWidth×$surfaceHeight"
         guestRootfs = request.rootfsPath
         if (!publishGuestWindowSize(request.rootfsPath, surfaceWidth, surfaceHeight)) return false
+        bootPublished = true
         runtimeStarted = true
         sendSurfaceCreated(surface)
         sendStartRuntime(request)
-        // The full-screen overlay sits on top of the guest surface and costs composition time every frame.
-        showLoading = false
+        bootStarted = true
+        // The full-screen overlay sits on top of the guest surface and costs composition time every frame;
+        // keep it just long enough for the last checklist tick to land.
+        lifecycleScope.launch {
+            delay(450)
+            showLoading = false
+        }
         return true
     }
 
@@ -285,11 +424,20 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
         val maxY = (surfaceHeight - 1).coerceAtLeast(0)
         val x = event.x.toInt().coerceIn(0, maxX)
         val y = event.y.toInt().coerceIn(0, maxY)
+        // event.x/y are view pixels; the EGL surface may be larger than the
+        // view (SurfaceFlinger scales), so normalize against the view the
+        // touch actually landed on. Qt maps TUIO's normalized coords onto its
+        // screen geometry, which tracks the ANativeWindow size.
+        val vw = if (::gameSurfaceView.isInitialized) gameSurfaceView.width else 0
+        val vh = if (::gameSurfaceView.isInitialized) gameSurfaceView.height else 0
+        val nx = if (vw > 0) (event.x / vw).coerceIn(0f, 1f) else 0f
+        val ny = if (vh > 0) (event.y / vh).coerceIn(0f, 1f) else 0f
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 pointerDown = true
                 writePointer(6, x, y, 0)
                 writePointer(4, x, y, 0)
+                tuioTouch.touchDown(nx, ny)
                 lastPointerX = x
                 lastPointerY = y
                 lastPointerAtMs = SystemClock.uptimeMillis()
@@ -300,6 +448,7 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
                 val moved = kotlin.math.abs(x - lastPointerX) >= 4 || kotlin.math.abs(y - lastPointerY) >= 4
                 if (!moved && now - lastPointerAtMs < 8L) return
                 writePointer(6, x, y, 256)
+                tuioTouch.touchMove(nx, ny)
                 lastPointerX = x
                 lastPointerY = y
                 lastPointerAtMs = now
@@ -309,6 +458,7 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
                 pointerDown = false
                 writePointer(6, x, y, 256)
                 writePointer(5, x, y, 256)
+                tuioTouch.touchUp()
             }
         }
     }
@@ -531,7 +681,14 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
             serviceMessenger = Messenger(service)
             runtimeBound = true
             runtimeConnectedAtMs = System.currentTimeMillis()
+            bootConnected = true
             sendRegister()
+
+            // Returning from the background: the runtime kept running but the
+            // SurfaceView recreated its Surface while we were unbound.
+            if (runtimeStarted) {
+                latestSurface?.takeIf { it.isValid }?.let { sendSurfaceCreated(it) }
+            }
 
             pendingLaunchRequest?.let { req ->
                 if (tryLaunchWithSurface(req)) {
@@ -590,6 +747,7 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        VexaPrefs.init(this)
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
@@ -626,11 +784,9 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
             )
         )
 
-        gameSurfaceView = SurfaceView(this).also { sv ->
-            sv.setZOrderOnTop(false)
-            sv.holder.addCallback(this)
-            // Opaque lets SurfaceFlinger scan the guest buffer out directly instead of blending it every frame.
-            sv.holder.setFormat(android.graphics.PixelFormat.OPAQUE)
+        gameSurfaceView = android.view.TextureView(this).also { sv ->
+            sv.surfaceTextureListener = this
+            sv.isOpaque = true
             sv.isClickable = true
             sv.isFocusable = true
             sv.setOnTouchListener { _, event ->
@@ -647,22 +803,163 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
             )
         )
 
+        val program = com.critical.vexaemulator.guest.GuestCatalog.find(
+            intent.getStringExtra(EXTRA_PROGRAM_ID).orEmpty()
+        )
         setContent {
-            GameScreen(
-                surfaceView = gameSurfaceView,
-                showLoading = showLoading,
-                showDebugMenu = showDebugMenu,
-                onToggleDebugMenu = { showDebugMenu = !showDebugMenu },
-                hideFilters = hideFilters,
-                onHideFilters = { hideFilters = !hideFilters },
-                onBack = { closeGameActivity() },
-            )
+            VexaEmulatorTheme(darkTheme = VexaPrefs.themeMode.resolveDark(), animate = true) {
+                GameScreen(
+                    surfaceView = gameSurfaceView,
+                    program = program,
+                    runtimePid = lastRuntimePid,
+                    sessionStartMs = sessionStartMs,
+                    bootStep = bootStep,
+                    surfaceSize = surfaceSizeLabel,
+                    showLoading = showLoading,
+                    showDebugMenu = showDebugMenu,
+                    onToggleDebugMenu = { showDebugMenu = !showDebugMenu },
+                    hideFilters = hideFilters,
+                    onHideFilters = { hideFilters = !hideFilters },
+                    onBack = { closeGameActivity() },
+                )
+            }
         }
         VexaLogger.log(
             level = LogLevel.INFO,
             category = LogCategory.SURFACE,
             message = "SurfaceView object attached"
         )
+
+        startTuioCommandPoller()
+    }
+
+    /**
+     * Debug/scripting channel: a guest-side file carrying normalized TUIO
+     * commands ("tap x y", "down x y", "move x y", "up"). Qt maps TUIO
+     * positions onto the focused window's rectangle, so physical taps can
+     * never express dialog-relative coordinates; this file can.
+     */
+    @Volatile private var loginWatchFile: java.io.File? = null
+    @Volatile private var loginWatchBaseline = 0L
+    @Volatile private var loginWatchDeadline = 0L
+
+    private var bgOverlay: android.view.View? = null
+
+    private fun addBgOverlay() {
+        if (bgOverlay != null || !android.provider.Settings.canDrawOverlays(this)) return
+        try {
+            val v = android.view.View(this)
+            val lp = android.view.WindowManager.LayoutParams(
+                1, 1,
+                android.view.WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+                android.graphics.PixelFormat.TRANSLUCENT
+            )
+            getSystemService(android.view.WindowManager::class.java).addView(v, lp)
+            bgOverlay = v
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun removeBgOverlay() {
+        bgOverlay?.let {
+            try { getSystemService(android.view.WindowManager::class.java).removeView(it) } catch (_: Exception) {}
+        }
+        bgOverlay = null
+    }
+
+    private fun bringToFront() {
+        try {
+            val am = getSystemService(android.app.ActivityManager::class.java)
+            am.appTasks.firstOrNull()?.moveToFront()
+        } catch (_: Exception) {
+        }
+        try {
+            startActivity(
+                Intent(this, GameActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            )
+        } catch (_: Exception) {
+        }
+        removeBgOverlay()
+    }
+
+    private fun startTuioCommandPoller() {
+        lifecycleScope.launch(Dispatchers.IO) {
+            while (true) {
+                try {
+                    val root = guestRootfs
+                    if (root != null) {
+                        val cmdFile = java.io.File(root, "tmp/vexa-tuio-cmd")
+                        if (cmdFile.isFile) {
+                            val line = cmdFile.readText().trim()
+                            cmdFile.delete()
+                            val t = line.split("\\s+".toRegex())
+                            if (t.isNotEmpty()) {
+                                val x = t.getOrNull(1)?.toFloatOrNull() ?: 0f
+                                val y = t.getOrNull(2)?.toFloatOrNull() ?: 0f
+                                when (t[0]) {
+                                    "tap" -> tuioTouch.tap(x, y)
+                                    "down" -> tuioTouch.touchDown(x, y)
+                                    "move" -> tuioTouch.touchMove(x, y)
+                                    "up" -> tuioTouch.touchUp()
+                                }
+                                VexaLogger.log(
+                                    LogLevel.INFO, LogCategory.SURFACE,
+                                    "TUIO cmd: $line", emptyMap()
+                                )
+                            }
+                        }
+                        val urlCandidates = buildList {
+                            add(java.io.File(root, "tmp/vexa-open-url"))
+                            java.io.File(java.io.File(root).parentFile, "guests").listFiles()?.forEach {
+                                add(java.io.File(it, "tmp/vexa-open-url"))
+                            }
+                        }
+                        val urlFile = urlCandidates.firstOrNull { it.isFile }
+                        if (urlFile != null) {
+                            val url = urlFile.readText().trim()
+                            urlFile.delete()
+                            if (url.startsWith("https://") || url.startsWith("http://")) {
+                                VexaLogger.log(
+                                    LogLevel.INFO, LogCategory.SURFACE,
+                                    "Guest open-url: $url", emptyMap()
+                                )
+                                if (url.contains("redirect_uri=http://127.0.0.1") ||
+                                    url.contains("redirect_uri=http%3A%2F%2F127.0.0.1")
+                                ) {
+                                    val acc = java.io.File(
+                                        java.io.File(root).parentFile,
+                                        "guests/prismlauncher/data/accounts.json"
+                                    )
+                                    loginWatchFile = acc
+                                    loginWatchBaseline = acc.lastModified()
+                                    loginWatchDeadline = System.currentTimeMillis() + 10 * 60_000L
+                                    withContext(Dispatchers.Main) { addBgOverlay() }
+                                }
+                                startActivity(
+                                    Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url))
+                                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                )
+                            }
+                        }
+                        val watch = loginWatchFile
+                        if (watch != null) {
+                            if (System.currentTimeMillis() > loginWatchDeadline) {
+                                loginWatchFile = null
+                            } else if (watch.lastModified() != loginWatchBaseline) {
+                                loginWatchFile = null
+                                delay(1000)
+                                withContext(Dispatchers.Main) { bringToFront() }
+                            }
+                        }
+                    }
+                } catch (_: Exception) {
+                }
+                delay(120)
+            }
+        }
     }
 
     // Guests present through eglSwapBuffers, so the display rate caps their frame rate.
@@ -687,6 +984,9 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
     override fun onStart() {
         super.onStart()
         val intent = Intent(this, RuntimeService::class.java)
+        // Started service: keeps the runtime (and guest worker) alive while the
+        // activity is stopped/backgrounded; bind alone would destroy it on unbind.
+        runCatching { startService(intent) }
         bindService(intent, runtimeConnection, Context.BIND_AUTO_CREATE)
     }
 
@@ -695,13 +995,36 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
         hideSystemBars()
     }
 
-    override fun surfaceCreated(holder: SurfaceHolder) {
-        latestSurface = holder.surface
+    override fun onSurfaceTextureAvailable(st: android.graphics.SurfaceTexture, width: Int, height: Int) {
+        val surface = persistentSurface?.takeIf { it.isValid } ?: Surface(st).also { persistentSurface = it }
+        handleSurfaceCreated(surface)
+        handleSurfaceChanged(4, width, height)
+    }
+
+    override fun onSurfaceTextureSizeChanged(st: android.graphics.SurfaceTexture, width: Int, height: Int) {
+        handleSurfaceChanged(4, width, height)
+    }
+
+    // false: keep the SurfaceTexture alive when the view detaches (background trip).
+    override fun onSurfaceTextureDestroyed(st: android.graphics.SurfaceTexture): Boolean = false
+
+    override fun onSurfaceTextureUpdated(st: android.graphics.SurfaceTexture) {}
+
+    private fun handleSurfaceCreated(surface: Surface) {
+        latestSurface = surface
         VexaLogger.log(
             level = LogLevel.INFO,
             category = LogCategory.SURFACE,
             message = "Game Surface is being created..."
         )
+        if (runtimeStarted) {
+            // Re-created after a background trip: keep the running guest, just
+            // give it the new Surface (resent on rebind if the service is not bound yet).
+            if (runtimeBound && serviceMessenger != null) {
+                sendSurfaceCreated(surface)
+            }
+            return
+        }
         val program = com.critical.vexaemulator.guest.GuestCatalog.find(
             intent.getStringExtra(EXTRA_PROGRAM_ID).orEmpty()
         )
@@ -714,6 +1037,7 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
             return
         }
         val request = com.critical.vexaemulator.guest.GuestInstaller.install(this, program)
+        bootInstalled = true
         VexaLogger.log(
             level = LogLevel.INFO,
             category = LogCategory.BOOT,
@@ -765,8 +1089,7 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
 
     }
 
-    override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
-        latestSurface = holder.surface
+    private fun handleSurfaceChanged(format: Int, width: Int, height: Int) {
         surfaceWidth = width
         surfaceHeight = height
         if (width > height) {
@@ -792,30 +1115,6 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
         // RuntimeBridge.onRuntimeSurfaceChanged(width, height) replace this with actual sendSurfaceChanged() later from RuntimeService.kt or make the game control it.
     }
 
-    override fun surfaceDestroyed(holder: SurfaceHolder) {
-        VexaLogger.log(
-            level = LogLevel.INFO,
-            category = LogCategory.SURFACE,
-            message = "Game Surface destroy callback received...",
-            fields = mapOf(
-                "surfaceHash" to holder.surface.hashCode().toString(),
-                "isValid" to holder.surface.isValid.toString()
-            )
-        )
-        latestSurface = null
-        sendSurfaceDestroyed()
-
-        VexaLogger.log(
-            level = LogLevel.INFO,
-            category = LogCategory.SURFACE,
-            message = "Game Surface destroy after surface teardown by request",
-            fields = mapOf(
-                "surfaceHash" to holder.surface.hashCode().toString(),
-                "isValid" to holder.surface.isValid.toString()
-            )
-        )
-    }
-
     override fun onStop() {
         if (runtimeBound) {
             sendUnregister()
@@ -834,6 +1133,15 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
                 unbindService(runtimeConnection)
             }
             runtimeBound = false
+        }
+        if (isFinishing) {
+            runCatching { stopService(Intent(this, RuntimeService::class.java)) }
+            latestSurface = null
+            persistentSurface?.release()
+            persistentSurface = null
+            if (::gameSurfaceView.isInitialized) {
+                gameSurfaceView.surfaceTexture?.release()
+            }
         }
         super.onDestroy()
     }
@@ -890,9 +1198,15 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
     }
 }
 
+
 @Composable
 private fun GameScreen(
-    surfaceView: SurfaceView,
+    surfaceView: android.view.View,
+    program: GuestProgram?,
+    runtimePid: Int?,
+    sessionStartMs: Long,
+    bootStep: Int,
+    surfaceSize: String?,
     showLoading: Boolean,
     showDebugMenu: Boolean,
     onToggleDebugMenu: () -> Unit,
@@ -900,164 +1214,113 @@ private fun GameScreen(
     onHideFilters: () -> Unit,
     onBack: () -> Unit,
 ) {
+    val c = VexaTheme.colors
     val entries by LogStore.entries.collectAsState()
-    var outputOpen by remember { mutableStateOf(true) }
-    var bootDone by remember { mutableStateOf(false) }
-    var wakeAbove by remember { mutableIntStateOf(Int.MAX_VALUE) }
-    var timerArmed by remember { mutableStateOf(false) }
-    var generation by remember { mutableIntStateOf(0) }
 
-    LaunchedEffect(Unit) {
-        kotlinx.coroutines.delay(5_000)
-        bootDone = true
-        if (outputOpen) {
-            wakeAbove = entries.size
-            outputOpen = false
+    // Quick panel: 0 = closed, 1 = open. Dragged by the edge handle, settles with a spring.
+    val scope = rememberCoroutineScope()
+    val haptics = rememberHaptics()
+    val density = LocalDensity.current
+    val panelWidthPx = with(density) { 320.dp.toPx() }
+    val drawer = remember { Animatable(0f) }
+    var debugLevels by remember { mutableStateOf(setOf<LogLevel>()) }
+    val openDebug: (Set<LogLevel>) -> Unit = { levels ->
+        scope.launch { drawer.snapTo(0f) }
+        debugLevels = levels
+        if (levels.isNotEmpty() && hideFilters) onHideFilters()
+        onToggleDebugMenu()
+    }
+    val settle: (Boolean) -> Unit = { open ->
+        scope.launch {
+            drawer.animateTo(if (open) 1f else 0f, spring(dampingRatio = 0.82f, stiffness = 380f))
         }
-    }
-    LaunchedEffect(entries.size, bootDone) {
-        if (!bootDone) return@LaunchedEffect
-        if (entries.size > wakeAbove) {
-            outputOpen = true
-            wakeAbove = Int.MAX_VALUE
-            timerArmed = true
-            generation++
-        } else if (outputOpen && timerArmed) {
-            generation++
-        }
-    }
-    LaunchedEffect(generation, timerArmed) {
-        if (!timerArmed || generation == 0) return@LaunchedEffect
-        kotlinx.coroutines.delay(5_000)
-        wakeAbove = entries.size
-        outputOpen = false
-        timerArmed = false
+        if (open) haptics.confirm()
     }
 
-    fun showOutput() {
-        outputOpen = true
-        wakeAbove = Int.MAX_VALUE
-        timerArmed = true
-        generation++
-    }
-
-    fun hideOutput() {
-        outputOpen = false
-        wakeAbove = entries.size
-        timerArmed = false
-    }
-
-    Box(modifier = Modifier.fillMaxSize().background(VexaBlack)) {
+    Box(modifier = Modifier.fillMaxSize().background(VoidColors.bgBase)) {
         AndroidView(
             factory = { surfaceView },
             modifier = Modifier.fillMaxSize()
         )
 
-        AnimatedVisibility(
-            visible = showLoading,
-            enter = fadeIn(tween(450)),
-            exit = fadeOut(tween(450)),
-        ) {
-            GameLoadingOverlay(
-                message = "Starting the program",
-                isDebugMenuOpen = showDebugMenu,
-                onToggleDebugMenu = onToggleDebugMenu,
-                onHideFilters = onHideFilters
+        if (!showLoading && !showDebugMenu) {
+            val open = drawer.value
+            if (open > 0f) {
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .graphicsLayer { alpha = open }
+                        .background(c.scrim)
+                        .pointerInput(Unit) { detectTapGestures { settle(false) } },
+                )
+            }
+            Box(
+                Modifier
+                    .align(Alignment.CenterEnd)
+                    .graphicsLayer { translationX = (1f - drawer.value) * panelWidthPx }
+                    .pointerInput(Unit) {
+                        detectHorizontalDragGestures(
+                            onDragEnd = { settle(drawer.value > 0.6f) },
+                            onDragCancel = { settle(drawer.value > 0.6f) },
+                        ) { change, dx ->
+                            change.consume()
+                            scope.launch { drawer.snapTo((drawer.value - dx / panelWidthPx).coerceIn(0f, 1f)) }
+                        }
+                    },
+            ) {
+                if (open > 0f) {
+                    QuickPanel(
+                        program = program,
+                        runtimePid = runtimePid,
+                        sessionStartMs = sessionStartMs,
+                        entries = entries,
+                        onOpenDebug = { openDebug(emptySet()) },
+                        onOpenLogs = openDebug,
+                        onExit = onBack,
+                    )
+                }
+            }
+            EdgeHandle(
+                open = open,
+                onDrag = { dx -> scope.launch { drawer.snapTo((drawer.value - dx / panelWidthPx).coerceIn(0f, 1f)) } },
+                onDragEnd = { settle(drawer.value > 0.25f) },
+                onTap = { settle(drawer.value < 0.5f) },
+                modifier = Modifier
+                    .align(Alignment.CenterEnd)
+                    .graphicsLayer { translationX = -drawer.value * panelWidthPx },
             )
         }
 
-        if (!showDebugMenu) {
-            AnimatedVisibility(
-                visible = outputOpen,
-                enter = fadeIn(tween(180)) + expandVertically(),
-                exit = fadeOut(tween(180)) + shrinkVertically(),
-                modifier = Modifier.align(Alignment.BottomCenter),
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(SurfaceHi.copy(alpha = 0.94f))
-                        .padding(12.dp)
-                ) {
-                    Text("Output", color = Ink, style = MonospaceTypography.titleSmall)
-                    LazyColumn(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(120.dp)
-                            .padding(top = 8.dp)
-                    ) {
-                        if (entries.isEmpty()) {
-                            item {
-                                Text(
-                                    "Waiting for the program.",
-                                    color = InkMuted,
-                                    style = MonospaceTypography.bodySmall,
-                                )
-                            }
-                        } else {
-                            items(entries.takeLast(12), key = { it.id }) { entry ->
-                                Text(
-                                    text = "${entry.level} ${entry.category}: ${entry.message}",
-                                    color = if (entry.level == LogLevel.ERROR || entry.level == LogLevel.FATAL) {
-                                        ThemeError
-                                    } else {
-                                        Ink
-                                    },
-                                    style = MonospaceTypography.bodySmall,
-                                )
-                            }
-                        }
-                    }
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 8.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        GameHudChip(text = "Hide", color = Ink, onClick = { hideOutput() })
-                        GameHudChip(text = "Debug", color = VexaAccent, onClick = onToggleDebugMenu)
-                        GameHudChip(text = "Back", color = Ink, onClick = onBack)
-                    }
-                }
-            }
-            AnimatedVisibility(
-                visible = !outputOpen,
-                enter = fadeIn(tween(180)),
-                exit = fadeOut(tween(120)),
-                modifier = Modifier.align(Alignment.BottomCenter),
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(44.dp)
-                        .background(SurfaceHi.copy(alpha = 0.88f))
-                        .padding(horizontal = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxSize()
-                            .clickable { showOutput() },
-                        contentAlignment = Alignment.CenterStart,
-                    ) {
-                        Text("Output", color = Ink, style = MonospaceTypography.labelLarge)
-                    }
-                    GameHudChip(text = "Debug", color = VexaAccent, onClick = onToggleDebugMenu)
-                }
-            }
+        AnimatedVisibility(
+            visible = showLoading,
+            enter = fadeIn(tween(450)),
+            exit = fadeOut(tween(450)) + scaleOut(targetScale = 1.04f, animationSpec = tween(450)),
+        ) {
+            GameLoadingOverlay(
+                program = program,
+                step = bootStep,
+                surfaceSize = surfaceSize,
+                lastMessage = entries.lastOrNull()?.message,
+                onDebug = { openDebug(emptySet()) },
+                onClose = onBack,
+            )
         }
 
         AnimatedVisibility(
             visible = showDebugMenu,
-            enter = fadeIn(tween(300)) + scaleIn(initialScale = 0.97f, animationSpec = tween(300)),
-            exit = fadeOut(tween(220)) + scaleOut(targetScale = 0.97f, animationSpec = tween(220)),
+            enter = fadeIn(tween(VexaMotion.MEDIUM)) +
+                scaleIn(initialScale = 0.4f, transformOrigin = TransformOrigin(1f, 0.5f), animationSpec = tween(VexaMotion.MEDIUM, easing = VexaMotion.Emphasized)) +
+                slideInHorizontally(tween(VexaMotion.MEDIUM, easing = VexaMotion.Emphasized)) { it / 5 },
+            exit = fadeOut(tween(240)) +
+                scaleOut(targetScale = 0.15f, transformOrigin = TransformOrigin(1f, 0.5f), animationSpec = tween(280, easing = VexaMotion.Emphasized)) +
+                slideOutHorizontally(tween(280, easing = VexaMotion.Emphasized)) { it / 3 },
         ) {
             GameDebugPanel(
                 hideFilters = hideFilters,
                 onClose = onToggleDebugMenu,
                 onHideFilters = onHideFilters,
+                subtitle = listOfNotNull(program?.id, runtimePid?.let { "pid $it" }).joinToString(" · ").ifEmpty { null },
+                initialLevels = debugLevels,
             )
         }
     }
