@@ -27,36 +27,35 @@ import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
-import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
@@ -70,16 +69,18 @@ import com.critical.vexaemulator.logging.VexaLogger
 import com.critical.vexaemulator.runtime.LaunchRequest
 import com.critical.vexaemulator.runtime.RuntimeIpc
 import com.critical.vexaemulator.runtime.RuntimeService
+import com.critical.vexaemulator.guest.GuestProgram
+import com.critical.vexaemulator.ui.EdgeHandle
 import com.critical.vexaemulator.ui.GameDebugPanel
-import com.critical.vexaemulator.ui.GameHudChip
 import com.critical.vexaemulator.ui.GameLoadingOverlay
-import com.critical.vexaemulator.ui.theme.Error as ThemeError
-import com.critical.vexaemulator.ui.theme.Ink
-import com.critical.vexaemulator.ui.theme.InkMuted
-import com.critical.vexaemulator.ui.theme.MonospaceTypography
-import com.critical.vexaemulator.ui.theme.SurfaceHi
-import com.critical.vexaemulator.ui.theme.VexaAccent
-import com.critical.vexaemulator.ui.theme.VexaBlack
+import com.critical.vexaemulator.ui.QuickPanel
+import com.critical.vexaemulator.ui.VexaPrefs
+import com.critical.vexaemulator.ui.rememberHaptics
+import com.critical.vexaemulator.ui.theme.VexaEmulatorTheme
+import com.critical.vexaemulator.ui.theme.VexaMotion
+import com.critical.vexaemulator.ui.theme.VexaTheme
+import com.critical.vexaemulator.ui.theme.VoidColors
+import com.critical.vexaemulator.ui.theme.resolveDark
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -196,7 +197,19 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
     private var showLoading by mutableStateOf(true)
     private var showDebugMenu by mutableStateOf(false)
     private var hideFilters by mutableStateOf(true)
-    private var lastRuntimePid: Int? = null
+    private var lastRuntimePid by mutableStateOf<Int?>(null)
+
+    // Boot checklist flags, in the order the loading screen lists them.
+    private var bootInstalled by mutableStateOf(false)
+    private var bootConnected by mutableStateOf(false)
+    private var bootLandscape by mutableStateOf(false)
+    private var bootPublished by mutableStateOf(false)
+    private var bootStarted by mutableStateOf(false)
+    private val bootStep: Int
+        get() = listOf(bootInstalled, bootConnected, bootLandscape, bootPublished, bootStarted)
+            .takeWhile { it }.size
+    private var surfaceSizeLabel by mutableStateOf<String?>(null)
+    private val sessionStartMs = System.currentTimeMillis()
     private var runtimeConnectedAtMs: Long = 0L
     private var lastReportedExitKey: String? = null
 
@@ -216,13 +229,21 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
             )
             return false
         }
+        bootLandscape = true
+        surfaceSizeLabel = "$surfaceWidth×$surfaceHeight"
         guestRootfs = request.rootfsPath
         if (!publishGuestWindowSize(request.rootfsPath, surfaceWidth, surfaceHeight)) return false
+        bootPublished = true
         runtimeStarted = true
         sendSurfaceCreated(surface)
         sendStartRuntime(request)
-        // The full-screen overlay sits on top of the guest surface and costs composition time every frame.
-        showLoading = false
+        bootStarted = true
+        // The full-screen overlay sits on top of the guest surface and costs composition time every frame;
+        // keep it just long enough for the last checklist tick to land.
+        lifecycleScope.launch {
+            delay(450)
+            showLoading = false
+        }
         return true
     }
 
@@ -531,6 +552,7 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
             serviceMessenger = Messenger(service)
             runtimeBound = true
             runtimeConnectedAtMs = System.currentTimeMillis()
+            bootConnected = true
             sendRegister()
 
             pendingLaunchRequest?.let { req ->
@@ -590,6 +612,7 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        VexaPrefs.init(this)
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
@@ -647,16 +670,26 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
             )
         )
 
+        val program = com.critical.vexaemulator.guest.GuestCatalog.find(
+            intent.getStringExtra(EXTRA_PROGRAM_ID).orEmpty()
+        )
         setContent {
-            GameScreen(
-                surfaceView = gameSurfaceView,
-                showLoading = showLoading,
-                showDebugMenu = showDebugMenu,
-                onToggleDebugMenu = { showDebugMenu = !showDebugMenu },
-                hideFilters = hideFilters,
-                onHideFilters = { hideFilters = !hideFilters },
-                onBack = { closeGameActivity() },
-            )
+            VexaEmulatorTheme(darkTheme = VexaPrefs.themeMode.resolveDark(), animate = true) {
+                GameScreen(
+                    surfaceView = gameSurfaceView,
+                    program = program,
+                    runtimePid = lastRuntimePid,
+                    sessionStartMs = sessionStartMs,
+                    bootStep = bootStep,
+                    surfaceSize = surfaceSizeLabel,
+                    showLoading = showLoading,
+                    showDebugMenu = showDebugMenu,
+                    onToggleDebugMenu = { showDebugMenu = !showDebugMenu },
+                    hideFilters = hideFilters,
+                    onHideFilters = { hideFilters = !hideFilters },
+                    onBack = { closeGameActivity() },
+                )
+            }
         }
         VexaLogger.log(
             level = LogLevel.INFO,
@@ -714,6 +747,7 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
             return
         }
         val request = com.critical.vexaemulator.guest.GuestInstaller.install(this, program)
+        bootInstalled = true
         VexaLogger.log(
             level = LogLevel.INFO,
             category = LogCategory.BOOT,
@@ -890,9 +924,15 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
     }
 }
 
+
 @Composable
 private fun GameScreen(
     surfaceView: SurfaceView,
+    program: GuestProgram?,
+    runtimePid: Int?,
+    sessionStartMs: Long,
+    bootStep: Int,
+    surfaceSize: String?,
     showLoading: Boolean,
     showDebugMenu: Boolean,
     onToggleDebugMenu: () -> Unit,
@@ -900,164 +940,113 @@ private fun GameScreen(
     onHideFilters: () -> Unit,
     onBack: () -> Unit,
 ) {
+    val c = VexaTheme.colors
     val entries by LogStore.entries.collectAsState()
-    var outputOpen by remember { mutableStateOf(true) }
-    var bootDone by remember { mutableStateOf(false) }
-    var wakeAbove by remember { mutableIntStateOf(Int.MAX_VALUE) }
-    var timerArmed by remember { mutableStateOf(false) }
-    var generation by remember { mutableIntStateOf(0) }
 
-    LaunchedEffect(Unit) {
-        kotlinx.coroutines.delay(5_000)
-        bootDone = true
-        if (outputOpen) {
-            wakeAbove = entries.size
-            outputOpen = false
+    // Quick panel: 0 = closed, 1 = open. Dragged by the edge handle, settles with a spring.
+    val scope = rememberCoroutineScope()
+    val haptics = rememberHaptics()
+    val density = LocalDensity.current
+    val panelWidthPx = with(density) { 320.dp.toPx() }
+    val drawer = remember { Animatable(0f) }
+    var debugLevels by remember { mutableStateOf(setOf<LogLevel>()) }
+    val openDebug: (Set<LogLevel>) -> Unit = { levels ->
+        scope.launch { drawer.snapTo(0f) }
+        debugLevels = levels
+        if (levels.isNotEmpty() && hideFilters) onHideFilters()
+        onToggleDebugMenu()
+    }
+    val settle: (Boolean) -> Unit = { open ->
+        scope.launch {
+            drawer.animateTo(if (open) 1f else 0f, spring(dampingRatio = 0.82f, stiffness = 380f))
         }
-    }
-    LaunchedEffect(entries.size, bootDone) {
-        if (!bootDone) return@LaunchedEffect
-        if (entries.size > wakeAbove) {
-            outputOpen = true
-            wakeAbove = Int.MAX_VALUE
-            timerArmed = true
-            generation++
-        } else if (outputOpen && timerArmed) {
-            generation++
-        }
-    }
-    LaunchedEffect(generation, timerArmed) {
-        if (!timerArmed || generation == 0) return@LaunchedEffect
-        kotlinx.coroutines.delay(5_000)
-        wakeAbove = entries.size
-        outputOpen = false
-        timerArmed = false
+        if (open) haptics.confirm()
     }
 
-    fun showOutput() {
-        outputOpen = true
-        wakeAbove = Int.MAX_VALUE
-        timerArmed = true
-        generation++
-    }
-
-    fun hideOutput() {
-        outputOpen = false
-        wakeAbove = entries.size
-        timerArmed = false
-    }
-
-    Box(modifier = Modifier.fillMaxSize().background(VexaBlack)) {
+    Box(modifier = Modifier.fillMaxSize().background(VoidColors.bgBase)) {
         AndroidView(
             factory = { surfaceView },
             modifier = Modifier.fillMaxSize()
         )
 
-        AnimatedVisibility(
-            visible = showLoading,
-            enter = fadeIn(tween(450)),
-            exit = fadeOut(tween(450)),
-        ) {
-            GameLoadingOverlay(
-                message = "Starting the program",
-                isDebugMenuOpen = showDebugMenu,
-                onToggleDebugMenu = onToggleDebugMenu,
-                onHideFilters = onHideFilters
+        if (!showLoading && !showDebugMenu) {
+            val open = drawer.value
+            if (open > 0f) {
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .graphicsLayer { alpha = open }
+                        .background(c.scrim)
+                        .pointerInput(Unit) { detectTapGestures { settle(false) } },
+                )
+            }
+            Box(
+                Modifier
+                    .align(Alignment.CenterEnd)
+                    .graphicsLayer { translationX = (1f - drawer.value) * panelWidthPx }
+                    .pointerInput(Unit) {
+                        detectHorizontalDragGestures(
+                            onDragEnd = { settle(drawer.value > 0.6f) },
+                            onDragCancel = { settle(drawer.value > 0.6f) },
+                        ) { change, dx ->
+                            change.consume()
+                            scope.launch { drawer.snapTo((drawer.value - dx / panelWidthPx).coerceIn(0f, 1f)) }
+                        }
+                    },
+            ) {
+                if (open > 0f) {
+                    QuickPanel(
+                        program = program,
+                        runtimePid = runtimePid,
+                        sessionStartMs = sessionStartMs,
+                        entries = entries,
+                        onOpenDebug = { openDebug(emptySet()) },
+                        onOpenLogs = openDebug,
+                        onExit = onBack,
+                    )
+                }
+            }
+            EdgeHandle(
+                open = open,
+                onDrag = { dx -> scope.launch { drawer.snapTo((drawer.value - dx / panelWidthPx).coerceIn(0f, 1f)) } },
+                onDragEnd = { settle(drawer.value > 0.25f) },
+                onTap = { settle(drawer.value < 0.5f) },
+                modifier = Modifier
+                    .align(Alignment.CenterEnd)
+                    .graphicsLayer { translationX = -drawer.value * panelWidthPx },
             )
         }
 
-        if (!showDebugMenu) {
-            AnimatedVisibility(
-                visible = outputOpen,
-                enter = fadeIn(tween(180)) + expandVertically(),
-                exit = fadeOut(tween(180)) + shrinkVertically(),
-                modifier = Modifier.align(Alignment.BottomCenter),
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(SurfaceHi.copy(alpha = 0.94f))
-                        .padding(12.dp)
-                ) {
-                    Text("Output", color = Ink, style = MonospaceTypography.titleSmall)
-                    LazyColumn(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(120.dp)
-                            .padding(top = 8.dp)
-                    ) {
-                        if (entries.isEmpty()) {
-                            item {
-                                Text(
-                                    "Waiting for the program.",
-                                    color = InkMuted,
-                                    style = MonospaceTypography.bodySmall,
-                                )
-                            }
-                        } else {
-                            items(entries.takeLast(12), key = { it.id }) { entry ->
-                                Text(
-                                    text = "${entry.level} ${entry.category}: ${entry.message}",
-                                    color = if (entry.level == LogLevel.ERROR || entry.level == LogLevel.FATAL) {
-                                        ThemeError
-                                    } else {
-                                        Ink
-                                    },
-                                    style = MonospaceTypography.bodySmall,
-                                )
-                            }
-                        }
-                    }
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 8.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        GameHudChip(text = "Hide", color = Ink, onClick = { hideOutput() })
-                        GameHudChip(text = "Debug", color = VexaAccent, onClick = onToggleDebugMenu)
-                        GameHudChip(text = "Back", color = Ink, onClick = onBack)
-                    }
-                }
-            }
-            AnimatedVisibility(
-                visible = !outputOpen,
-                enter = fadeIn(tween(180)),
-                exit = fadeOut(tween(120)),
-                modifier = Modifier.align(Alignment.BottomCenter),
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(44.dp)
-                        .background(SurfaceHi.copy(alpha = 0.88f))
-                        .padding(horizontal = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxSize()
-                            .clickable { showOutput() },
-                        contentAlignment = Alignment.CenterStart,
-                    ) {
-                        Text("Output", color = Ink, style = MonospaceTypography.labelLarge)
-                    }
-                    GameHudChip(text = "Debug", color = VexaAccent, onClick = onToggleDebugMenu)
-                }
-            }
+        AnimatedVisibility(
+            visible = showLoading,
+            enter = fadeIn(tween(450)),
+            exit = fadeOut(tween(450)) + scaleOut(targetScale = 1.04f, animationSpec = tween(450)),
+        ) {
+            GameLoadingOverlay(
+                program = program,
+                step = bootStep,
+                surfaceSize = surfaceSize,
+                lastMessage = entries.lastOrNull()?.message,
+                onDebug = { openDebug(emptySet()) },
+                onClose = onBack,
+            )
         }
 
         AnimatedVisibility(
             visible = showDebugMenu,
-            enter = fadeIn(tween(300)) + scaleIn(initialScale = 0.97f, animationSpec = tween(300)),
-            exit = fadeOut(tween(220)) + scaleOut(targetScale = 0.97f, animationSpec = tween(220)),
+            enter = fadeIn(tween(VexaMotion.MEDIUM)) +
+                scaleIn(initialScale = 0.4f, transformOrigin = TransformOrigin(1f, 0.5f), animationSpec = tween(VexaMotion.MEDIUM, easing = VexaMotion.Emphasized)) +
+                slideInHorizontally(tween(VexaMotion.MEDIUM, easing = VexaMotion.Emphasized)) { it / 5 },
+            exit = fadeOut(tween(240)) +
+                scaleOut(targetScale = 0.15f, transformOrigin = TransformOrigin(1f, 0.5f), animationSpec = tween(280, easing = VexaMotion.Emphasized)) +
+                slideOutHorizontally(tween(280, easing = VexaMotion.Emphasized)) { it / 3 },
         ) {
             GameDebugPanel(
                 hideFilters = hideFilters,
                 onClose = onToggleDebugMenu,
                 onHideFilters = onHideFilters,
+                subtitle = listOfNotNull(program?.id, runtimePid?.let { "pid $it" }).joinToString(" · ").ifEmpty { null },
+                initialLevels = debugLevels,
             )
         }
     }

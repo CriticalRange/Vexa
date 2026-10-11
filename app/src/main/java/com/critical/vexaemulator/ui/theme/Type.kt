@@ -1,227 +1,101 @@
 package com.critical.vexaemulator.ui.theme
 
+import androidx.annotation.FontRes
 import androidx.compose.material3.Typography
+import androidx.compose.ui.text.ExperimentalTextApi
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontVariation
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
+import com.critical.vexaemulator.R
 
-// General UI scale — SansSerif, tight modern tracking.
-val Typography = Typography(
-    displayLarge = TextStyle(
-        fontFamily = FontFamily.SansSerif,
-        fontWeight = FontWeight.Black,
-        fontSize = 45.sp,
-        lineHeight = 52.sp,
-        letterSpacing = (-1.0).sp,
-    ),
-    displayMedium = TextStyle(
-        fontFamily = FontFamily.SansSerif,
-        fontWeight = FontWeight.Black,
-        fontSize = 34.sp,
-        lineHeight = 40.sp,
-        letterSpacing = (-1.2).sp,
-    ),
-    displaySmall = TextStyle(
-        fontFamily = FontFamily.SansSerif,
-        fontWeight = FontWeight.Bold,
-        fontSize = 28.sp,
-        lineHeight = 34.sp,
-        letterSpacing = (-0.6).sp,
-    ),
-    headlineLarge = TextStyle(
-        fontFamily = FontFamily.SansSerif,
-        fontWeight = FontWeight.SemiBold,
-        fontSize = 26.sp,
-        lineHeight = 32.sp,
-        letterSpacing = (-0.3).sp,
-    ),
-    headlineMedium = TextStyle(
-        fontFamily = FontFamily.SansSerif,
-        fontWeight = FontWeight.SemiBold,
-        fontSize = 22.sp,
-        lineHeight = 28.sp,
-        letterSpacing = (0.2).sp,
-    ),
-    headlineSmall = TextStyle(
-        fontFamily = FontFamily.SansSerif,
-        fontWeight = FontWeight.SemiBold,
-        fontSize = 18.sp,
-        lineHeight = 24.sp,
-        letterSpacing = (0.2).sp,
-    ),
-    titleLarge = TextStyle(
-        fontFamily = FontFamily.SansSerif,
-        fontWeight = FontWeight.SemiBold,
-        fontSize = 16.sp,
-        lineHeight = 22.sp,
-        letterSpacing = (0.2).sp,
-    ),
-    titleMedium = TextStyle(
-        fontFamily = FontFamily.SansSerif,
-        fontWeight = FontWeight.Medium,
-        fontSize = 15.sp,
-        lineHeight = 20.sp,
-        letterSpacing = (0.2).sp,
-    ),
-    titleSmall = TextStyle(
-        fontFamily = FontFamily.SansSerif,
-        fontWeight = FontWeight.Medium,
-        fontSize = 14.sp,
-        lineHeight = 20.sp,
-        letterSpacing = (0.2).sp,
-    ),
-    bodyLarge = TextStyle(
-        fontFamily = FontFamily.SansSerif,
-        fontWeight = FontWeight.Normal,
-        fontSize = 16.sp,
-        lineHeight = 24.sp,
-        letterSpacing = (0.2).sp,
-    ),
-    bodyMedium = TextStyle(
-        fontFamily = FontFamily.SansSerif,
-        fontWeight = FontWeight.Normal,
-        fontSize = 14.sp,
-        lineHeight = 20.sp,
-        letterSpacing = (0.2).sp,
-    ),
-    bodySmall = TextStyle(
-        fontFamily = FontFamily.SansSerif,
-        fontWeight = FontWeight.Normal,
-        fontSize = 12.sp,
-        lineHeight = 16.sp,
-        letterSpacing = (0.2).sp,
-    ),
-    labelLarge = TextStyle(
-        fontFamily = FontFamily.SansSerif,
-        fontWeight = FontWeight.Medium,
-        fontSize = 13.sp,
-        lineHeight = 18.sp,
-        letterSpacing = (0.2).sp,
-    ),
-    labelMedium = TextStyle(
-        fontFamily = FontFamily.SansSerif,
-        fontWeight = FontWeight.Medium,
-        fontSize = 11.sp,
-        lineHeight = 14.sp,
-        letterSpacing = (0.6).sp,
-    ),
-    labelSmall = TextStyle(
-        fontFamily = FontFamily.SansSerif,
-        fontWeight = FontWeight.Medium,
-        fontSize = 10.sp,
-        lineHeight = 14.sp,
-        letterSpacing = (0.4).sp,
-    ),
+// Bundled variable fonts (SIL OFL): each weight is a variation instance of one file.
+@OptIn(ExperimentalTextApi::class)
+private fun variableFamily(@FontRes res: Int, vararg weights: Int) = FontFamily(
+    weights.map { w ->
+        Font(
+            resId = res,
+            weight = FontWeight(w),
+            variationSettings = FontVariation.Settings(FontVariation.weight(w)),
+        )
+    },
 )
 
-// Terminal-style face used for logs, command surfaces and monospace readouts.
-val Monospace = FontFamily.Monospace
+val SpaceGrotesk = variableFamily(R.font.space_grotesk, 400, 500, 600, 700)
+val Inter = variableFamily(R.font.inter, 400, 500, 600, 700)
+val JetBrainsMono = variableFamily(R.font.jetbrains_mono, 400, 500, 600, 700, 800)
 
+private fun display(size: Int, line: Int, weight: FontWeight, tracking: Double) = TextStyle(
+    fontFamily = SpaceGrotesk,
+    fontWeight = weight,
+    fontSize = size.sp,
+    lineHeight = line.sp,
+    letterSpacing = tracking.em,
+)
+
+private fun body(size: Int, line: Int, weight: FontWeight = FontWeight.Normal) = TextStyle(
+    fontFamily = Inter,
+    fontWeight = weight,
+    fontSize = size.sp,
+    lineHeight = line.sp,
+    letterSpacing = 0.sp,
+)
+
+// UI scale: Space Grotesk for display/headlines/titles, Inter for body and labels.
+val Typography = Typography(
+    displayLarge = display(44, 50, FontWeight.Bold, -0.03),
+    displayMedium = display(34, 40, FontWeight.Bold, -0.03),
+    displaySmall = display(28, 34, FontWeight.Bold, -0.02),
+    headlineLarge = display(26, 32, FontWeight.SemiBold, -0.02),
+    headlineMedium = display(22, 28, FontWeight.SemiBold, -0.01),
+    headlineSmall = display(18, 24, FontWeight.SemiBold, 0.0),
+    titleLarge = display(17, 22, FontWeight.SemiBold, 0.0),
+    titleMedium = display(15, 20, FontWeight.Medium, 0.0),
+    titleSmall = display(14, 20, FontWeight.Medium, 0.0),
+    bodyLarge = body(16, 24),
+    bodyMedium = body(14, 20),
+    bodySmall = body(12, 16),
+    labelLarge = body(13, 18, FontWeight.Medium),
+    labelMedium = body(11, 14, FontWeight.Medium),
+    labelSmall = body(10, 14, FontWeight.Medium),
+)
+
+private fun mono(size: Int, line: Int, weight: FontWeight = FontWeight.Normal) = TextStyle(
+    fontFamily = JetBrainsMono,
+    fontWeight = weight,
+    fontSize = size.sp,
+    lineHeight = line.sp,
+    letterSpacing = 0.sp,
+    fontFeatureSettings = "tnum",
+)
+
+// Terminal face for logs, ids, argv/env, timestamps and telemetry readouts.
 val MonospaceTypography = Typography(
-    displayLarge = TextStyle(
-        fontFamily = Monospace,
-        fontWeight = FontWeight.Black,
-        fontSize = 45.sp,
-        lineHeight = 52.sp,
-        letterSpacing = 0.sp,
-    ),
-    displayMedium = TextStyle(
-        fontFamily = Monospace,
-        fontWeight = FontWeight.Black,
-        fontSize = 34.sp,
-        lineHeight = 40.sp,
-        letterSpacing = 0.sp,
-    ),
-    displaySmall = TextStyle(
-        fontFamily = Monospace,
-        fontWeight = FontWeight.Bold,
-        fontSize = 28.sp,
-        lineHeight = 34.sp,
-        letterSpacing = 0.sp,
-    ),
-    headlineLarge = TextStyle(
-        fontFamily = Monospace,
-        fontWeight = FontWeight.SemiBold,
-        fontSize = 26.sp,
-        lineHeight = 32.sp,
-        letterSpacing = 0.sp,
-    ),
-    headlineMedium = TextStyle(
-        fontFamily = Monospace,
-        fontWeight = FontWeight.SemiBold,
-        fontSize = 22.sp,
-        lineHeight = 28.sp,
-        letterSpacing = 0.sp,
-    ),
-    headlineSmall = TextStyle(
-        fontFamily = Monospace,
-        fontWeight = FontWeight.SemiBold,
-        fontSize = 18.sp,
-        lineHeight = 24.sp,
-        letterSpacing = 0.sp,
-    ),
-    titleLarge = TextStyle(
-        fontFamily = Monospace,
-        fontWeight = FontWeight.SemiBold,
-        fontSize = 16.sp,
-        lineHeight = 22.sp,
-        letterSpacing = 0.sp,
-    ),
-    titleMedium = TextStyle(
-        fontFamily = Monospace,
-        fontWeight = FontWeight.Medium,
-        fontSize = 15.sp,
-        lineHeight = 20.sp,
-        letterSpacing = 0.sp,
-    ),
-    titleSmall = TextStyle(
-        fontFamily = Monospace,
-        fontWeight = FontWeight.Medium,
-        fontSize = 14.sp,
-        lineHeight = 20.sp,
-        letterSpacing = 0.sp,
-    ),
-    bodyLarge = TextStyle(
-        fontFamily = Monospace,
-        fontWeight = FontWeight.Normal,
-        fontSize = 16.sp,
-        lineHeight = 24.sp,
-        letterSpacing = 0.sp,
-    ),
-    bodyMedium = TextStyle(
-        fontFamily = Monospace,
-        fontWeight = FontWeight.Normal,
-        fontSize = 14.sp,
-        lineHeight = 20.sp,
-        letterSpacing = 0.sp,
-    ),
-    bodySmall = TextStyle(
-        fontFamily = Monospace,
-        fontWeight = FontWeight.Normal,
-        fontSize = 12.sp,
-        lineHeight = 16.sp,
-        letterSpacing = 0.sp,
-    ),
-    labelLarge = TextStyle(
-        fontFamily = Monospace,
-        fontWeight = FontWeight.Medium,
-        fontSize = 13.sp,
-        lineHeight = 18.sp,
-        letterSpacing = 0.sp,
-    ),
-    labelMedium = TextStyle(
-        fontFamily = Monospace,
-        fontWeight = FontWeight.Medium,
-        fontSize = 11.sp,
-        lineHeight = 14.sp,
-        letterSpacing = 0.sp,
-    ),
-    labelSmall = TextStyle(
-        fontFamily = Monospace,
-        fontWeight = FontWeight.Medium,
-        fontSize = 10.sp,
-        lineHeight = 14.sp,
-        letterSpacing = 0.sp,
-    ),
+    displayLarge = mono(44, 52, FontWeight.Bold),
+    displayMedium = mono(34, 40, FontWeight.Bold),
+    displaySmall = mono(28, 34, FontWeight.Bold),
+    headlineLarge = mono(26, 32, FontWeight.SemiBold),
+    headlineMedium = mono(22, 28, FontWeight.SemiBold),
+    headlineSmall = mono(18, 24, FontWeight.SemiBold),
+    titleLarge = mono(16, 22, FontWeight.SemiBold),
+    titleMedium = mono(15, 20, FontWeight.Medium),
+    titleSmall = mono(14, 20, FontWeight.Medium),
+    bodyLarge = mono(16, 24),
+    bodyMedium = mono(14, 20),
+    bodySmall = mono(12, 17),
+    labelLarge = mono(13, 18, FontWeight.Medium),
+    labelMedium = mono(11, 15, FontWeight.Medium),
+    labelSmall = mono(10, 14, FontWeight.Medium),
+)
+
+// Instrument-style overline: mono caps with wide tracking.
+val OverlineStyle = TextStyle(
+    fontFamily = JetBrainsMono,
+    fontWeight = FontWeight.SemiBold,
+    fontSize = 11.sp,
+    lineHeight = 14.sp,
+    letterSpacing = 0.14.em,
 )

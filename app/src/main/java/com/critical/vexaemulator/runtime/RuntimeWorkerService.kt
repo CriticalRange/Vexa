@@ -274,11 +274,16 @@ class RuntimeWorkerService : Service() {
                 }
 
                 RuntimeIpc.MSG_WORKER_STOP_RUNTIME -> {
-                    workerExecutor.execute {
-                        rootSession?.stop("stop")
-                        rootSession = null
-                        RuntimeBridge.stopRuntime()
-                    }
+                    runCatching { rootSession?.stop("stop") }
+                    rootSession = null
+                    // The single worker thread is blocked inside startRuntime while a guest
+                    // executes, so a queued stop can never run. Try the native teardown on a
+                    // detached thread, then hard-kill the process either way — the worker is
+                    // single-use and a fresh process is spawned on the next launch.
+                    Thread { runCatching { RuntimeBridge.stopRuntime() } }.start()
+                    mainHandler.postDelayed({
+                        android.os.Process.killProcess(android.os.Process.myPid())
+                    }, WORKER_STOP_GRACE_MS)
                 }
 
                 else -> super.handleMessage(msg)
@@ -305,9 +310,10 @@ class RuntimeWorkerService : Service() {
         RuntimeBridge.setRuntimeSurface(null)
         currentSurface?.release()
         currentSurface = null
-        RuntimeBridge.stopRuntime()
         workerExecutor.shutdownNow()
         super.onDestroy()
         android.os.Process.killProcess(android.os.Process.myPid())
     }
 }
+
+private const val WORKER_STOP_GRACE_MS = 350L
