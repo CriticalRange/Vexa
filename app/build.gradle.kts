@@ -11,9 +11,15 @@ val thirdPartyDir = rootProject.file("third_party")
 val shadercDir = thirdPartyDir.resolve("shaderc")
 val rapidJsonDir = rootProject.file("third_party/rapidjson/include/rapidjson")
 val spirvCrossDir = thirdPartyDir.resolve("spirv-cross")
+val sdl3Prefix = thirdPartyDir.resolve("install-android-arm64/sdl3")
+val sdl3ImagePrefix = thirdPartyDir.resolve("install-android-arm64/sdl3_image")
+val sdl2Prefix = thirdPartyDir.resolve("SDL2")
 
 val shadercCommit = "1d234d34d43cf5ade135803f7777484eaa48e27f"
 val spirvCrossCommit = "bf6bb5ce3c9fb141127a7d3289ebaaef86d3b065"
+val sdl3Commit = "48045fae0bb210f1828f1304022d5fb88986d736"
+val sdl3ImageCommit = "d78dd65454f442bfdbc373201165f1ef579484ab"
+val sdl2Commit = "5d249570393f7a37e037abf22cd6012a4cc56a71"
 val isWindowsHost = System.getProperty("os.name").lowercase().contains("windows")
 
 fun localProperty(name: String): String? {
@@ -86,7 +92,7 @@ val pythonExe: String =
         ?: System.getenv("PYTHON")?.takeIf { it.isNotBlank() }
         ?: if (isWindowsHost) "python" else "python3"
 val buildThunks =
-    providers.environmentVariable("BUILD_THUNKS").orElse("OFF")
+    providers.environmentVariable("BUILD_THUNKS").orElse("ON")
 val enableRuntimeShaderTranslator =
     providers.environmentVariable("VEXA_ENABLE_RUNTIME_SHADER_TRANSLATOR").orElse("OFF")
 
@@ -220,14 +226,70 @@ val ensureThirdPartySources by tasks.registering {
                 spirvCrossCommit
             )
         }
+
+        if (buildThunks.get() == "ON") {
+            ensureRepo(
+                "SDL",
+                "https://github.com/libsdl-org/SDL.git",
+                sdl3Commit
+            )
+            ensureRepo(
+                "SDL2",
+                "https://github.com/libsdl-org/SDL.git",
+                sdl2Commit
+            )
+            ensureRepo(
+                "SDL_image",
+                "https://github.com/libsdl-org/SDL_image.git",
+                sdl3ImageCommit
+            )
+        }
     }
+}
+
+fun hostBuildPath(): String {
+    val cmakeDir = File(hostCmake.get()).parentFile?.absolutePath.orEmpty()
+    return listOf(cmakeDir, hostToolPath())
+        .filter { it.isNotBlank() }
+        .joinToString(File.pathSeparator)
+}
+
+val buildAndroidSDL3 by tasks.registering(org.gradle.api.tasks.Exec::class) {
+    group = "build setup"
+    description = "Builds the Android SDL3 runtime used by the SDL3 host thunk."
+    onlyIf { buildThunks.get() == "ON" }
+    dependsOn(ensureThirdPartySources)
+    workingDir = rootProject.rootDir
+    environment("Path", hostBuildPath())
+    environment("PATH", hostBuildPath())
+    environment("NDK_TOOLCHAIN", cmakePath(ndkToolchain.get()))
+    commandLine(
+        if (isWindowsHost) "C:/Program Files/Git/bin/bash.exe" else "bash",
+        rootProject.file("scripts/build_android_sdl3.sh").absolutePath
+    )
+}
+
+val buildAndroidSDL3Image by tasks.registering(org.gradle.api.tasks.Exec::class) {
+    group = "build setup"
+    description = "Builds SDL3_image for the Android SDL3 host thunk."
+    onlyIf { buildThunks.get() == "ON" }
+    dependsOn(buildAndroidSDL3)
+    workingDir = rootProject.rootDir
+    environment("Path", hostBuildPath())
+    environment("PATH", hostBuildPath())
+    environment("NDK_TOOLCHAIN", cmakePath(ndkToolchain.get()))
+    environment("SDL3_PREFIX", cmakePath(sdl3Prefix.absolutePath))
+    commandLine(
+        if (isWindowsHost) "C:/Program Files/Git/bin/bash.exe" else "bash",
+        rootProject.file("scripts/build_android_sdl3_image.sh").absolutePath
+    )
 }
 
 val configureFexAndroid by
 tasks.registering(org.gradle.api.tasks.Exec::class) {
     group = "build setup"
     description = "Configures FEX Android build."
-    onlyIf { !file("${fexBuildDir.get()}/build.ninja").exists() }
+    dependsOn(buildAndroidSDL3Image)
     workingDir = rootProject.rootDir
     val pkgConfig = File(fexRoot.get(), ".hosttools/pkg-config.cmd")
     val hostPath = hostToolPath()
@@ -276,6 +338,9 @@ tasks.registering(org.gradle.api.tasks.Exec::class) {
             "-DVEXA_GUEST_CC=${cmakePath(File(ndkPrebuilt, "bin/clang.exe").absolutePath)}",
             "-DVEXA_GUEST_CXX=${cmakePath(File(ndkPrebuilt, "bin/clang++.exe").absolutePath)}",
             "-DANDROID_NDK_SYSROOT=${cmakePath(File(ndkPrebuilt, "sysroot").absolutePath)}",
+            "-DVEXA_SDL3_PREFIX=${cmakePath(sdl3Prefix.absolutePath)}",
+            "-DVEXA_SDL2_PREFIX=${cmakePath(sdl2Prefix.absolutePath)}",
+            "-DVEXA_SDL3_IMAGE_PREFIX=${cmakePath(sdl3ImagePrefix.absolutePath)}",
             "-DVEXA_OPENAL_PREFIX=${cmakePath(rootProject.file("third_party/openal-soft-android").absolutePath)}"
         )
     }
@@ -314,6 +379,9 @@ val buildFEXCore = tasks.register<org.gradle.api.tasks.Exec>("buildFEXCore") {
             "--target", "GLESv2-host-64",
             "--target", "vulkan-host-64",
             "--target", "openal-host-64",
+            "--target", "SDL3-host-64",
+            "--target", "SDL3_image-host-64",
+            "--target", "SDL2-host-64",
             "--target", "guest-libs"
         )
     }
@@ -416,7 +484,7 @@ tasks.matching {
 
 val stageGuestRuntime by tasks.registering(Exec::class) {
     group = "build setup"
-    description = "Copies the guest rootfs, graphics programs, and thunk libraries into assets."
+    description = "Re-stages the full guest rootfs, graphics programs, and thunk libraries."
     dependsOn(buildFEXCore)
     environment("REQUIRE_THUNKS", if (buildThunks.get() == "ON") "1" else "0")
     commandLine(
@@ -425,10 +493,21 @@ val stageGuestRuntime by tasks.registering(Exec::class) {
     )
 }
 
+val stageSDL3Thunks by tasks.registering(Exec::class) {
+    group = "build setup"
+    description = "Adds SDL3 thunk payloads without replacing existing runtime assets."
+    dependsOn(buildFEXCore)
+    onlyIf { buildThunks.get() == "ON" }
+    commandLine(
+        pythonExe,
+        rootProject.file("guest-tests/graphics/stage_sdl3_thunks.py").absolutePath,
+    )
+}
+
 tasks.matching {
     it.name == "mergeDebugAssets" || it.name == "mergeReleaseAssets"
 }.configureEach {
-    dependsOn(stageGuestRuntime)
+    dependsOn(stageSDL3Thunks)
 }
 
 dependencies {
@@ -441,6 +520,12 @@ dependencies {
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
+    // Java port of SteamKit. The Android RSA path needs BouncyCastle by name;
+    // coroutines-jdk8 is what JavaSteam uses to bridge its callback futures.
+    implementation("in.dragonbra:javasteam:1.8.0")
+    implementation("com.google.protobuf:protobuf-java:4.31.1")
+    implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-jdk8:1.10.2")
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

@@ -12,6 +12,8 @@
 #include <string>
 #include <sys/stat.h>
 
+extern "C" void Vexa_PublishGuestWindowSize(int width, int height);
+
 namespace {
     std::mutex g_mutex;
     ANativeWindow *g_window{};
@@ -21,15 +23,29 @@ namespace {
 
 namespace Vexa::Runtime::SurfaceBridge {
     void Set(JNIEnv *env, jobject surface) {
-        std::lock_guard<std::mutex> lock(g_mutex);
-        if (g_window) {
-            ANativeWindow_release(g_window);
-            g_window = nullptr;
+        int w = 0;
+        int h = 0;
+        {
+            std::lock_guard<std::mutex> lock(g_mutex);
+            if (g_window) {
+                ANativeWindow_release(g_window);
+                g_window = nullptr;
+            }
+            if (surface) {
+                g_window = ANativeWindow_fromSurface(env, surface);
+                if (g_window) {
+                    w = ANativeWindow_getWidth(g_window);
+                    h = ANativeWindow_getHeight(g_window);
+                }
+            }
+            g_surface_serial.fetch_add(1, std::memory_order_release);
         }
-        if (surface) {
-            g_window = ANativeWindow_fromSurface(env, surface);
+        // Keep the guest-visible size file in sync: the fake X11/RandR/Xinerama
+        // libs and the GLX thunk all read it. A stale or missing size is how a
+        // guest ends up believing the screen is 0x0.
+        if (w > 1 && h > 1) {
+            Vexa_PublishGuestWindowSize(w, h);
         }
-        g_surface_serial.fetch_add(1, std::memory_order_release);
     }
 
     ANativeWindow *GetRetained() {
@@ -106,7 +122,7 @@ void Vexa_PublishGuestWindowSize(int width, int height) {
     std::fprintf(stderr, "[VEXA][WINDOW] guest size %dx%d\n", width, height);
 }
 
-// Cover crop the GL host applied, in the guest rootfs. Ten integers:
+// Where the GL host placed the guest frame, in the guest rootfs. Ten integers:
 // content x0 y0 cw ch, crop sx sy src_w src_h, surface sw sh.
 // Identity (src == surface, origin 0) means a touch is already a window pixel.
 extern "C" __attribute__((visibility("default")))

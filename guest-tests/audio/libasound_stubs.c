@@ -523,11 +523,7 @@ int snd_pcm_area_silence(void){return 0;}
 int snd_pcm_areas_copy(void){return 0;}
 int snd_pcm_areas_copy_wrap(void){return 0;}
 int snd_pcm_areas_silence(void){return 0;}
-int snd_pcm_avail(void){return 0;}
-int snd_pcm_avail_delay(void){return 0;}
-int snd_pcm_avail_update(void){return 0;}
 int snd_pcm_build_linear_format(void){return 0;}
-int snd_pcm_bytes_to_frames(void){return 0;}
 int snd_pcm_bytes_to_samples(void){return 0;}
 int snd_pcm_chmap_from_string(void){return 0;}
 int snd_pcm_chmap_long_name(void){return 0;}
@@ -535,9 +531,6 @@ int snd_pcm_chmap_name(void){return 0;}
 int snd_pcm_chmap_parse_string(void){return 0;}
 int snd_pcm_chmap_print(void){return 0;}
 int snd_pcm_chmap_type_name(void){return 0;}
-int snd_pcm_delay(void){return 0;}
-int snd_pcm_drain(void){return 0;}
-int snd_pcm_drop(void){return 0;}
 int snd_pcm_dump(void){return 0;}
 int snd_pcm_dump_hw_setup(void){return 0;}
 int snd_pcm_dump_setup(void){return 0;}
@@ -572,7 +565,6 @@ int snd_pcm_format_value(void){return 0;}
 int snd_pcm_format_width(void){return 0;}
 int snd_pcm_forward(void){return 0;}
 int snd_pcm_forwardable(void){return 0;}
-int snd_pcm_frames_to_bytes(void){return 0;}
 int snd_pcm_free_chmaps(void){return 0;}
 int snd_pcm_get_chmap(void){return 0;}
 int snd_pcm_get_params(void){return 0;}
@@ -750,14 +742,11 @@ int snd_pcm_mmap_readn(void){return 0;}
 int snd_pcm_mmap_writei(void){return 0;}
 int snd_pcm_mmap_writen(void){return 0;}
 int snd_pcm_name(void){return 0;}
-int snd_pcm_nonblock(void){return 0;}
 int snd_pcm_open_fallback(void){return 0;}
 int snd_pcm_open_lconf(void){return 0;}
-int snd_pcm_pause(void){return 0;}
 int snd_pcm_poll_descriptors(void){return 0;}
 int snd_pcm_poll_descriptors_count(void){return 0;}
 int snd_pcm_poll_descriptors_revents(void){return 0;}
-int snd_pcm_prepare(void){return 0;}
 int snd_pcm_query_chmaps(void){return 0;}
 int snd_pcm_query_chmaps_from_hw(void){return 0;}
 int snd_pcm_readi(void){return 0;}
@@ -777,9 +766,7 @@ int snd_pcm_scope_set_name(void){return 0;}
 int snd_pcm_scope_set_ops(void){return 0;}
 int snd_pcm_set_chmap(void){return 0;}
 int snd_pcm_set_params(void){return 0;}
-int snd_pcm_start(void){return 0;}
 int snd_pcm_start_mode_name(void){return 0;}
-int snd_pcm_state(void){return 0;}
 int snd_pcm_state_name(void){return 0;}
 int snd_pcm_status(void){return 0;}
 int snd_pcm_status_copy(void){return 0;}
@@ -839,7 +826,6 @@ int snd_pcm_tstamp_mode_name(void){return 0;}
 int snd_pcm_type(void){return 0;}
 int snd_pcm_type_name(void){return 0;}
 int snd_pcm_unlink(void){return 0;}
-int snd_pcm_wait(void){return 0;}
 int snd_pcm_writen(void){return 0;}
 int snd_pcm_xrun_mode_name(void){return 0;}
 int snd_rawmidi_close(void){return 0;}

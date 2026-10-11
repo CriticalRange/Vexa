@@ -12,6 +12,10 @@
 #include <Tools/LinuxEmulation/LinuxSyscalls/Utils/Threads.h>
 #include <FEXCore/HLE/SyscallHandler.h>
 
+namespace FEX {
+    class GdbServer;
+}
+
 namespace FEX::HLE {
     // Forward-declare concrete LinuxEmulation syscall handler type.
     struct ThreadStateObject;
@@ -27,6 +31,10 @@ namespace Vexa::Runtime {
         fextl::unique_ptr<FEX::HLE::ThunkHandler> thunkHandler{};
         FEX::HLE::ThreadStateObject *parentThread{nullptr};
         fextl::unique_ptr<FEX::LinuxEmulation::Threads::StackTracker> stackTracker{};
+        // Raw pointer — kept intentionally so translation units that only see
+        // the forward declaration do not need the full GdbServer type. The
+        // object lives for the lifetime of the runtime process anyway.
+        FEX::GdbServer *gdbServer{nullptr};
         fextl::unique_ptr<FEXCore::HLE::SyscallHandler> syscallHandler{}; // owning base Syscall pointer
         FEX::HLE::SyscallHandler *linuxSyscallHandler{
                 nullptr}; //non-owning concrete Syscall pointer

@@ -14,6 +14,7 @@
 #include <Linux/Utils/ELFContainer.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <cerrno>
 
 #include "../../logging/native_log.h"
 #include "../../common/status.h"
@@ -86,6 +87,17 @@ namespace Vexa::Runtime::Init {
         if (!state.syscallHandler) {
             return {Vexa::Common::Code::ExecutePrereqMissing, Vexa::Common::Phase::Execute,
                     "Missing base syscall handler"};
+        }
+        // Guest programs such as Dead Cells search LD_LIBRARY_PATH=. and open
+        // hlboot.dat from the working directory. FEX shares this process cwd.
+        if (!paths.workingDir.empty() && ::chdir(paths.workingDir.c_str()) != 0) {
+            VEXA_LOGE(env, "FEX", "Could not enter the guest working directory",
+                      Vexa::Log::AddFields({
+                                                   Vexa::Log::F("path", paths.workingDir),
+                                                   Vexa::Log::F("errno", errno),
+                                           }).c_str());
+            return {Vexa::Common::Code::BadWorkingDir, Vexa::Common::Phase::Execute,
+                    "Could not enter the guest working directory"};
         }
 
         FEX::VDSO::VDSOMapping vdso{};

@@ -344,6 +344,40 @@ VEXA is a general-purpose Linux x86_64 runner. Older items that name one game ar
 - [x] Make "Login to Hytale" button functional.
 - [ ] Implement CDN game assets retrieval
 
+## Steam libraries
+
+- [x] For now, place androidarm64 `libsteamclient.so` on the device only.
+  It is taken from GameNative's `steam-androidarm64-20260709.tzst`
+  (`downloads.gamenative.app`) and copied into the app-private
+  `files/steam/androidarm64/` directory. It is not in the git repo.
+  `libsteam_api.so` in that directory is the separate file from the
+  user's Steamworks SDK 1.65 zip. Do not vendor either `.so`, and do
+  not copy GameNative's `libsteambootstrap.so`.
+- [ ] Replace that borrowed `libsteamclient.so`. The copied file does
+  not by itself make a guest `SteamAPI_Init` pipe succeed.
+- [x] Do not run the Linux Steam client under FEX, and do not start a
+  second FEX instance for it. Valve's listener is `ubuntu12_32/steam`
+  (32-bit) and it execs 64-bit helpers such as steamwebhelper. One FEX
+  process has one guest bitness: the allocator and the syscall handler
+  are process-global. VEXA forces `CONFIG_IS64BIT_MODE=1`, creates only
+  `FEX::HLE::x64::CreateHandler`, builds Android thunks for 64-bit
+  only, and `execute.cpp` rejects a bitness mismatch. Upstream 32-bit
+  support is not wired here. Guest exec across bitness is also absent
+  (`VEXA_DISABLE_FEXSERVER=1`). A second process would still be the
+  32-bit client and would still need further processes for its
+  helpers. Refresh tokens stay in the keystore. Do not write one into
+  the guest tree, do not log it, do not set `Steam3Master` without a
+  listener, and do not fake `CreateSteamPipe`.
+- [x] Do not build an out-of-FEX Steam host from the libraries we have.
+  The game stays the one 64-bit FEX guest. A listener would be a normal
+  ARM64 process that logs in with the VEXA refresh token and opens the
+  local pipe. `libsteam_api.so` `SteamAPI_Init` and `libsteamclient.so`
+  `CreateInterface` join a running host. They do not start one.
+  JavaSteam speaks to Steam's network, not that local pipe. The only
+  program known to start the host is GameNative's closed
+  `libsteambootstrap.so`. Do not copy or reverse it. Do not write a
+  replacement pipe server.
+
 ## Later: Additional Categories
 
 - [ ] Add new TODO categories here as runtime architecture evolves.

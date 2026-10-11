@@ -37,7 +37,11 @@ SEEDS = [
     "libxkbcommon-x11-0",
     "libdecor-0-0",
     "libwayland-client0",
+    "libwayland-cursor0",
     "libvulkan1",
+    "libogg0",
+    "libvorbis0a",
+    "libvorbisfile3",
 ]
 MIRROR = "http://archive.ubuntu.com/ubuntu/"
 SDK = os.environ.get("ANDROID_SDK_ROOT") or os.environ.get("ANDROID_HOME") or os.path.join(os.environ.get("LOCALAPPDATA", ""), "Android", "Sdk")
@@ -242,6 +246,7 @@ def compile_fake_x11(root):
         "-fuse-ld=lld",
         "-Wl,-soname,libX11.so.6",
         FAKE_X11,
+        os.path.join(FAKE_X11_DIR, "libX11_sdl_stubs.c"),
         "-o",
         dest,
         "-lc",
@@ -271,6 +276,57 @@ def compile_fake_x11_extras(root):
         for path in doomed:
             os.remove(path)
         dest = os.path.join(dest_dir, soname)
+        sources = [os.path.join(FAKE_X11_DIR, source_name)]
+        extra = os.path.join(FAKE_X11_DIR, stem + "_sdl_stubs.c")
+        if os.path.exists(extra):
+            sources.append(extra)
+        cmd = [
+            CLANG,
+            "--target=x86_64-linux-gnu",
+            f"--sysroot={root}",
+            "-fPIC",
+            "-shared",
+            "-fno-stack-protector",
+            "-O2",
+            "-fuse-ld=lld",
+            f"-Wl,-soname,{soname}",
+            "-Wl,--no-undefined",
+            *sources,
+            "-o",
+            dest,
+            "-lc",
+        ]
+        print(f"compile {soname}", flush=True)
+        subprocess.check_call(cmd)
+        with open(dest, "rb") as handle:
+            if handle.read(4) != b"\x7fELF":
+                raise SystemExit(f"fake {soname} is not an ELF")
+
+
+SDL_LOAD_STUBS = (
+    ("libpulse_stub.c", "libpulse.so.0"),
+    ("libXfixes_stub.c", "libXfixes.so.3"),
+    ("libXss_stub.c", "libXss.so.1"),
+    ("libXxf86vm_stub.c", "libXxf86vm.so.1"),
+    ("libgbm_stub.c", "libgbm.so.1"),
+)
+
+
+def compile_deadcells_sdl_stubs(root):
+    """SONAMEs that SDL2 resolves at load.
+
+    The real Xfixes, VidMode, and GBM libraries call into X11 and XCB pieces
+    this rootfs replaces, so the load stubs take their sonames instead.
+    """
+    dest_dir = os.path.join(root, "usr", "lib", "x86_64-linux-gnu")
+    os.makedirs(dest_dir, exist_ok=True)
+    for source_name, soname in SDL_LOAD_STUBS:
+        stem = soname.split(".so", 1)[0]
+        for dirpath, _, files in os.walk(root):
+            for name in files:
+                if name == stem + ".so" or name.startswith(stem + ".so."):
+                    os.remove(os.path.join(dirpath, name))
+        dest = os.path.join(dest_dir, soname)
         cmd = [
             CLANG,
             "--target=x86_64-linux-gnu",
@@ -291,7 +347,7 @@ def compile_fake_x11_extras(root):
         subprocess.check_call(cmd)
         with open(dest, "rb") as handle:
             if handle.read(4) != b"\x7fELF":
-                raise SystemExit(f"fake {soname} is not an ELF")
+                raise SystemExit(f"stub {soname} is not an ELF")
 
 
 def compile_fake_xcb(root):
@@ -438,6 +494,7 @@ def main():
     copy_glmark(ROOTFS)
     compile_fake_x11(ROOTFS)
     compile_fake_x11_extras(ROOTFS)
+    compile_deadcells_sdl_stubs(ROOTFS)
     compile_fake_xcb(ROOTFS)
     compile_fake_xkbcommon_x11(ROOTFS)
     with open(MARKER, "w", encoding="utf-8") as handle:

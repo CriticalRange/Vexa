@@ -1,0 +1,48 @@
+SECTIONS {
+  . = SIZEOF_HEADERS;
+  .hash : { *(.hash) } :text
+  .gnu.hash : { *(.gnu.hash) }
+  .dynsym : { *(.dynsym) }
+  .dynstr : { *(.dynstr) }
+  .gnu.version : { *(.gnu.version) }
+  .gnu.version_d : { *(.gnu.version_d) }
+  .gnu.version_r : { *(.gnu.version_r) }
+  .dynamic : { *(.dynamic) } :text :dynamic
+  .rodata : {
+    *(.rodata*)
+    *(.data*)
+    *(.got.plt) *(.got)
+    *(.bss*)
+  } :text
+  .text : { *(.text*) } :text
+
+  /DISCARD/ : {
+    *(.note*)
+    *(.eh_frame_hdr)
+    *(.eh_frame)
+    *(.comment)
+  }
+}
+
+PHDRS {
+  text PT_LOAD FLAGS(4 | 1) FILEHDR PHDRS;
+  dynamic PT_DYNAMIC FLAGS(4);
+}
+
+VERSION {
+  LINUX_2.6 {
+  global:
+    __vdso_time;
+    time;
+    __vdso_gettimeofday;
+    gettimeofday;
+    __vdso_clock_gettime;
+    clock_gettime;
+    __vdso_clock_getres;
+    clock_getres;
+    __vdso_getcpu;
+    getcpu;
+    __fex_callback_ret;
+  local: *;
+  };
+}
