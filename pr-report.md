@@ -245,3 +245,166 @@ Modified: `GameActivity.kt`, `ui/GameLoadingOverlay.kt`,
 New: `ui/theme/*`, `ui/{Brand,Buttons,Panels,Labels,Logs,Metadata,Pickers,
 Stats,Switches,Loaders,Hud,Effects,Previews,LogColors}.kt`,
 `res/drawable*/ic_launcher*`, `docs/UI_DESIGN.md`.
+
+---
+
+# Phase 3 — PrismLauncher (Qt6 desktop GUI) on the FEX runtime
+
+Goal of this pass: run a real x86_64 Qt6 desktop application — PrismLauncher —
+inside the FEX guest, drawn on the app's own surface, with usable touch
+input. There is no X server on Android; the guest binds the VEXA
+libxcb/libX11 shims and Qt presents through `eglfs_x11` → ANativeWindow.
+
+## Where we stopped
+
+PrismLauncher is installed under `files/guests/prismlauncher` and **boots
+into its real Qt6 GUI on the device screen** — main window, centered
+dialogs, settings pages all render and take touch. The "Add Microsoft
+account" button hands its OAuth URL to the phone's browser through the
+openUrl bridge (below) and the Microsoft sign-in page is where the session
+ended — login itself was reached but not completed.
+
+Next steps when resumed: finish sign-in → the guest writes
+`data/accounts.json` (the in-app watcher auto-foregrounds the game when it
+changes), then instance creation and the Java runtime download — `java`
+spawns through the new `FexChildMain` execve bridge, which is the next
+thing to verify end-to-end.
+
+## What changed
+
+### 1. Fake X11/XCB layer grew up to Qt6 size (+~1000 lines)
+
+Qt's xcb platform plugin exercises far more of the core protocol than
+vkcube/glmark2 did:
+
+- `guest-tests/x11-fake/libxcb_fake.c` (+714) — full core-protocol surface:
+  GC/pixmap/cursor/colormap/property/window/keyboard cookie+reply stubs
+  (new `libxcb_fake_qt.c` / `libxcb_fake_qt2.c` carry most of them).
+  `xcb_wait_for_event` now **blocks like a socket read** instead of
+  returning null — a null return means I/O failure and made Qt's xcb
+  event-reader thread tear the whole connection down. The setup reply's
+  screen size is read from `/tmp/vexa-window-size`, with physical mm
+  sized for ~96 DPI so Qt keeps `devicePixelRatio=1` (scaling comes from
+  `QT_SCALE_FACTOR` alone).
+- `guest-tests/x11-fake/libX11_fake.c` (+97) — internal `_X*` entry points
+  (`_XGetRequest`, `_XRead`, `_XReply`, `_XEatData`, async/error handlers…)
+  that glvnd's `libGLX.so.0` imports as `DT_NEEDED`; under
+  `QT_XCB_GL_INTEGRATION=xcb_egl` the GLX path never executes but the
+  linker demands the symbols. `XCreateWindow` now logs geometry.
+- `guest-tests/x11-fake/libX11xcb_fake.c` (new) — `XGetXCBConnection`
+  returns the VEXA shim connection so Qt6's XOpenDisplay→xcb handoff stays
+  inside the fake stack; `XSetEventQueueOwner` stub.
+- `guest-tests/x11-fake/libdbus_fake.c` — grew from one variable to ~80
+  stubs; enough for QtDBus to degrade cleanly to no-bus.
+
+### 2. Two new LD_PRELOAD shims
+
+- `guest-tests/notmpfile/libnotmpfile.so` (new) — `QTemporaryFileEngine`
+  prefers `open(O_TMPFILE)` + `linkat("/proc/self/fd/N")`, but SELinux
+  denies hardlinks inside app-private storage (EPERM) — this was
+  PrismLauncher's `QtLockedFile` failure. Interposing every open/openat
+  alias (incl. `__open64_nocancel` etc.) to return `EOPNOTSUPP` makes
+  glibc/Qt fall back to named temp + rename. Also supplies the legacy
+  fixed-function GL symbols (`glOrtho`, `glLoadMatrixf`) that
+  `libQt6OpenGL` links unconditionally but the VEXA GL thunk can't export,
+  and installs guest SIGABRT/SIGSEGV/SIGILL handlers that dump a DWARF
+  backtrace to stderr before re-raising (a guest abort() reaches the host
+  as a real signal through FEX's tgkill passthrough and used to kill
+  `runtime_worker` silently).
+- `guest-tests/tuio-fix/libvexa_tuiofix.so` (new) — two interpositions:
+  - `QWindowSystemInterface::handleTouchEvent` — qtuiohandler delivers
+    every touch to the *focused* window and computes position as
+    `win->pos() + n*win->size()`; for non-fullscreen dialogs that hits the
+    wrong window and Qt's modal redirection clamps out-of-bounds points
+    onto edge widgets. The shim recovers the normalized coordinate, maps
+    it onto the primary screen, and retargets the event to the smallest
+    visible top-level window containing the point.
+  - `QDesktopServices::openUrl` — the guest has no browser and Qt's
+    xdg-open spawn uses a `clone()` form FEX doesn't support (it killed
+    the whole guest on "Add Microsoft account"). The shim writes the URL
+    to `$TMPDIR/vexa-open-url` for the Android host.
+
+### 3. GameActivity: touch in, URLs out, background-proof
+
+- **SurfaceView → TextureView** with a persistent `Surface`: TextureView
+  keeps its `SurfaceTexture` across background trips, so the guest's EGL
+  surface (bound once, never recreated) survives — no more dead guest
+  after leaving/returning. `onSurfaceTextureDestroyed` returns false to
+  keep it alive; released in `onDestroy` when actually finishing.
+- **`TuioTouchSender`** — Qt can't reach `/dev/input` from the sandbox, so
+  MotionEvents are translated to TUIO 2.0: OSC `#bundle` packets
+  (`alive`/`set`/`fseq` on `/tuio/2Dcur`) over UDP loopback :3333, fed to
+  Qt's `libqtuiotouchplugin` (a real host socket via FEX passthrough).
+  Positions are normalized against the view, not the EGL surface
+  (SurfaceFlinger may scale).
+- **File-based guest↔host channel** (`startTuioCommandPoller`, 120 ms):
+  - `<rootfs>/tmp/vexa-tuio-cmd` — `tap/down/move/up x y` commands so
+    scripts can drive dialog-relative taps physical touches can't express.
+  - `vexa-open-url` — read, deleted, fired as `ACTION_VIEW` intent. When
+    the URL is a `redirect_uri=http://127.0.0.1` OAuth flow (Microsoft
+    login), the poller arms a watcher on Prism's `accounts.json`
+    (10 min deadline): on modification it brings the game back to front —
+    `REORDER_TASKS`/`moveToFront`, `REORDER_TO_FRONT` intent, and a 1-px
+    `TYPE_APPLICATION_OVERLAY` view to keep the activity foreground-eligible.
+- **Runtime survives backgrounding**: `startService()` alongside bind in
+  `onStart` (bind alone would destroy the service on unbind).
+- Manifest: `REORDER_TASKS` + `SYSTEM_ALERT_WINDOW` permissions,
+  `GameActivity` now `exported=true` for external launch/bring-to-front.
+
+### 4. Guest execve bridge — `FexChildMain.kt` (new)
+
+FEX emulates guest `execve()` by exec'ing `/proc/self/exe` — on Android
+that's `app_process64`, not a FEXLoader. `GuestInstaller` now exports
+`VEXA_APK`/`VEXA_FILES`/`VEXA_PROGRAM`, and the execve handler rewrites
+argv to `app_process … runtime.FexChildMain <file> <args>` carrying the
+guest env losslessly as `VEXA_ENV<i>` entries (raw `LD_PRELOAD` must never
+reach a host exec — Bionic treats an unloadable preload as fatal,
+`CANNOT LINK EXECUTABLE`). `FexChildMain.main()` rebuilds the
+`LaunchRequest`, loads `libvexa.so` from the APK's lib dir, and re-runs
+the child under FEX — this is the path PrismLauncher takes to spawn
+`java`. New `busybox-filetest` catalog entry isolates guest file/exec
+behavior for exactly this.
+
+### 5. PrismLauncher guest program → real GUI config
+
+- `shared/bin/prismlauncher -d <data dir>` with `QT_QPA_PLATFORM=eglfs` +
+  `QT_QPA_EGLFS_INTEGRATION=eglfs_x11`, `QT_PLUGIN_PATH` at the bundled Qt
+  6.10.2, `QT_QPA_GENERIC_PLUGINS=tuiotouch`,
+  `QT_TUIOTOUCH_DELIVER_WITHOUT_FOCUS=1`, `TMPDIR`/`XDG_RUNTIME_DIR` inside
+  the guest dir, `LD_PRELOAD=libnotmpfile.so:libvexa_tuiofix.so`.
+- `LD_*` paths are deliberately **guest-only** (`/usr/lib/…`): if the env
+  leaks into a host-side exec the linker prints "not found" and moves on;
+  a host-resolvable x86_64 path is what produced the `CANNOT LINK
+  EXECUTABLE` seen on Prism's java check.
+
+### 6. Rootfs/thunk restage + OpenAL removal
+
+Rootfs assets rebuilt (`STAMP` → `4d0ddf1c2f572730`): refreshed fake
+`libX11/libXext/libxcb/libdbus-1/libxkbcommon-x11`, and the OpenAL stack
+(`libasound.so.2`, `libopenal{,-guest,-host}.so`) is gone — audio for this
+form factor is being rethought separately. `crash_signals.cpp` now walks
+the guest frame-pointer chain (`guest_bt_ret`) and dumps 160 raw stack
+words (`guest_stk`) via `process_vm_readv` on crash.
+
+### 7. Parallel track: native chroot comparison (scripts/)
+
+While debugging Qt-on-FEX we also built the "does it work *natively*?"
+control: `install_prism_portable.sh`, `install_store_and_brave.sh`,
+`install_user_store.sh` install PrismLauncher (aarch64 build), Brave and
+Synaptic into the Andronix Ubuntu chroot; `start-root-linux.sh` /
+`stop-root-linux.sh` / `app.sh` bring up PulseAudio + Termux-X11 + the
+chroot as a zero-desktop app launcher; `termux_bashrc` wires the Termux
+side. Useful as a reference for what the GUI is *supposed* to do.
+
+## Files (phase 3)
+
+New: `runtime/FexChildMain.kt`, `guest-tests/notmpfile/` (`.c` + `.so`),
+`guest-tests/tuio-fix/` (`.cpp` + `.so`), `guest-tests/x11-fake/
+{libX11xcb_fake.c,libxcb_fake_qt.c,libxcb_fake_qt2.c}`,
+`scripts/{install_prism_portable,install_store_and_brave,
+install_user_store,start-root-linux,stop-root-linux,app}.sh`,
+`scripts/termux_bashrc`.
+Modified: `AndroidManifest.xml`, `GameActivity.kt`, `GuestInstaller.kt`,
+`GuestProgram.kt`, `cpp/logging/crash_signals.cpp`,
+`guest-tests/x11-fake/{libX11_fake,libxcb_fake,libdbus_fake}.c`, bundled
+rootfs/thunk assets (OpenAL removed).

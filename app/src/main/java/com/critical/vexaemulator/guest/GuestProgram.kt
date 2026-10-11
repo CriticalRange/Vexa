@@ -85,14 +85,40 @@ object GuestCatalog {
             preinstalled = true,
         ),
         GuestProgram(
+            id = "busybox-filetest",
+            title = "BusyBox filetest",
+            summary = "Creates and writes files under the prism guest dir to isolate the QtLockedFile failure.",
+            assetPath = "guests/busybox",
+            fileName = "busybox",
+            args = listOf(
+                "sh", "-c",
+                "/data/user/0/com.critical.vexaemulator/files/guests/prismlauncher/data/java/jre-legacy/bin/java -version; " +
+                    "echo JAVA-EXIT:\$?",
+            ),
+        ),
+        GuestProgram(
             id = "prismlauncher",
             title = "Prism Launcher",
             summary = "Qt6 Minecraft launcher (sharun portable build). Offscreen smoke test — no X server, GUI is not expected to render.",
             assetPath = "",
-            fileName = "bin/prismlauncher",
+            fileName = "shared/bin/prismlauncher",
+            args = listOf("-d", "/data/user/0/com.critical.vexaemulator/files/guests/prismlauncher/data"),
             env = listOf(
-                "QT_QPA_PLATFORM=offscreen",
-                "QT_DEBUG_PLUGINS=1",
+                "LD_LIBRARY_PATH=/data/user/0/com.critical.vexaemulator/files/rootfs/usr/lib/x86_64-linux-gnu:/data/user/0/com.critical.vexaemulator/files/guests/prismlauncher/shared/lib:/data/user/0/com.critical.vexaemulator/files/guests/prismlauncher/shared/lib/home/runner/work/PrismLauncher/Qt/6.10.2/gcc_64/lib",
+                "QT_PLUGIN_PATH=/data/user/0/com.critical.vexaemulator/files/guests/prismlauncher/shared/lib/home/runner/work/PrismLauncher/Qt/6.10.2/gcc_64/plugins",
+                "TMPDIR=/data/user/0/com.critical.vexaemulator/files/guests/prismlauncher/tmp",
+                "XDG_RUNTIME_DIR=/data/user/0/com.critical.vexaemulator/files/guests/prismlauncher/tmp",
+                // Guest-only paths (inside the FEX rootfs): if the env ever leaks
+                // into a host-side exec, the linker just prints "not found" and
+                // moves on — a host-resolvable x86_64 path kills it with
+                // CANNOT LINK EXECUTABLE (seen on Prism's java check).
+                "LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libnotmpfile.so:/usr/lib/x86_64-linux-gnu/libvexa_tuiofix.so",
+                "DISPLAY=:0",
+                "QT_QPA_PLATFORM=eglfs",
+                "QT_QPA_EGLFS_INTEGRATION=eglfs_x11",
+                "QT_QPA_GENERIC_PLUGINS=tuiotouch",
+                "QT_TUIOTOUCH_DELIVER_WITHOUT_FOCUS=1",
+                "QT_LOGGING_RULES=qt.*=false;*.debug=false",
                 "PRISMLAUNCHER_DISABLE_GLVULKAN=1",
             ),
             preinstalled = true,

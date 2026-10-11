@@ -21,6 +21,10 @@ import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.WindowManager
+import java.net.DatagramPacket
+import java.net.DatagramSocket
+import java.net.InetAddress
+import java.util.concurrent.Executors
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import androidx.activity.ComponentActivity
@@ -89,11 +93,120 @@ import kotlinx.coroutines.withContext
 private const val WORKER_PROCESS = "com.critical.vexaemulator:runtime_worker"
 private const val LOGCAT_TAG_RUNTIME_EXIT = "Vexa-RuntimeExit"
 
-class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
+/**
+ * Qt eglfs cannot reach /dev/input from the app sandbox, so guests get a
+ * TUIO 2Dcur stream instead: Qt's libqtuiotouchplugin binds a UDP socket in
+ * the runtime_worker (a real host socket via FEX passthrough) and we feed it
+ * OSC messages on loopback. x/y are normalized to the surface, Qt scales
+ * them onto the guest screen and synthesizes widget mouse events.
+ */
+private class TuioTouchSender {
+    private var socket: DatagramSocket? = null
+    private var sessionId = 1
+    private var fseq = 0
+    private var loggedSend = false
+    private val io = Executors.newSingleThreadExecutor()
+
+    var log: ((String) -> Unit)? = null
+
+    private fun oscPadded(buf: ByteBuffer, text: String) {
+        val bytes = text.toByteArray(Charsets.US_ASCII)
+        buf.put(bytes)
+        buf.put(0)
+        var pad = (4 - ((bytes.size + 1) % 4)) % 4
+        while (pad-- > 0) buf.put(0)
+    }
+
+    private fun msgSet(id: Int, x: Float, y: Float): ByteArray {
+        val buf = ByteBuffer.allocate(64)
+        oscPadded(buf, "/tuio/2Dcur")
+        oscPadded(buf, ",sifffff")
+        oscPadded(buf, "set")
+        buf.putInt(id)
+        buf.putFloat(x)
+        buf.putFloat(y)
+        buf.putFloat(0f)
+        buf.putFloat(0f)
+        buf.putFloat(0f)
+        return buf.array().copyOf(buf.position())
+    }
+
+    private fun msgAlive(vararg ids: Int): ByteArray {
+        val buf = ByteBuffer.allocate(64)
+        oscPadded(buf, "/tuio/2Dcur")
+        if (ids.isEmpty()) {
+            oscPadded(buf, ",s")
+        } else {
+            oscPadded(buf, ",s" + "i".repeat(ids.size))
+        }
+        oscPadded(buf, "alive")
+        for (id in ids) buf.putInt(id)
+        return buf.array().copyOf(buf.position())
+    }
+
+    private fun msgFseq(frame: Int): ByteArray {
+        val buf = ByteBuffer.allocate(48)
+        oscPadded(buf, "/tuio/2Dcur")
+        oscPadded(buf, ",si")
+        oscPadded(buf, "fseq")
+        buf.putInt(frame)
+        return buf.array().copyOf(buf.position())
+    }
+
+    private fun sendBundle(vararg msgs: ByteArray) {
+        val bodySize = msgs.sumOf { 4 + it.size }
+        val buf = ByteBuffer.allocate(16 + bodySize)
+        buf.put("#bundle\u0000".toByteArray(Charsets.US_ASCII))
+        buf.putLong(1) // timetag: immediately
+        for (m in msgs) {
+            buf.putInt(m.size)
+            buf.put(m)
+        }
+        val bytes = buf.array().copyOf(buf.position())
+        io.execute {
+            try {
+                if (socket == null) socket = DatagramSocket()
+                val addr = InetAddress.getLoopbackAddress()
+                socket?.send(DatagramPacket(bytes, bytes.size, addr, 3333))
+                if (!loggedSend) {
+                    loggedSend = true
+                    log?.invoke("TUIO first send ok, ${bytes.size} bytes to ${addr.hostAddress}:3333")
+                }
+            } catch (e: Exception) {
+                log?.invoke("TUIO send failed: ${e.javaClass.simpleName}: ${e.message}")
+            }
+        }
+    }
+
+    fun touchDown(x: Float, y: Float) {
+        sessionId++
+        val id = sessionId
+        sendBundle(msgAlive(id), msgSet(id, x, y), msgFseq(++fseq))
+    }
+
+    fun touchMove(x: Float, y: Float) {
+        sendBundle(msgAlive(sessionId), msgSet(sessionId, x, y), msgFseq(++fseq))
+    }
+
+    fun touchUp() {
+        sendBundle(msgAlive(), msgFseq(++fseq))
+    }
+
+    /** Single down+up tap at normalized position. */
+    fun tap(x: Float, y: Float) {
+        touchDown(x, y)
+        touchUp()
+    }
+}
+
+class GameActivity : ComponentActivity(), android.view.TextureView.SurfaceTextureListener {
     companion object {
         const val EXTRA_PROGRAM_ID = "programId"
     }
-    private lateinit var gameSurfaceView: SurfaceView
+    private lateinit var gameSurfaceView: android.view.TextureView
+    // TextureView keeps its SurfaceTexture across background trips, so the guest's EGL
+    // surface (bound once, never re-created) stays valid. Released in onDestroy.
+    private var persistentSurface: Surface? = null
     private var isExiting = false
 
     private var latestSurface: Surface? = null
@@ -111,6 +224,11 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
     private var lastPointerAtMs = 0L
     private var loggedTouch = false
     private val pointerRecord = ByteBuffer.allocate(16).order(ByteOrder.LITTLE_ENDIAN)
+    private val tuioTouch = TuioTouchSender().apply {
+        log = { msg ->
+            VexaLogger.log(LogLevel.INFO, LogCategory.SURFACE, msg, emptyMap())
+        }
+    }
 
     private fun closeGameActivity() {
         if (isExiting) return
@@ -306,11 +424,20 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
         val maxY = (surfaceHeight - 1).coerceAtLeast(0)
         val x = event.x.toInt().coerceIn(0, maxX)
         val y = event.y.toInt().coerceIn(0, maxY)
+        // event.x/y are view pixels; the EGL surface may be larger than the
+        // view (SurfaceFlinger scales), so normalize against the view the
+        // touch actually landed on. Qt maps TUIO's normalized coords onto its
+        // screen geometry, which tracks the ANativeWindow size.
+        val vw = if (::gameSurfaceView.isInitialized) gameSurfaceView.width else 0
+        val vh = if (::gameSurfaceView.isInitialized) gameSurfaceView.height else 0
+        val nx = if (vw > 0) (event.x / vw).coerceIn(0f, 1f) else 0f
+        val ny = if (vh > 0) (event.y / vh).coerceIn(0f, 1f) else 0f
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 pointerDown = true
                 writePointer(6, x, y, 0)
                 writePointer(4, x, y, 0)
+                tuioTouch.touchDown(nx, ny)
                 lastPointerX = x
                 lastPointerY = y
                 lastPointerAtMs = SystemClock.uptimeMillis()
@@ -321,6 +448,7 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
                 val moved = kotlin.math.abs(x - lastPointerX) >= 4 || kotlin.math.abs(y - lastPointerY) >= 4
                 if (!moved && now - lastPointerAtMs < 8L) return
                 writePointer(6, x, y, 256)
+                tuioTouch.touchMove(nx, ny)
                 lastPointerX = x
                 lastPointerY = y
                 lastPointerAtMs = now
@@ -330,6 +458,7 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
                 pointerDown = false
                 writePointer(6, x, y, 256)
                 writePointer(5, x, y, 256)
+                tuioTouch.touchUp()
             }
         }
     }
@@ -555,6 +684,12 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
             bootConnected = true
             sendRegister()
 
+            // Returning from the background: the runtime kept running but the
+            // SurfaceView recreated its Surface while we were unbound.
+            if (runtimeStarted) {
+                latestSurface?.takeIf { it.isValid }?.let { sendSurfaceCreated(it) }
+            }
+
             pendingLaunchRequest?.let { req ->
                 if (tryLaunchWithSurface(req)) {
                     pendingLaunchRequest = null
@@ -649,11 +784,9 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
             )
         )
 
-        gameSurfaceView = SurfaceView(this).also { sv ->
-            sv.setZOrderOnTop(false)
-            sv.holder.addCallback(this)
-            // Opaque lets SurfaceFlinger scan the guest buffer out directly instead of blending it every frame.
-            sv.holder.setFormat(android.graphics.PixelFormat.OPAQUE)
+        gameSurfaceView = android.view.TextureView(this).also { sv ->
+            sv.surfaceTextureListener = this
+            sv.isOpaque = true
             sv.isClickable = true
             sv.isFocusable = true
             sv.setOnTouchListener { _, event ->
@@ -696,6 +829,137 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
             category = LogCategory.SURFACE,
             message = "SurfaceView object attached"
         )
+
+        startTuioCommandPoller()
+    }
+
+    /**
+     * Debug/scripting channel: a guest-side file carrying normalized TUIO
+     * commands ("tap x y", "down x y", "move x y", "up"). Qt maps TUIO
+     * positions onto the focused window's rectangle, so physical taps can
+     * never express dialog-relative coordinates; this file can.
+     */
+    @Volatile private var loginWatchFile: java.io.File? = null
+    @Volatile private var loginWatchBaseline = 0L
+    @Volatile private var loginWatchDeadline = 0L
+
+    private var bgOverlay: android.view.View? = null
+
+    private fun addBgOverlay() {
+        if (bgOverlay != null || !android.provider.Settings.canDrawOverlays(this)) return
+        try {
+            val v = android.view.View(this)
+            val lp = android.view.WindowManager.LayoutParams(
+                1, 1,
+                android.view.WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+                android.graphics.PixelFormat.TRANSLUCENT
+            )
+            getSystemService(android.view.WindowManager::class.java).addView(v, lp)
+            bgOverlay = v
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun removeBgOverlay() {
+        bgOverlay?.let {
+            try { getSystemService(android.view.WindowManager::class.java).removeView(it) } catch (_: Exception) {}
+        }
+        bgOverlay = null
+    }
+
+    private fun bringToFront() {
+        try {
+            val am = getSystemService(android.app.ActivityManager::class.java)
+            am.appTasks.firstOrNull()?.moveToFront()
+        } catch (_: Exception) {
+        }
+        try {
+            startActivity(
+                Intent(this, GameActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            )
+        } catch (_: Exception) {
+        }
+        removeBgOverlay()
+    }
+
+    private fun startTuioCommandPoller() {
+        lifecycleScope.launch(Dispatchers.IO) {
+            while (true) {
+                try {
+                    val root = guestRootfs
+                    if (root != null) {
+                        val cmdFile = java.io.File(root, "tmp/vexa-tuio-cmd")
+                        if (cmdFile.isFile) {
+                            val line = cmdFile.readText().trim()
+                            cmdFile.delete()
+                            val t = line.split("\\s+".toRegex())
+                            if (t.isNotEmpty()) {
+                                val x = t.getOrNull(1)?.toFloatOrNull() ?: 0f
+                                val y = t.getOrNull(2)?.toFloatOrNull() ?: 0f
+                                when (t[0]) {
+                                    "tap" -> tuioTouch.tap(x, y)
+                                    "down" -> tuioTouch.touchDown(x, y)
+                                    "move" -> tuioTouch.touchMove(x, y)
+                                    "up" -> tuioTouch.touchUp()
+                                }
+                                VexaLogger.log(
+                                    LogLevel.INFO, LogCategory.SURFACE,
+                                    "TUIO cmd: $line", emptyMap()
+                                )
+                            }
+                        }
+                        val urlCandidates = buildList {
+                            add(java.io.File(root, "tmp/vexa-open-url"))
+                            java.io.File(java.io.File(root).parentFile, "guests").listFiles()?.forEach {
+                                add(java.io.File(it, "tmp/vexa-open-url"))
+                            }
+                        }
+                        val urlFile = urlCandidates.firstOrNull { it.isFile }
+                        if (urlFile != null) {
+                            val url = urlFile.readText().trim()
+                            urlFile.delete()
+                            if (url.startsWith("https://") || url.startsWith("http://")) {
+                                VexaLogger.log(
+                                    LogLevel.INFO, LogCategory.SURFACE,
+                                    "Guest open-url: $url", emptyMap()
+                                )
+                                if (url.contains("redirect_uri=http://127.0.0.1") ||
+                                    url.contains("redirect_uri=http%3A%2F%2F127.0.0.1")
+                                ) {
+                                    val acc = java.io.File(
+                                        java.io.File(root).parentFile,
+                                        "guests/prismlauncher/data/accounts.json"
+                                    )
+                                    loginWatchFile = acc
+                                    loginWatchBaseline = acc.lastModified()
+                                    loginWatchDeadline = System.currentTimeMillis() + 10 * 60_000L
+                                    withContext(Dispatchers.Main) { addBgOverlay() }
+                                }
+                                startActivity(
+                                    Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url))
+                                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                )
+                            }
+                        }
+                        val watch = loginWatchFile
+                        if (watch != null) {
+                            if (System.currentTimeMillis() > loginWatchDeadline) {
+                                loginWatchFile = null
+                            } else if (watch.lastModified() != loginWatchBaseline) {
+                                loginWatchFile = null
+                                delay(1000)
+                                withContext(Dispatchers.Main) { bringToFront() }
+                            }
+                        }
+                    }
+                } catch (_: Exception) {
+                }
+                delay(120)
+            }
+        }
     }
 
     // Guests present through eglSwapBuffers, so the display rate caps their frame rate.
@@ -720,6 +984,9 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
     override fun onStart() {
         super.onStart()
         val intent = Intent(this, RuntimeService::class.java)
+        // Started service: keeps the runtime (and guest worker) alive while the
+        // activity is stopped/backgrounded; bind alone would destroy it on unbind.
+        runCatching { startService(intent) }
         bindService(intent, runtimeConnection, Context.BIND_AUTO_CREATE)
     }
 
@@ -728,13 +995,36 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
         hideSystemBars()
     }
 
-    override fun surfaceCreated(holder: SurfaceHolder) {
-        latestSurface = holder.surface
+    override fun onSurfaceTextureAvailable(st: android.graphics.SurfaceTexture, width: Int, height: Int) {
+        val surface = persistentSurface?.takeIf { it.isValid } ?: Surface(st).also { persistentSurface = it }
+        handleSurfaceCreated(surface)
+        handleSurfaceChanged(4, width, height)
+    }
+
+    override fun onSurfaceTextureSizeChanged(st: android.graphics.SurfaceTexture, width: Int, height: Int) {
+        handleSurfaceChanged(4, width, height)
+    }
+
+    // false: keep the SurfaceTexture alive when the view detaches (background trip).
+    override fun onSurfaceTextureDestroyed(st: android.graphics.SurfaceTexture): Boolean = false
+
+    override fun onSurfaceTextureUpdated(st: android.graphics.SurfaceTexture) {}
+
+    private fun handleSurfaceCreated(surface: Surface) {
+        latestSurface = surface
         VexaLogger.log(
             level = LogLevel.INFO,
             category = LogCategory.SURFACE,
             message = "Game Surface is being created..."
         )
+        if (runtimeStarted) {
+            // Re-created after a background trip: keep the running guest, just
+            // give it the new Surface (resent on rebind if the service is not bound yet).
+            if (runtimeBound && serviceMessenger != null) {
+                sendSurfaceCreated(surface)
+            }
+            return
+        }
         val program = com.critical.vexaemulator.guest.GuestCatalog.find(
             intent.getStringExtra(EXTRA_PROGRAM_ID).orEmpty()
         )
@@ -799,8 +1089,7 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
 
     }
 
-    override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
-        latestSurface = holder.surface
+    private fun handleSurfaceChanged(format: Int, width: Int, height: Int) {
         surfaceWidth = width
         surfaceHeight = height
         if (width > height) {
@@ -826,30 +1115,6 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
         // RuntimeBridge.onRuntimeSurfaceChanged(width, height) replace this with actual sendSurfaceChanged() later from RuntimeService.kt or make the game control it.
     }
 
-    override fun surfaceDestroyed(holder: SurfaceHolder) {
-        VexaLogger.log(
-            level = LogLevel.INFO,
-            category = LogCategory.SURFACE,
-            message = "Game Surface destroy callback received...",
-            fields = mapOf(
-                "surfaceHash" to holder.surface.hashCode().toString(),
-                "isValid" to holder.surface.isValid.toString()
-            )
-        )
-        latestSurface = null
-        sendSurfaceDestroyed()
-
-        VexaLogger.log(
-            level = LogLevel.INFO,
-            category = LogCategory.SURFACE,
-            message = "Game Surface destroy after surface teardown by request",
-            fields = mapOf(
-                "surfaceHash" to holder.surface.hashCode().toString(),
-                "isValid" to holder.surface.isValid.toString()
-            )
-        )
-    }
-
     override fun onStop() {
         if (runtimeBound) {
             sendUnregister()
@@ -868,6 +1133,15 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
                 unbindService(runtimeConnection)
             }
             runtimeBound = false
+        }
+        if (isFinishing) {
+            runCatching { stopService(Intent(this, RuntimeService::class.java)) }
+            latestSurface = null
+            persistentSurface?.release()
+            persistentSurface = null
+            if (::gameSurfaceView.isInitialized) {
+                gameSurfaceView.surfaceTexture?.release()
+            }
         }
         super.onDestroy()
     }
@@ -927,7 +1201,7 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
 
 @Composable
 private fun GameScreen(
-    surfaceView: SurfaceView,
+    surfaceView: android.view.View,
     program: GuestProgram?,
     runtimePid: Int?,
     sessionStartMs: Long,
