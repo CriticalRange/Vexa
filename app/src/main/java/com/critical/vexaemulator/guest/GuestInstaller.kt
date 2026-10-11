@@ -30,7 +30,13 @@ object GuestInstaller {
             program.env + "HOME=${guestDir.absolutePath}"
         } else {
             program.env
-        }
+        } + listOf(
+            // Consumed by the FEX execve bridge (Syscalls.cpp) and FexChildMain:
+            // guest children are re-launched through app_process + this JVM class.
+            "VEXA_APK=${context.packageCodePath}",
+            "VEXA_FILES=${root.absolutePath}",
+            "VEXA_PROGRAM=${program.id}",
+        )
 
         val rootfs = File(root, "rootfs").apply { mkdirs() }
         val thunkHost = File(root, "thunks/host").apply { mkdirs() }

@@ -10,6 +10,8 @@
  * XKB extension, and a socket fd are not forwarded to Android.
  */
 #include <xcb/xcb.h>
+#include <xcb/xcbext.h>
+#include <sys/uio.h>
 
 #include <ctype.h>
 #include <stddef.h>
@@ -129,10 +131,24 @@ static unsigned char* vexa_build_setup(void) {
   screen->default_colormap = 2;
   screen->white_pixel = 0x00ffffff;
   screen->black_pixel = 0;
-  screen->width_in_pixels = 1280;
-  screen->height_in_pixels = 720;
-  screen->width_in_millimeters = 300;
-  screen->height_in_millimeters = 170;
+  {
+    int sw = 1280, sh = 720;
+    FILE* f = fopen("/tmp/vexa-window-size", "r");
+    if (f) {
+      int w = 0, h = 0;
+      if (fscanf(f, "%d %d", &w, &h) == 2 && w > 1 && h > 1 && w <= 65535 && h <= 65535) {
+        sw = w;
+        sh = h;
+      }
+      fclose(f);
+    }
+    screen->width_in_pixels = (uint16_t)sw;
+    screen->height_in_pixels = (uint16_t)sh;
+    /* ~96 DPI so Qt keeps devicePixelRatio at 1; scaling comes from
+       QT_SCALE_FACTOR alone. */
+    screen->width_in_millimeters = (uint16_t)(sw * 254 / 960);
+    screen->height_in_millimeters = (uint16_t)(sh * 254 / 960);
+  }
   screen->min_installed_maps = 1;
   screen->max_installed_maps = 1;
   screen->root_visual = 1;
@@ -365,15 +381,13 @@ xcb_void_cookie_t xcb_create_window(xcb_connection_t* c, uint8_t depth, xcb_wind
                                     xcb_visualid_t visual, uint32_t value_mask, const void* value_list) {
   (void)depth;
   (void)parent;
-  (void)x;
-  (void)y;
-  (void)width;
-  (void)height;
   (void)border_width;
   (void)_class;
   (void)visual;
   (void)value_mask;
   (void)value_list;
+  fprintf(stderr, "[VEXA][XCB] create_window wid=%u x=%d y=%d %ux%u\n", (unsigned)wid, (int)x, (int)y,
+          (unsigned)width, (unsigned)height);
   if (c && !c->error) {
     c->last_window = wid;
   }
@@ -527,16 +541,684 @@ xcb_generic_event_t* xcb_poll_for_queued_event(xcb_connection_t* c) {
 }
 
 xcb_generic_event_t* xcb_wait_for_event(xcb_connection_t* c) {
-  xcb_generic_event_t* event = xcb_poll_for_event(c);
   struct timespec delay;
-  if (event || !c || c->error) {
-    return event;
-  }
-  /* No X server pushes input. A null return is defined as an I/O failure,
-     which makes callers tear the connection down, so this waits one frame
-     and stays quiet instead. */
   delay.tv_sec = 0;
   delay.tv_nsec = 16000000L;
-  nanosleep(&delay, NULL);
+  /* No X server pushes input, but a null return is defined as an I/O
+     failure and makes Qt's xcb event-reader thread tear the connection
+     down. Block like a socket read until an event or a real error. */
+  while (c && !c->error) {
+    xcb_generic_event_t* event = xcb_poll_for_event(c);
+    if (event) {
+      return event;
+    }
+    nanosleep(&delay, NULL);
+  }
   return NULL;
+}
+
+/* ---- Qt xcb platform plugin: remaining core-protocol surface ---- */
+
+static void* vexa_new_reply(unsigned int sequence, size_t min_size) {
+  xcb_generic_reply_t* reply = (xcb_generic_reply_t*)calloc(1, min_size < 4096 ? 4096 : min_size);
+  if (!reply) {
+    return NULL;
+  }
+  reply->response_type = 1;
+  reply->sequence = (uint16_t)sequence;
+  return reply;
+}
+
+xcb_void_cookie_t
+xcb_change_gc (xcb_connection_t *c, xcb_gcontext_t gc, uint32_t value_mask, const void *value_list) {
+  return vexa_cookie(c);
+}
+
+xcb_void_cookie_t
+xcb_change_gc_checked (xcb_connection_t *c, xcb_gcontext_t gc, uint32_t value_mask, const void *value_list) {
+  return vexa_cookie(c);
+}
+
+xcb_void_cookie_t
+xcb_change_keyboard_control (xcb_connection_t *c, uint32_t value_mask, const void *value_list) {
+  return vexa_cookie(c);
+}
+
+xcb_void_cookie_t
+xcb_change_property_checked (xcb_connection_t *c, uint8_t mode, xcb_window_t window, xcb_atom_t property, xcb_atom_t type, uint8_t format, uint32_t data_len, const void *data) {
+  return vexa_cookie(c);
+}
+
+xcb_void_cookie_t
+xcb_change_window_attributes (xcb_connection_t *c, xcb_window_t window, uint32_t value_mask, const void *value_list) {
+  return vexa_cookie(c);
+}
+
+xcb_void_cookie_t
+xcb_change_window_attributes_checked (xcb_connection_t *c, xcb_window_t window, uint32_t value_mask, const void *value_list) {
+  return vexa_cookie(c);
+}
+
+xcb_void_cookie_t
+xcb_clear_area (xcb_connection_t *c, uint8_t exposures, xcb_window_t window, int16_t x, int16_t y, uint16_t width, uint16_t height) {
+  return vexa_cookie(c);
+}
+
+xcb_void_cookie_t
+xcb_create_gc (xcb_connection_t *c, xcb_gcontext_t cid, xcb_drawable_t drawable, uint32_t value_mask, const void *value_list) {
+  return vexa_cookie(c);
+}
+
+xcb_void_cookie_t
+xcb_create_gc_checked (xcb_connection_t *c, xcb_gcontext_t cid, xcb_drawable_t drawable, uint32_t value_mask, const void *value_list) {
+  return vexa_cookie(c);
+}
+
+xcb_void_cookie_t
+xcb_create_glyph_cursor (xcb_connection_t *c, xcb_cursor_t cid, xcb_font_t source_font, xcb_font_t mask_font, uint16_t source_char, uint16_t mask_char, uint16_t fore_red, uint16_t fore_green, uint16_t fore_blue, uint16_t back_red, uint16_t back_green, uint16_t back_blue) {
+  return vexa_cookie(c);
+}
+
+xcb_void_cookie_t
+xcb_create_pixmap (xcb_connection_t *c, uint8_t depth, xcb_pixmap_t pid, xcb_drawable_t drawable, uint16_t width, uint16_t height) {
+  return vexa_cookie(c);
+}
+
+xcb_void_cookie_t
+xcb_create_pixmap_checked (xcb_connection_t *c, uint8_t depth, xcb_pixmap_t pid, xcb_drawable_t drawable, uint16_t width, uint16_t height) {
+  return vexa_cookie(c);
+}
+
+xcb_void_cookie_t
+xcb_free_cursor (xcb_connection_t *c, xcb_cursor_t cursor) {
+  return vexa_cookie(c);
+}
+
+xcb_void_cookie_t
+xcb_free_gc (xcb_connection_t *c, xcb_gcontext_t gc) {
+  return vexa_cookie(c);
+}
+
+xcb_void_cookie_t
+xcb_free_pixmap (xcb_connection_t *c, xcb_pixmap_t pixmap) {
+  return vexa_cookie(c);
+}
+
+xcb_void_cookie_t
+xcb_free_pixmap_checked (xcb_connection_t *c, xcb_pixmap_t pixmap) {
+  return vexa_cookie(c);
+}
+
+xcb_void_cookie_t
+xcb_no_operation (xcb_connection_t *c) {
+  return vexa_cookie(c);
+}
+
+xcb_void_cookie_t
+xcb_no_operation_checked (xcb_connection_t *c) {
+  return vexa_cookie(c);
+}
+
+xcb_void_cookie_t
+xcb_open_font (xcb_connection_t *c, xcb_font_t fid, uint16_t name_len, const char *name) {
+  return vexa_cookie(c);
+}
+
+xcb_void_cookie_t
+xcb_put_image (xcb_connection_t *c, uint8_t format, xcb_drawable_t drawable, xcb_gcontext_t gc, uint16_t width, uint16_t height, int16_t dst_x, int16_t dst_y, uint8_t left_pad, uint8_t depth, uint32_t data_len, const uint8_t *data) {
+  return vexa_cookie(c);
+}
+
+xcb_void_cookie_t
+xcb_create_window_checked (xcb_connection_t *c, uint8_t depth, xcb_window_t wid, xcb_window_t parent, int16_t x, int16_t y, uint16_t width, uint16_t height, uint16_t border_width, uint16_t _class, xcb_visualid_t visual, uint32_t value_mask, const void *value_list) {
+  fprintf(stderr, "[VEXA][XCB] create_window_checked wid=%u x=%d y=%d %ux%u\n", (unsigned)wid, (int)x, (int)y,
+          (unsigned)width, (unsigned)height);
+  if (c && !c->error) {
+    c->last_window = wid;
+  }
+  return vexa_cookie(c);
+}
+
+xcb_get_geometry_cookie_t
+xcb_get_geometry (xcb_connection_t *c, xcb_drawable_t drawable) {
+  xcb_get_geometry_cookie_t cookie;
+  cookie.sequence = vexa_cookie(c).sequence;
+  return cookie;
+}
+
+xcb_get_property_cookie_t
+xcb_get_property (xcb_connection_t *c, uint8_t _delete, xcb_window_t window, xcb_atom_t property, xcb_atom_t type, uint32_t long_offset, uint32_t long_length) {
+  xcb_get_property_cookie_t cookie;
+  cookie.sequence = vexa_cookie(c).sequence;
+  return cookie;
+}
+
+xcb_get_property_cookie_t
+xcb_get_property_unchecked (xcb_connection_t *c, uint8_t _delete, xcb_window_t window, xcb_atom_t property, xcb_atom_t type, uint32_t long_offset, uint32_t long_length) {
+  xcb_get_property_cookie_t cookie;
+  cookie.sequence = vexa_cookie(c).sequence;
+  return cookie;
+}
+
+xcb_get_image_cookie_t
+xcb_get_image (xcb_connection_t *c, uint8_t format, xcb_drawable_t drawable, int16_t x, int16_t y, uint16_t width, uint16_t height, uint32_t plane_mask) {
+  xcb_get_image_cookie_t cookie;
+  cookie.sequence = vexa_cookie(c).sequence;
+  return cookie;
+}
+
+xcb_get_input_focus_cookie_t
+xcb_get_input_focus (xcb_connection_t *c) {
+  xcb_get_input_focus_cookie_t cookie;
+  cookie.sequence = vexa_cookie(c).sequence;
+  return cookie;
+}
+
+xcb_get_keyboard_mapping_cookie_t
+xcb_get_keyboard_mapping (xcb_connection_t *c, xcb_keycode_t first_keycode, uint8_t count) {
+  xcb_get_keyboard_mapping_cookie_t cookie;
+  cookie.sequence = vexa_cookie(c).sequence;
+  return cookie;
+}
+
+xcb_get_geometry_reply_t *
+xcb_get_geometry_reply (xcb_connection_t *c, xcb_get_geometry_cookie_t cookie , xcb_generic_error_t **e) {
+  xcb_get_geometry_reply_t* reply = (xcb_get_geometry_reply_t*)vexa_new_reply(cookie.sequence, sizeof(xcb_get_geometry_reply_t));
+  if (reply) {
+    reply->root = 1;
+    reply->depth = 24;
+    reply->width = (uint16_t)(g_announced_width > 0 ? g_announced_width : 1280);
+    reply->height = (uint16_t)(g_announced_height > 0 ? g_announced_height : 720);
+  }
+  if (e) { *e = NULL; }
+  return reply;
+}
+
+xcb_get_property_reply_t *
+xcb_get_property_reply (xcb_connection_t *c, xcb_get_property_cookie_t cookie , xcb_generic_error_t **e) {
+  if (e) { *e = NULL; }
+  return (xcb_get_property_reply_t*)vexa_new_reply(cookie.sequence, sizeof(xcb_get_property_reply_t));
+}
+
+xcb_get_image_reply_t *
+xcb_get_image_reply (xcb_connection_t *c, xcb_get_image_cookie_t cookie , xcb_generic_error_t **e) {
+  xcb_get_image_reply_t* reply = (xcb_get_image_reply_t*)vexa_new_reply(cookie.sequence, sizeof(xcb_get_image_reply_t));
+  if (reply) { reply->depth = 24; reply->visual = 1; }
+  if (e) { *e = NULL; }
+  return reply;
+}
+
+xcb_get_input_focus_reply_t *
+xcb_get_input_focus_reply (xcb_connection_t *c, xcb_get_input_focus_cookie_t cookie , xcb_generic_error_t **e) {
+  xcb_get_input_focus_reply_t* reply = (xcb_get_input_focus_reply_t*)vexa_new_reply(cookie.sequence, sizeof(xcb_get_input_focus_reply_t));
+  if (reply && c) { reply->focus = c->last_window ? c->last_window : 1; }
+  if (e) { *e = NULL; }
+  return reply;
+}
+
+xcb_get_keyboard_mapping_reply_t *
+xcb_get_keyboard_mapping_reply (xcb_connection_t *c, xcb_get_keyboard_mapping_cookie_t cookie , xcb_generic_error_t **e) {
+  if (e) { *e = NULL; }
+  return (xcb_get_keyboard_mapping_reply_t*)vexa_new_reply(cookie.sequence, sizeof(xcb_get_keyboard_mapping_reply_t));
+}
+
+void* xcb_get_property_value (const xcb_get_property_reply_t* R) {
+  return R ? (void*)(R + 1) : NULL;
+}
+
+int xcb_get_property_value_length (const xcb_get_property_reply_t* R) {
+  if (!R) { return 0; }
+  return (int)(R->length * (R->format / 8));
+}
+
+uint8_t* xcb_get_image_data (const xcb_get_image_reply_t* R) {
+  return R ? (uint8_t*)(R + 1) : NULL;
+}
+
+int xcb_get_image_data_length (const xcb_get_image_reply_t* R) {
+  return R ? (int)(R->length * 4) : 0;
+}
+
+xcb_keysym_t* xcb_get_keyboard_mapping_keysyms (const xcb_get_keyboard_mapping_reply_t* R) {
+  return R ? (xcb_keysym_t*)(R + 1) : NULL;
+}
+
+xcb_depth_iterator_t xcb_screen_allowed_depths_iterator (const xcb_screen_t* R) {
+  xcb_depth_iterator_t i;
+  memset(&i, 0, sizeof(i));
+  if (!R) { return i; }
+  i.data = (xcb_depth_t*)(R + 1);
+  i.rem = R->allowed_depths_len;
+  return i;
+}
+
+void xcb_depth_next (xcb_depth_iterator_t* i) {
+  const xcb_depth_t* d;
+  if (!i || !i->data || i->rem <= 0) { return; }
+  d = i->data;
+  i->data = (xcb_depth_t*)((const char*)d + sizeof(xcb_depth_t) + (size_t)d->visuals_len * sizeof(xcb_visualtype_t));
+  i->rem--;
+}
+
+xcb_visualtype_iterator_t xcb_depth_visuals_iterator (const xcb_depth_t* R) {
+  xcb_visualtype_iterator_t i;
+  memset(&i, 0, sizeof(i));
+  if (!R) { return i; }
+  i.data = (xcb_visualtype_t*)(R + 1);
+  i.rem = R->visuals_len;
+  return i;
+}
+
+void xcb_visualtype_next (xcb_visualtype_iterator_t* i) {
+  if (!i || !i->data || i->rem <= 0) { return; }
+  i->data = i->data + 1;
+  i->rem--;
+}
+
+xcb_format_t* xcb_setup_pixmap_formats (const xcb_setup_t* R) {
+  return R ? (xcb_format_t*)vexa_after_vendor(R) : NULL;
+}
+
+int xcb_setup_pixmap_formats_length (const xcb_setup_t* R) {
+  return R ? R->pixmap_formats_len : 0;
+}
+
+int xcb_str_sizeof (const void* str) {
+  const xcb_str_t* s = (const xcb_str_t*)str;
+  return s ? (int)(sizeof(xcb_str_t) + vexa_pad4(s->name_len)) : 0;
+}
+
+int xcb_popcount (uint32_t x) {
+  return __builtin_popcount(x);
+}
+
+unsigned int xcb_send_request (xcb_connection_t* c, int flags, struct iovec* vector, const xcb_protocol_request_t* request) {
+  (void)flags; (void)vector; (void)request;
+  if (!c || c->error) { return 0; }
+  return c->sequence++;
+}
+
+uint64_t xcb_send_request64 (xcb_connection_t* c, int flags, struct iovec* vector, const xcb_protocol_request_t* request) {
+  return xcb_send_request(c, flags, vector, request);
+}
+
+unsigned int xcb_send_request_with_fds (xcb_connection_t* c, int flags, struct iovec* vector, const xcb_protocol_request_t* request, unsigned int num_fds, int* fds) {
+  (void)num_fds; (void)fds;
+  return xcb_send_request(c, flags, vector, request);
+}
+
+uint64_t xcb_send_request_with_fds64 (xcb_connection_t* c, int flags, struct iovec* vector, const xcb_protocol_request_t* request, unsigned int num_fds, int* fds) {
+  return xcb_send_request_with_fds(c, flags, vector, request, num_fds, fds);
+}
+
+void* xcb_wait_for_reply (xcb_connection_t* c, unsigned int request, xcb_generic_error_t** e) {
+  (void)c;
+  if (e) { *e = NULL; }
+  return vexa_new_reply(request, 64);
+}
+
+void* xcb_wait_for_reply64 (xcb_connection_t* c, uint64_t request, xcb_generic_error_t** e) {
+  return xcb_wait_for_reply(c, (unsigned int)request, e);
+}
+
+int xcb_poll_for_reply (xcb_connection_t* c, unsigned int request, void** reply, xcb_generic_error_t** e) {
+  (void)c;
+  if (e) { *e = NULL; }
+  if (reply) { *reply = vexa_new_reply(request, 64); return 1; }
+  return 0;
+}
+
+int* xcb_get_reply_fds (xcb_connection_t* c, void* reply, size_t replylen) {
+  (void)c; (void)reply; (void)replylen;
+  return NULL;
+}
+
+xcb_generic_error_t* xcb_request_check (xcb_connection_t* c, xcb_void_cookie_t request) {
+  (void)c; (void)request;
+  return NULL;
+}
+
+const xcb_query_extension_reply_t* xcb_get_extension_data (xcb_connection_t* c, xcb_extension_t* ext) {
+  static const xcb_query_extension_reply_t absent;
+  (void)c; (void)ext;
+  return &absent;
+}
+
+int xcb_get_file_descriptor (xcb_connection_t* c) {
+  (void)c;
+  return -1;
+}
+
+/* ---- second pass: core requests the bundled Qt/XcbQpa stack imports ---- */
+
+xcb_void_cookie_t
+xcb_bell (xcb_connection_t *c, int8_t percent) {
+  return vexa_cookie(c);
+}
+
+xcb_void_cookie_t
+xcb_close_font (xcb_connection_t *c, xcb_font_t font) {
+  return vexa_cookie(c);
+}
+
+xcb_void_cookie_t
+xcb_convert_selection (xcb_connection_t *c, xcb_window_t requestor, xcb_atom_t selection, xcb_atom_t target, xcb_atom_t property, xcb_timestamp_t time) {
+  return vexa_cookie(c);
+}
+
+xcb_void_cookie_t
+xcb_copy_area (xcb_connection_t *c, xcb_drawable_t src_drawable, xcb_drawable_t dst_drawable, xcb_gcontext_t gc, int16_t src_x, int16_t src_y, int16_t dst_x, int16_t dst_y, uint16_t width, uint16_t height) {
+  return vexa_cookie(c);
+}
+
+xcb_void_cookie_t
+xcb_create_colormap (xcb_connection_t *c, uint8_t alloc, xcb_colormap_t mid, xcb_window_t window, xcb_visualid_t visual) {
+  return vexa_cookie(c);
+}
+
+xcb_void_cookie_t
+xcb_create_cursor (xcb_connection_t *c, xcb_cursor_t cid, xcb_pixmap_t source, xcb_pixmap_t mask, uint16_t fore_red, uint16_t fore_green, uint16_t fore_blue, uint16_t back_red, uint16_t back_green, uint16_t back_blue, uint16_t x, uint16_t y) {
+  return vexa_cookie(c);
+}
+
+xcb_void_cookie_t
+xcb_delete_property (xcb_connection_t *c, xcb_window_t window, xcb_atom_t property) {
+  return vexa_cookie(c);
+}
+
+xcb_void_cookie_t
+xcb_free_colormap (xcb_connection_t *c, xcb_colormap_t cmap) {
+  return vexa_cookie(c);
+}
+
+xcb_void_cookie_t
+xcb_grab_server (xcb_connection_t *c) {
+  return vexa_cookie(c);
+}
+
+xcb_void_cookie_t
+xcb_reparent_window (xcb_connection_t *c, xcb_window_t window, xcb_window_t parent, int16_t x, int16_t y) {
+  return vexa_cookie(c);
+}
+
+xcb_void_cookie_t
+xcb_set_clip_rectangles (xcb_connection_t *c, uint8_t ordering, xcb_gcontext_t gc, int16_t clip_x_origin, int16_t clip_y_origin, uint32_t rectangles_len, const xcb_rectangle_t *rectangles) {
+  return vexa_cookie(c);
+}
+
+xcb_void_cookie_t
+xcb_set_input_focus (xcb_connection_t *c, uint8_t revert_to, xcb_window_t focus, xcb_timestamp_t time) {
+  return vexa_cookie(c);
+}
+
+xcb_void_cookie_t
+xcb_set_selection_owner (xcb_connection_t *c, xcb_window_t owner, xcb_atom_t selection, xcb_timestamp_t time) {
+  return vexa_cookie(c);
+}
+
+xcb_void_cookie_t
+xcb_ungrab_keyboard (xcb_connection_t *c, xcb_timestamp_t time) {
+  return vexa_cookie(c);
+}
+
+xcb_void_cookie_t
+xcb_ungrab_pointer (xcb_connection_t *c, xcb_timestamp_t time) {
+  return vexa_cookie(c);
+}
+
+xcb_void_cookie_t
+xcb_ungrab_server (xcb_connection_t *c) {
+  return vexa_cookie(c);
+}
+
+xcb_void_cookie_t
+xcb_unmap_window (xcb_connection_t *c, xcb_window_t window) {
+  return vexa_cookie(c);
+}
+
+xcb_void_cookie_t
+xcb_warp_pointer (xcb_connection_t *c, xcb_window_t src_window, xcb_window_t dst_window, int16_t src_x, int16_t src_y, uint16_t src_width, uint16_t src_height, int16_t dst_x, int16_t dst_y) {
+  return vexa_cookie(c);
+}
+
+xcb_get_atom_name_cookie_t
+xcb_get_atom_name (xcb_connection_t *c, xcb_atom_t atom) {
+  xcb_get_atom_name_cookie_t cookie;
+  cookie.sequence = vexa_cookie(c).sequence;
+  return cookie;
+}
+
+xcb_get_geometry_cookie_t
+xcb_get_geometry_unchecked (xcb_connection_t *c, xcb_drawable_t drawable) {
+  xcb_get_geometry_cookie_t cookie;
+  cookie.sequence = vexa_cookie(c).sequence;
+  return cookie;
+}
+
+xcb_get_image_cookie_t
+xcb_get_image_unchecked (xcb_connection_t *c, uint8_t format, xcb_drawable_t drawable, int16_t x, int16_t y, uint16_t width, uint16_t height, uint32_t plane_mask) {
+  xcb_get_image_cookie_t cookie;
+  cookie.sequence = vexa_cookie(c).sequence;
+  return cookie;
+}
+
+xcb_get_modifier_mapping_cookie_t
+xcb_get_modifier_mapping (xcb_connection_t *c) {
+  xcb_get_modifier_mapping_cookie_t cookie;
+  cookie.sequence = vexa_cookie(c).sequence;
+  return cookie;
+}
+
+xcb_get_selection_owner_cookie_t
+xcb_get_selection_owner (xcb_connection_t *c, xcb_atom_t selection) {
+  xcb_get_selection_owner_cookie_t cookie;
+  cookie.sequence = vexa_cookie(c).sequence;
+  return cookie;
+}
+
+xcb_get_window_attributes_cookie_t
+xcb_get_window_attributes (xcb_connection_t *c, xcb_window_t window) {
+  xcb_get_window_attributes_cookie_t cookie;
+  cookie.sequence = vexa_cookie(c).sequence;
+  return cookie;
+}
+
+xcb_get_window_attributes_cookie_t
+xcb_get_window_attributes_unchecked (xcb_connection_t *c, xcb_window_t window) {
+  xcb_get_window_attributes_cookie_t cookie;
+  cookie.sequence = vexa_cookie(c).sequence;
+  return cookie;
+}
+
+xcb_grab_keyboard_cookie_t
+xcb_grab_keyboard (xcb_connection_t *c, uint8_t owner_events, xcb_window_t grab_window, xcb_timestamp_t time, uint8_t pointer_mode, uint8_t keyboard_mode) {
+  xcb_grab_keyboard_cookie_t cookie;
+  cookie.sequence = vexa_cookie(c).sequence;
+  return cookie;
+}
+
+xcb_grab_pointer_cookie_t
+xcb_grab_pointer (xcb_connection_t *c, uint8_t owner_events, xcb_window_t grab_window, uint16_t event_mask, uint8_t pointer_mode, uint8_t keyboard_mode, xcb_window_t confine_to, xcb_cursor_t cursor, xcb_timestamp_t time) {
+  xcb_grab_pointer_cookie_t cookie;
+  cookie.sequence = vexa_cookie(c).sequence;
+  return cookie;
+}
+
+xcb_query_pointer_cookie_t
+xcb_query_pointer (xcb_connection_t *c, xcb_window_t window) {
+  xcb_query_pointer_cookie_t cookie;
+  cookie.sequence = vexa_cookie(c).sequence;
+  return cookie;
+}
+
+xcb_query_tree_cookie_t
+xcb_query_tree (xcb_connection_t *c, xcb_window_t window) {
+  xcb_query_tree_cookie_t cookie;
+  cookie.sequence = vexa_cookie(c).sequence;
+  return cookie;
+}
+
+xcb_query_tree_cookie_t
+xcb_query_tree_unchecked (xcb_connection_t *c, xcb_window_t window) {
+  xcb_query_tree_cookie_t cookie;
+  cookie.sequence = vexa_cookie(c).sequence;
+  return cookie;
+}
+
+xcb_translate_coordinates_cookie_t
+xcb_translate_coordinates (xcb_connection_t *c, xcb_window_t src_window, xcb_window_t dst_window, int16_t src_x, int16_t src_y) {
+  xcb_translate_coordinates_cookie_t cookie;
+  cookie.sequence = vexa_cookie(c).sequence;
+  return cookie;
+}
+
+xcb_translate_coordinates_cookie_t
+xcb_translate_coordinates_unchecked (xcb_connection_t *c, xcb_window_t src_window, xcb_window_t dst_window, int16_t src_x, int16_t src_y) {
+  xcb_translate_coordinates_cookie_t cookie;
+  cookie.sequence = vexa_cookie(c).sequence;
+  return cookie;
+}
+
+xcb_get_atom_name_reply_t *
+xcb_get_atom_name_reply (xcb_connection_t *c, xcb_get_atom_name_cookie_t cookie , xcb_generic_error_t **e) {
+  xcb_get_atom_name_reply_t* reply = (xcb_get_atom_name_reply_t*)vexa_new_reply(cookie.sequence, sizeof(xcb_get_atom_name_reply_t));
+  if (reply) {
+  }
+  if (e) { *e = NULL; }
+  return reply;
+}
+
+xcb_get_modifier_mapping_reply_t *
+xcb_get_modifier_mapping_reply (xcb_connection_t *c, xcb_get_modifier_mapping_cookie_t cookie , xcb_generic_error_t **e) {
+  xcb_get_modifier_mapping_reply_t* reply = (xcb_get_modifier_mapping_reply_t*)vexa_new_reply(cookie.sequence, sizeof(xcb_get_modifier_mapping_reply_t));
+  if (reply) {
+    reply->keycodes_per_modifier = 0;
+  }
+  if (e) { *e = NULL; }
+  return reply;
+}
+
+xcb_get_selection_owner_reply_t *
+xcb_get_selection_owner_reply (xcb_connection_t *c, xcb_get_selection_owner_cookie_t cookie , xcb_generic_error_t **e) {
+  xcb_get_selection_owner_reply_t* reply = (xcb_get_selection_owner_reply_t*)vexa_new_reply(cookie.sequence, sizeof(xcb_get_selection_owner_reply_t));
+  if (reply) {
+    reply->owner = 0;
+  }
+  if (e) { *e = NULL; }
+  return reply;
+}
+
+xcb_get_window_attributes_reply_t *
+xcb_get_window_attributes_reply (xcb_connection_t *c, xcb_get_window_attributes_cookie_t cookie , xcb_generic_error_t **e) {
+  xcb_get_window_attributes_reply_t* reply = (xcb_get_window_attributes_reply_t*)vexa_new_reply(cookie.sequence, sizeof(xcb_get_window_attributes_reply_t));
+  if (reply) {
+  }
+  if (e) { *e = NULL; }
+  return reply;
+}
+
+xcb_grab_keyboard_reply_t *
+xcb_grab_keyboard_reply (xcb_connection_t *c, xcb_grab_keyboard_cookie_t cookie , xcb_generic_error_t **e) {
+  xcb_grab_keyboard_reply_t* reply = (xcb_grab_keyboard_reply_t*)vexa_new_reply(cookie.sequence, sizeof(xcb_grab_keyboard_reply_t));
+  if (reply) {
+    reply->status = XCB_GRAB_STATUS_SUCCESS;
+  }
+  if (e) { *e = NULL; }
+  return reply;
+}
+
+xcb_grab_pointer_reply_t *
+xcb_grab_pointer_reply (xcb_connection_t *c, xcb_grab_pointer_cookie_t cookie , xcb_generic_error_t **e) {
+  xcb_grab_pointer_reply_t* reply = (xcb_grab_pointer_reply_t*)vexa_new_reply(cookie.sequence, sizeof(xcb_grab_pointer_reply_t));
+  if (reply) {
+    reply->status = XCB_GRAB_STATUS_SUCCESS;
+  }
+  if (e) { *e = NULL; }
+  return reply;
+}
+
+xcb_query_pointer_reply_t *
+xcb_query_pointer_reply (xcb_connection_t *c, xcb_query_pointer_cookie_t cookie , xcb_generic_error_t **e) {
+  xcb_query_pointer_reply_t* reply = (xcb_query_pointer_reply_t*)vexa_new_reply(cookie.sequence, sizeof(xcb_query_pointer_reply_t));
+  if (reply) {
+    reply->same_screen = 1;
+    reply->root = 1;
+  }
+  if (e) { *e = NULL; }
+  return reply;
+}
+
+xcb_query_tree_reply_t *
+xcb_query_tree_reply (xcb_connection_t *c, xcb_query_tree_cookie_t cookie , xcb_generic_error_t **e) {
+  xcb_query_tree_reply_t* reply = (xcb_query_tree_reply_t*)vexa_new_reply(cookie.sequence, sizeof(xcb_query_tree_reply_t));
+  if (reply) {
+    reply->root = 1;
+    reply->parent = 1;
+  }
+  if (e) { *e = NULL; }
+  return reply;
+}
+
+xcb_translate_coordinates_reply_t *
+xcb_translate_coordinates_reply (xcb_connection_t *c, xcb_translate_coordinates_cookie_t cookie , xcb_generic_error_t **e) {
+  xcb_translate_coordinates_reply_t* reply = (xcb_translate_coordinates_reply_t*)vexa_new_reply(cookie.sequence, sizeof(xcb_translate_coordinates_reply_t));
+  if (reply) {
+    reply->same_screen = 1;
+  }
+  if (e) { *e = NULL; }
+  return reply;
+}
+
+char* xcb_get_atom_name_name (const xcb_get_atom_name_reply_t* R) {
+  return R ? (char*)(R + 1) : NULL;
+}
+
+int xcb_get_atom_name_name_length (const xcb_get_atom_name_reply_t* R) {
+  return R ? R->name_len : 0;
+}
+
+xcb_keycode_t* xcb_get_modifier_mapping_keycodes (const xcb_get_modifier_mapping_reply_t* R) {
+  return R ? (xcb_keycode_t*)(R + 1) : NULL;
+}
+
+int xcb_get_modifier_mapping_keycodes_length (const xcb_get_modifier_mapping_reply_t* R) {
+  return R ? (int)(R->length * 4) : 0;
+}
+
+xcb_window_t* xcb_query_tree_children (const xcb_query_tree_reply_t* R) {
+  return R ? (xcb_window_t*)(R + 1) : NULL;
+}
+
+int xcb_query_tree_children_length (const xcb_query_tree_reply_t* R) {
+  return R ? R->children_len : 0;
+}
+
+xcb_format_iterator_t xcb_setup_pixmap_formats_iterator (const xcb_setup_t* R) {
+  xcb_format_iterator_t i;
+  memset(&i, 0, sizeof(i));
+  if (!R) { return i; }
+  i.data = (xcb_format_t*)vexa_after_vendor(R);
+  i.rem = R->pixmap_formats_len;
+  return i;
+}
+
+void xcb_format_next (xcb_format_iterator_t* i) {
+  if (!i || !i->data || i->rem <= 0) { return; }
+  i->data = i->data + 1;
+  i->rem--;
+}
+
+uint32_t xcb_get_maximum_request_length (xcb_connection_t* c) {
+  const xcb_setup_t* setup = c ? xcb_get_setup(c) : NULL;
+  return setup ? setup->maximum_request_length : 65535;
+}
+
+void xcb_prefetch_extension_data (xcb_connection_t* c, xcb_extension_t* ext) {
+  (void)c; (void)ext;
+}
+
+xcb_pixmap_t xcb_create_pixmap_from_bitmap_data (xcb_connection_t* c, xcb_drawable_t d, uint8_t* data, uint32_t width, uint32_t height, uint32_t depth, uint32_t fg, uint32_t bg, xcb_gcontext_t* gcp) {
+  (void)d; (void)data; (void)width; (void)height; (void)depth; (void)fg; (void)bg;
+  if (gcp) { *gcp = xcb_generate_id(c); }
+  return xcb_generate_id(c);
 }

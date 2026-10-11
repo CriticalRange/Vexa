@@ -1,0 +1,9 @@
+# VEXA Standalone Shortcuts (Zero Desktop)
+alias mc="~/app.sh mc"
+alias prism="~/app.sh prism"
+alias brave="~/app.sh brave"
+alias store="~/app.sh store"
+alias term="~/app.sh term"
+alias desktop="~/app.sh desktop"
+alias stop="~/app.sh stop"
+alias start="~/app.sh prism"
