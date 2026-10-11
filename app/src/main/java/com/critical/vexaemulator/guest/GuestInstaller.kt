@@ -2,6 +2,9 @@ package com.critical.vexaemulator.guest
 
 import android.content.Context
 import android.system.Os
+import com.critical.vexaemulator.logging.LogCategory
+import com.critical.vexaemulator.logging.LogLevel
+import com.critical.vexaemulator.logging.VexaLogger
 import com.critical.vexaemulator.runtime.LaunchRequest
 import com.critical.vexaemulator.steam.SteamworksHost
 import java.io.File
@@ -26,7 +29,15 @@ object GuestInstaller {
                 executable.outputStream().use { output -> input.copyTo(output) }
             }
         }
-        if (program.steamStub) installSteamStub(context, guestDir)
+        val steamStubCount = installSteamStub(context, root, guestDir)
+        if (steamStubCount > 0) {
+            VexaLogger.log(
+                LogLevel.INFO,
+                LogCategory.BOOT,
+                "Steam API stub installed",
+                mapOf("program" to program.id, "libraries" to steamStubCount.toString())
+            )
+        }
         executable.setReadable(true, false)
         executable.setExecutable(true, false)
         val baseEnv = if (program.preinstalled && program.env.none { it.startsWith("HOME=") }) {
@@ -56,19 +67,28 @@ object GuestInstaller {
         )
     }
 
-    // Guests that refuse to start without a Steam client get an x86_64 libsteam_api that reports
-    // a running, logged-in Steam. The game's own copy is kept next to it as .real.
-    private fun installSteamStub(context: Context, guestDir: File) {
-        listOf(guestDir, File(guestDir, "lib64")).forEach { dir ->
-            val target = File(dir, "libsteam_api.so")
+    // Every discoverable x86_64 libsteam_api is replaced with a stub that reports a
+    // running, logged-in Steam. The original library is kept next to it as .real.
+    private fun installSteamStub(context: Context, root: File, guestDir: File): Int {
+        val targets = buildList<File> {
+            guestDir.walkTopDown()
+                .filter { it.isFile && it.name == "libsteam_api.so" }
+                .forEach(::add)
+            add(File(root, "rootfs/usr/lib/x86_64-linux-gnu/libsteam_api.so"))
+        }.distinctBy { it.absolutePath }
+
+        var installed = 0
+        targets.forEach { target ->
             if (!target.isFile) return@forEach
-            val backup = File(dir, "libsteam_api.so.real")
+            val backup = File(target.parentFile, "libsteam_api.so.real")
             if (!backup.exists()) target.copyTo(backup)
             context.assets.open("guests/libsteam_api_stub.so").use { input ->
                 target.outputStream().use { output -> input.copyTo(output) }
             }
             target.setReadable(true, false)
+            installed += 1
         }
+        return installed
     }
 
     private fun withRuntimeDir(rootfs: File, env: List<String>): List<String> {
