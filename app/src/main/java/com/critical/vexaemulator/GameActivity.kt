@@ -645,10 +645,12 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
         )
 
         pad.onFaceKey = { down, keysym -> writePointer(if (down) 2 else 3, keysym, 0, 0) }
+        pad.onPadButton = { down, control -> writePointer(7, control, if (down) 1 else 0, 0) }
         lifecycleScope.launch {
             val sink = object : PadSink {
                 override fun pointer(type: Int, x: Int, y: Int, state: Int) = writePointer(type, x, y, state)
                 override fun key(down: Boolean, keysym: Int) = writePointer(if (down) 2 else 3, keysym, 0, 0)
+                override fun pad(control: Int, value: Int) = writePointer(7, control, value, 0)
             }
             while (true) {
                 pad.pump(surfaceWidth, surfaceHeight, sink)
@@ -727,6 +729,7 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
     private val padSink = object : PadSink {
         override fun pointer(type: Int, x: Int, y: Int, state: Int) = writePointer(type, x, y, state)
         override fun key(down: Boolean, keysym: Int) = writePointer(if (down) 2 else 3, keysym, 0, 0)
+        override fun pad(control: Int, value: Int) = writePointer(7, control, value, 0)
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
