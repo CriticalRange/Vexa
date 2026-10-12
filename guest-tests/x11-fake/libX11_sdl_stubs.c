@@ -29,7 +29,7 @@ void *XGetDefault(void) { return 0; }
 
 void *XGetErrorText(void) { return 0; }
 
-void *XGetInputFocus(void) { return 0; }
+
 
 void *XGetKeyboardControl(void) { return 0; }
 
@@ -67,7 +67,7 @@ void *XScreenNumberOfScreen(void) { return 0; }
 
 void *XSetForeground(void) { return 0; }
 
-void *XSetInputFocus(void) { return 0; }
+
 
 void *XSetTextProperty(void) { return 0; }
 

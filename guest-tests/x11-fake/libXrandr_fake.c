@@ -2,91 +2,21 @@
    mirrors the Android surface, so SDL2/Unity see a real display instead of an
    empty mode list. */
 #include <X11/Xlib.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <fcntl.h>
 #include <unistd.h>
 
-typedef unsigned long RRMode;
-typedef unsigned long RRCrtc;
-typedef unsigned long RROutput;
-typedef unsigned short Rotation;
-typedef unsigned short Connection;
-typedef unsigned char SubpixelOrder;
+#include "Xrandr_fake_types.h"
 
 #define RR_ROTATE_0 1
 #define RR_CONNECTED 0
 #define RR_SUBPIXEL_UNKNOWN 0
 #define RR_SET_CONFIG_SUCCESS 0
 
-typedef struct {
-  int width;
-  int height;
-  int mwidth;
-  int mheight;
-} XRRScreenSize;
-
-typedef struct {
-  RRMode id;
-  unsigned int width;
-  unsigned int height;
-  unsigned long dotClock;
-  unsigned int hSyncStart;
-  unsigned int hSyncEnd;
-  unsigned int hTotal;
-  unsigned int hSkew;
-  unsigned int vSyncStart;
-  unsigned int vSyncEnd;
-  unsigned int vTotal;
-  char* name;
-  unsigned int nameLength;
-  unsigned long modeFlags;
-} XRRModeInfo;
-
-typedef struct {
-  Time timestamp;
-  Time configTimestamp;
-  int ncrtc;
-  RRCrtc* crtcs;
-  int noutput;
-  RROutput* outputs;
-  int nmode;
-  XRRModeInfo* modes;
-} XRRScreenResources;
-
-typedef struct {
-  Time timestamp;
-  RRCrtc crtc;
-  char* name;
-  int nameLen;
-  unsigned long mm_width;
-  unsigned long mm_height;
-  Connection connection;
-  SubpixelOrder subpixel_order;
-  int ncrtc;
-  RRCrtc* crtcs;
-  int nclone;
-  RROutput* clones;
-  int nmode;
-  int npreferred;
-  RRMode* modes;
-} XRROutputInfo;
-
-typedef struct {
-  Time timestamp;
-  int x;
-  int y;
-  unsigned int width;
-  unsigned int height;
-  RRMode mode;
-  Rotation rotation;
-  int noutput;
-  RROutput* outputs;
-  Rotation rotations;
-} XRRCrtcInfo;
-
-/* RandR 1.1 config API types (the older interface Unity's display code uses). */
+/* RandR 1.1 (legacy) types: private to the library, not part of the ABI. */
 typedef struct {
   int width;
   int height;
@@ -94,7 +24,9 @@ typedef struct {
   int mheight;
 } XRRSizeConfig;
 
-typedef struct {
+/* Matches the forward declaration in Xrandr_fake_types.h; the RandR 1.1
+   configuration block is private to the library, so it has no ABI contract. */
+struct _XRRScreenConfiguration {
   XRRScreenSize* sizes;
   int nsizes;
   XRRSizeConfig* size_configs;
@@ -102,7 +34,7 @@ typedef struct {
   short* rates;
   int nrates;
   int current_size;
-} XRRScreenConfiguration;
+};
 
 typedef struct {
   Atom name;
@@ -162,7 +94,14 @@ static void vexa_fill_mode(XRRModeInfo* mode, unsigned long id, int width, int h
   mode->modeFlags = 0;
 }
 
-#define VEXA_RANDR_TRACE(...) fprintf(stderr, "[VEXA][RANDR] " __VA_ARGS__)
+/* The guest's display code is stripped, so a trace line alone cannot say which
+   engine routine asked for the mode list. Log the return address too and the
+   call sites can be located in UnityPlayer.so afterwards. */
+#define VEXA_RANDR_TRACE(...)                                                    \
+  do {                                                                            \
+    fprintf(stderr, "[VEXA][RANDR] [%llx] ", (unsigned long long)(uintptr_t)__builtin_return_address(0)); \
+    fprintf(stderr, __VA_ARGS__);                                                \
+  } while (0)
 
 Bool XRRQueryExtension(Display* dpy, int* event_base, int* error_base) {
   (void)dpy;
@@ -284,6 +223,35 @@ XRRCrtcInfo* XRRGetCrtcInfo(Display* dpy, XRRScreenResources* resources, RRCrtc 
     return NULL;
   }
   info->outputs[0] = 1;
+  info->rotations = RR_ROTATE_0;
+  /* Unity enumerates Screen.resolutions from the CRTC's *possible* mode list.
+     Leaving npossible at 0 makes the resolution array empty, and a game that
+     indexes Screen.resolutions[0] from its saved settings then dies with
+     IndexOutOfRangeException before it ever loads its first scene. */
+  info->npossible = resources ? resources->nmode : 0;
+  info->possible = (RROutput*)calloc((size_t)(info->npossible > 0 ? info->npossible : 1), sizeof(RROutput));
+  if (!info->possible) {
+    free(info->outputs);
+    free(info);
+    return NULL;
+  }
+  for (int i = 0; i < info->npossible; ++i) {
+    info->possible[i] = resources->modes[i].id;
+  }
+  /* Trace the mode exactly as the guest reads it back through the real
+     Xrandr.h layout: Unity derives the desktop refresh rate from the current
+     mode's dotClock / (hTotal * vTotal) and logs 0 Hz when that fails. */
+  if (resources) {
+    for (int i = 0; i < resources->nmode && i < 4; ++i) {
+      const XRRModeInfo* m = &resources->modes[i];
+      fprintf(stderr,
+              "[VEXA][RANDR] mode[%d] id=%lu %ux%u hTotal=%u vTotal=%u dotClock=%lu flags=0x%lx name=%s\n",
+              i, m->id, m->width, m->height, m->hTotal, m->vTotal, m->dotClock, m->modeFlags,
+              m->name ? m->name : "(null)");
+    }
+    fprintf(stderr, "[VEXA][RANDR] crtc mode=%lu size=%ux%u noutput=%d npossible=%d\n", info->mode, info->width,
+            info->height, info->noutput, info->npossible);
+  }
   return info;
 }
 
@@ -291,6 +259,7 @@ void XRRFreeCrtcInfo(XRRCrtcInfo* info) {
   if (!info) {
     return;
   }
+  free(info->possible);
   free(info->outputs);
   free(info);
 }
