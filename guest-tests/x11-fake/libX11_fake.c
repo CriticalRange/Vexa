@@ -10,6 +10,7 @@
 #include <X11/Xregion.h>
 
 #include <errno.h>
+#include <dlfcn.h>
 #include <fcntl.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -696,8 +697,16 @@ static void vexa_init_screen(Display* dpy) {
   g_ready = 1;
 }
 
+/* Unity's SDL state probe has to be declared before XOpenDisplay, which is the
+   first call the engine makes into this library. */
+static void vexa_find_unity_base(void* pc);
+static void vexa_probe_sdl(const char* when);
+
 Display* XOpenDisplay(const char* name) {
-  Display* dpy = (Display*)calloc(1, sizeof(Display));
+  /* Display is a pointer typedef, so sizeof(Display) is 8. Callers that keep
+     the handle (Unity reads ScreenOfDisplay(dpy, 0)->width_in_pixels through
+     the Xlib macros) walk the real struct, so allocate the whole thing. */
+  Display* dpy = (Display*)calloc(1, sizeof(*dpy));
   if (!dpy) {
     return NULL;
   }
@@ -721,6 +730,11 @@ Display* XOpenDisplay(const char* name) {
   dpy->min_keycode = 8;
   dpy->max_keycode = 255;
   g_screen.display = dpy;
+  fprintf(stderr, "[VEXA][X11] open_display screens=%d default=%d screen=%dx%d depth=%d sizeof=%zu\n", dpy->nscreens,
+          dpy->default_screen, g_screen.width, g_screen.height, g_screen.root_depth, sizeof(*dpy));
+  /* SDL video is still coming up at this point, but the UnityPlayer mapping is
+     live, so this is the cheapest place to capture its load address. */
+  vexa_find_unity_base(__builtin_return_address(0));
   return dpy;
 }
 
@@ -729,8 +743,156 @@ int XCloseDisplay(Display* dpy) {
   return 0;
 }
 
+/* ---- SDL state probe ------------------------------------------------------
+   Unity's Linux player has a statically linked SDL video backend. Read its
+   live display state from here so the X11 fake can ask SDL's own XRandR mode
+   enumerator to fill a display whose mode list is still empty. */
+#define VEXA_SDL_THIS_OFF 0x1fb5138UL
+#define VEXA_SDL_NUM_DISPLAYS_OFF 0x2d0UL
+#define VEXA_SDL_DISPLAYS_OFF 0x2d8UL
+#define VEXA_SDL_DISPLAY_STRIDE 0x78UL
+#define VEXA_SDL_DISPLAY_MAX_MODES_OFF 0x08UL
+#define VEXA_SDL_DISPLAY_NUM_MODES_OFF 0x0cUL
+#define VEXA_SDL_DISPLAY_MODES_OFF 0x10UL
+#define VEXA_SDL_GET_DISPLAY_MODES_OFF 0x38UL
+#define VEXA_SDL_DISPLAY_MODE_SIZE 0x20UL
+
+static unsigned char* g_unity_base = NULL;
+
+static void* vexa_elf_base_from(void* pc) {
+  /* FEX synthesises a minimal /proc/self/maps for the guest, and does not
+     necessarily page-align a PIE mapping, so neither is a reliable way to find
+     the engine's load address. dladdr() walks the real link map. */
+  Dl_info info;
+  memset(&info, 0, sizeof(info));
+  if (dladdr(pc, &info) && info.dli_fbase) {
+    fprintf(stderr, "[VEXA][SDL] probe: pc=%p -> %s base=0x%lx\n", pc, info.dli_fname ? info.dli_fname : "?",
+            (unsigned long)info.dli_fbase);
+    return info.dli_fbase;
+  }
+  fprintf(stderr, "[VEXA][SDL] probe: dladdr failed for pc=%p\n", pc);
+  char buf[8192];
+  int fd = open("/proc/self/maps", O_RDONLY);
+  if (fd < 0) {
+    return NULL;
+  }
+  ssize_t n = read(fd, buf, sizeof(buf) - 1);
+  close(fd);
+  if (n <= 0) {
+    return NULL;
+  }
+  buf[n] = 0;
+  unsigned long lowest = 0;
+  char* line = buf;
+  while (line && *line) {
+    char* eol = strchr(line, '\n');
+    if (eol) {
+      *eol = 0;
+    }
+    unsigned long lo = 0, hi = 0;
+    if (sscanf(line, "%lx-%lx", &lo, &hi) == 2 && strstr(line, "UnityPlayer.so") && (lowest == 0 || lo < lowest)) {
+      lowest = lo;
+    }
+    line = eol ? eol + 1 : NULL;
+  }
+  if (lowest) {
+    fprintf(stderr, "[VEXA][SDL] probe: UnityPlayer.so base = 0x%lx (maps)\n", lowest);
+    return (void*)lowest;
+  }
+  return NULL;
+}
+
+static void vexa_find_unity_base(void* pc) {
+  if (g_unity_base) {
+    return;
+  }
+  g_unity_base = vexa_elf_base_from(pc);
+  if (g_unity_base) {
+    fprintf(stderr, "[VEXA][SDL] UnityPlayer base = %p\n", g_unity_base);
+  }
+}
+
+static void vexa_probe_sdl(const char* when) {
+  if (!g_unity_base) {
+    return;
+  }
+  static int done = 0;
+  if (done) {
+    return;
+  }
+  done = 1;
+  unsigned char* base = g_unity_base;
+  void** thisp = (void**)(base + VEXA_SDL_THIS_OFF);
+  void* dev = *thisp;
+  fprintf(stderr, "[VEXA][SDL] probe(%s) base=%p _this=%p\n", when, base, dev);
+  if (!dev) {
+    fprintf(stderr, "[VEXA][SDL] probe(%s): _this is NULL (SDL video never came up)\n", when);
+    return;
+  }
+  int ndisplays = *(int*)((unsigned char*)dev + VEXA_SDL_NUM_DISPLAYS_OFF);
+  void* displays = *(void**)((unsigned char*)dev + VEXA_SDL_DISPLAYS_OFF);
+  fprintf(stderr, "[VEXA][SDL] num_displays=%d displays=%p\n", ndisplays, displays);
+  /* Raw device prefix so the layout can be re-derived from a real run. */
+  for (unsigned off = 0; off < 0x60; off += 8) {
+    unsigned long v = *(unsigned long*)((unsigned char*)dev + off);
+    if (v) {
+      fprintf(stderr, "[VEXA][SDL]   dev+0x%02x = 0x%lx\n", off, v);
+    }
+  }
+  if (ndisplays <= 0 || !displays) {
+    return;
+  }
+  unsigned char* d = (unsigned char*)displays;
+  /* Raw layout dump: the SDL_VideoDisplay shape differs between the SDL versions
+     Unity ships, so print it verbatim instead of guessing offsets. */
+  fprintf(stderr, "[VEXA][SDL] display[0] @%p raw:\n", d);
+  for (unsigned off = 0; off < VEXA_SDL_DISPLAY_STRIDE; off += 16) {
+    fprintf(stderr, "[VEXA][SDL]   +0x%02x  ", off);
+    for (unsigned i = 0; i < 16; ++i) {
+      fprintf(stderr, "%02x ", d[off + i]);
+    }
+    fprintf(stderr, " | %016lx %016lx\n", *(unsigned long*)(d + off), *(unsigned long*)(d + off + 8));
+  }
+  void* modes = *(void**)(d + VEXA_SDL_DISPLAY_MODES_OFF);
+  int nmodes = *(int*)(d + VEXA_SDL_DISPLAY_NUM_MODES_OFF);
+  int max_modes = *(int*)(d + VEXA_SDL_DISPLAY_MAX_MODES_OFF);
+  fprintf(stderr, "[VEXA][SDL] display_modes=%p num_display_modes=%d max_display_modes=%d\n", modes, nmodes, max_modes);
+
+  /* Unity's SDL device vtable has GetDisplayModes at +0x38. Calling the
+     backend callback lets SDL allocate and own the mode list and its driver
+     data, instead of forging SDL internals in the fake. Confirm the target is
+     UnityPlayer.so before making the indirect guest call. */
+  if (nmodes == 0) {
+    void* callback = *(void**)((unsigned char*)dev + VEXA_SDL_GET_DISPLAY_MODES_OFF);
+    Dl_info callback_info;
+    memset(&callback_info, 0, sizeof(callback_info));
+    if (callback && dladdr(callback, &callback_info) && callback_info.dli_fbase == g_unity_base) {
+      fprintf(stderr, "[VEXA][SDL] calling GetDisplayModes callback=%p module=%s\n", callback,
+              callback_info.dli_fname ? callback_info.dli_fname : "?");
+      ((void (*)(void*, void*))callback)(dev, d);
+      modes = *(void**)(d + VEXA_SDL_DISPLAY_MODES_OFF);
+      nmodes = *(int*)(d + VEXA_SDL_DISPLAY_NUM_MODES_OFF);
+      max_modes = *(int*)(d + VEXA_SDL_DISPLAY_MAX_MODES_OFF);
+      fprintf(stderr, "[VEXA][SDL] after GetDisplayModes display_modes=%p num_display_modes=%d max_display_modes=%d\n",
+              modes, nmodes, max_modes);
+    } else {
+      fprintf(stderr, "[VEXA][SDL] GetDisplayModes callback=%p is not in UnityPlayer.so; skipping\n", callback);
+    }
+  }
+
+  if (modes && nmodes > 0 && nmodes < 64) {
+    for (int i = 0; i < nmodes; ++i) {
+      unsigned char* m = (unsigned char*)modes + (unsigned long)i * VEXA_SDL_DISPLAY_MODE_SIZE;
+      fprintf(stderr, "[VEXA][SDL]   mode[%d] fmt=0x%08x %dx%d @%d extra=%016lx:%016lx\n", i, *(unsigned*)m,
+              *(int*)(m + 4), *(int*)(m + 8), *(int*)(m + 12), *(unsigned long*)(m + 0x18), *(unsigned long*)(m + 0x10));
+    }
+  }
+}
+
 Window XCreateWindow(Display* dpy, Window parent, int x, int y, unsigned int width, unsigned int height, unsigned int border,
                      int depth, unsigned int klass, Visual* visual, unsigned long valuemask, XSetWindowAttributes* attrs) {
+  vexa_find_unity_base(__builtin_return_address(0));
+  vexa_probe_sdl("XCreateWindow");
   (void)dpy;
   (void)parent;
   (void)x;
@@ -753,6 +915,8 @@ Window XCreateWindow(Display* dpy, Window parent, int x, int y, unsigned int wid
   g_win_w = (int)width;
   g_win_h = (int)height;
   g_win_valid = 1;
+  fprintf(stderr, "[VEXA][X11] create_window -> %lu at %d,%d %ux%u depth=%d\n", (unsigned long)1UL, x, y, width, height,
+          depth);
   vexa_enqueue_configure(dpy);
   return 1;
 }
@@ -940,6 +1104,27 @@ Bool XCheckTypedEvent(Display* dpy, int type, XEvent* event) {
 // Like real Xlib, return immediately. Render loops call this once per frame and
 // eglSwapBuffers already paces them, so sleeping here only capped the frame rate.
 int XPending(Display* dpy) {
+  /* Re-read SDL's display list once the game is running. */
+  static int ticks = 0;
+  if (g_unity_base && ++ticks == 600) {
+    void** thisp = (void**)(g_unity_base + VEXA_SDL_THIS_OFF);
+    void* dev = *thisp;
+    if (dev) {
+      void* displays = *(void**)((unsigned char*)dev + VEXA_SDL_DISPLAYS_OFF);
+      int nd = *(int*)((unsigned char*)dev + VEXA_SDL_NUM_DISPLAYS_OFF);
+      if (displays && nd > 0) {
+        unsigned char* d = (unsigned char*)displays;
+        unsigned char* modes = *(unsigned char**)(d + VEXA_SDL_DISPLAY_MODES_OFF);
+        int nmodes = *(int*)(d + VEXA_SDL_DISPLAY_NUM_MODES_OFF);
+        fprintf(stderr, "[VEXA][SDL] late: num_displays=%d display_modes=%p count=%d max=%d\n", nd, modes, nmodes,
+                *(int*)(d + VEXA_SDL_DISPLAY_MAX_MODES_OFF));
+        if (modes && nmodes > 0 && nmodes < 64) {
+          fprintf(stderr, "[VEXA][SDL] late: modes[0] fmt=0x%08x %dx%d @%d\n", *(unsigned*)modes, *(int*)(modes + 4),
+                  *(int*)(modes + 8), *(int*)(modes + 12));
+        }
+      }
+    }
+  }
   vexa_poll_input(dpy);
   return vexa_q_count_of();
 }
@@ -1126,7 +1311,62 @@ Status XMatchVisualInfo(Display* dpy, int screen, int depth, int klass, XVisualI
   return 1;
 }
 
+/* ---- Unity Linux player fixups -------------------------------------------
+   Unity queries its display list before SDL video is up, caches the empty
+   answer, and never looks again. Two consequences on a single-surface guest:
+   Screen.resolutions is empty (games that restore a saved resolution index die
+   with IndexOutOfRangeException before loading a scene) and there is no
+   display, so there is no camera and the scene never renders.
+
+   Both are recoverable from inside this library because it already runs in the
+   guest process. The engine is stripped, so each entry point is guarded by a
+   byte signature and a wrong Unity build simply skips the call instead of
+   jumping into the wrong function. */
+
+static void vexa_unity_fixup(void) {
+  static int done = 0;
+  if (done) {
+    return;
+  }
+  done = 1;
+  Dl_info info;
+  if (!dladdr(__builtin_return_address(0), &info) || !info.dli_fbase || !info.dli_fname ||
+      !strstr(info.dli_fname, "UnityPlayer.so")) {
+    return;
+  }
+  unsigned char* base = (unsigned char*)info.dli_fbase;
+  const unsigned char refresh_sig[] = {0x55, 0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41,
+                                       0x54, 0x53, 0x48, 0x83, 0xec, 0x38};
+  const unsigned char enum_sig[] = {0x55, 0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41,
+                                    0x54, 0x53, 0x48, 0x83, 0xec, 0x18};
+  g_unity_base = base;
+
+  /* Rebuild the resolution list: the engine caches a 0x0 desktop because it
+     asked before the window existed. */
+  if (memcmp(base + 0x15ea030, refresh_sig, sizeof(refresh_sig)) == 0) {
+    char* mgr = (char*)((void* (*)(void))(base + 0xa600f0))();
+    if (mgr) {
+      fprintf(stderr, "[VEXA][UNITY] display before refresh %dx%d entries=%lu\n", *(int*)(mgr + 0xb4),
+              *(int*)(mgr + 0xb8), *(unsigned long*)(mgr + 0xd8));
+      *(int*)(mgr + 0x110) = -1;
+      ((void (*)(void*, int))(base + 0x15ea030))(mgr, 0);
+      fprintf(stderr, "[VEXA][UNITY] display after  refresh %dx%d entries=%lu\n", *(int*)(mgr + 0xb4),
+              *(int*)(mgr + 0xb8), *(unsigned long*)(mgr + 0xd8));
+    }
+  }
+
+  /* Rebuild the display list itself. The routine early-outs when the global at
+     base+0x1ee6a58 already reads 4, which is exactly the stale state Unity left
+     behind on its first, too-early call. */
+  if (memcmp(base + 0xde04c0, enum_sig, sizeof(enum_sig)) == 0) {
+    fprintf(stderr, "[VEXA][UNITY] display enum guard before=%d\n", *(int*)(base + 0x1ee6a58));
+    ((void (*)(void))(base + 0xde04c0))();
+    fprintf(stderr, "[VEXA][UNITY] display enum guard after=%d\n", *(int*)(base + 0x1ee6a58));
+  }
+}
+
 Status XGetWindowAttributes(Display* dpy, Window window, XWindowAttributes* attrs) {
+  vexa_unity_fixup();
   (void)dpy;
   (void)window;
   vexa_read_window_size();
@@ -1143,7 +1383,30 @@ Status XGetWindowAttributes(Display* dpy, Window window, XWindowAttributes* attr
   attrs->class = TrueColor;
   attrs->map_state = IsViewable;
   attrs->screen = &g_screen;
+  fprintf(stderr, "[VEXA][X11] get_window_attributes w=%lu -> %dx%d (screen %dx%d)\n", (unsigned long)window,
+          attrs->width, attrs->height, g_screen.width, g_screen.height);
   return 1;
+}
+
+int XGetInputFocus(Display* dpy, Window* focus, int* revert_to) {
+  (void)dpy;
+  /* Unity and SDL both poll focus. Reporting the root window keeps them from
+     waiting for a window that will never be activated. */
+  if (focus) {
+    *focus = 1;
+  }
+  if (revert_to) {
+    *revert_to = 0;
+  }
+  return 0;
+}
+
+int XSetInputFocus(Display* dpy, Window window, int revert_to, Time time) {
+  (void)dpy;
+  (void)window;
+  (void)revert_to;
+  (void)time;
+  return 0;
 }
 
 Status XGetGeometry(Display* dpy, Drawable drawable, Window* root, int* x, int* y, unsigned int* width, unsigned int* height,

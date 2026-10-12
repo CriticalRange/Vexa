@@ -88,6 +88,174 @@ VEXA is a general-purpose Linux x86_64 runner. Older items that name one game ar
 
 ## Required Thunks Fixes
 
+- [x] Fix the guest X11/RandR fakes so a Unity guest sees a real display.
+  Problem 1: `XOpenDisplay` in `guest-tests/x11-fake/libX11_fake.c` did
+  `calloc(1, sizeof(Display))`, but `Display` is a pointer typedef, so it allocated 8 bytes
+  and wrote every Xlib field past the end. Unity reads the screen through the
+  `ScreenOfDisplay(dpy, 0)->width_in_pixels` macro and saw garbage, logging
+  `Desktop is 0 x 0 @ 0 Hz` and `Error getting num native displays: Video subsystem has not
+  been initialized`, then rendering nothing. Fixed with `sizeof(*dpy)` (4720 bytes).
+  Problem 2: `guest-tests/x11-fake/libXrandr_fake.c` hand-declared the Xrandr.h wire structs and
+  two of them had drifted. `XRRModeInfo` must declare `hSyncStart`..`vTotal` as `unsigned int`;
+  declaring them `unsigned short` shifts `name`, `nameLength` and `modeFlags` and made Unity
+  compute the refresh rate as 0 Hz for a mode whose `dotClock/(hTotal*vTotal)` is exactly 60.
+  `XRRCrtcInfo` must be `timestamp, x, y, width, height, mode, rotation, noutput, outputs,
+  rotations, npossible, possible` and has no `nmode`/`modes`. Both now come verbatim from a
+  vendored copy of the real header, `guest-tests/x11-fake/Xrandr_fake_types.h`, with
+  `offsetof` assertions so a future drift fails the build.
+  Verified: Unity now logs `Desktop is 2712 x 1220 @ 60 Hz` and creates a real OpenGL 4.3 device.
+  Note for future builds: the first launch after an APK install re-stages the rootfs from the
+  APK and silently overwrites any guest library that was pushed with `adb`. Always launch once,
+  then push, then launch again.
+
+- [ ] Unity 2022+ renders an empty scene on the GLX path (Megabonk, VampireSurvivors).
+
+  Problem: Unity completes `GfxDevice` init, logs `Renderer: Mali-G720 / Version 4.3.0` and
+  `Desktop is 2712 x 1220`, compiles ~56 shader programs (all link `status=1`), loads ~22k
+  objects and runs the game's C# (Steam, Rewired, saves, settings). Yet each frame issues only
+  two fullscreen blits: `bind fbo4 -> clear(0x4500) -> draw 6 verts`, `bind fbo2 ->
+  clear(0x4000) -> draw 6 verts`, `swap`. No geometry draw is ever recorded, and both targets
+  are 256x256 (`glTexStorage2D 256x256 fmt=0x8c43 levels=9`), while the X11 window and
+  `glXQueryDrawable` both correctly report 2712x1220.
+  Ruled out: display/desktop size (fixed, see below), `GLX_MAX_BUFFER_SIZE` (Unity never calls
+  `glXGetFBConfigAttrib`), `GL_MAX_*` limits (none near 256), `-screen-width/height` (ignored,
+  1280x720 and 2712x1220 behave identically), the 32x32 X11 probe window, and advertising or
+  hiding `GL_ARB_compute_shader` (the game's `boot.config` sets
+  `gfx-enable-gfx-jobs=1 / gfx-enable-native-gfx-jobs=1`, but removing the spoof changed nothing).
+  Method: the 256x256 backbuffer is chosen by Unity before any GL call, so trace it from the
+  engine side next — dump the resolved `Screen.width/height` and the URP
+  `UniversalRenderPipelineAsset` render scale / `m_UseDynamicResolution` at device creation, and
+  check whether `ScalableBufferManager.ResizeBuffers` is ever invoked. Celeste (Unity 2019) is
+  unaffected because it renders straight to FB0, which makes this an offscreen-backbuffer path
+  issue rather than a general Unity culling issue.
+  Strongest lead so far: the game never gets past `LocalizationPrewarmer:Start()` and logs
+  `IndexOutOfRangeException` from `CurrentSettings.DoUpdateResolution`, whose saved
+  `cfVideoSettings.resolution` is `0`. That means `Screen.resolutions` comes back empty, and an
+  empty resolution list also makes `Screen.SetResolution` never complete, which would stall the
+  boot coroutine before the menu scene loads and leave an empty scene behind. Forcing
+  `fullscreen_mode: 0` in the save did not change anything, and filling the CRTC `possible` mode
+  list did not populate the array either.
+
+## Screen.resolutions is empty - root cause found (2026-10-12)
+
+Traced end to end with IL2CPP decompilation plus a live memory probe. This is a
+*separate* bug from the empty-scene issue above and it is now fully explained.
+
+### The game's crash
+
+`Il2CppDumper 6.7.46` on `GameAssembly.so` + `global-metadata.dat` gives
+`Assets.Scripts.Settings___Saves.SaveFiles.ConfigSettingsUtility::GetMyResolutions()`
+at RVA `0x2229400` and `CurrentSettings::SetResolution(int)` at `0x2196D40`.
+Decompiled:
+
+```csharp
+// ConfigSettingsUtility::GetMyResolutions  (0x2229400)
+var list = new List<Resolution>();
+foreach (var r in Screen.get_resolutions())            // UnityEngine.Screen$$get_resolutions
+    if (!list.Any(e => e.width == r.width && e.height == r.height))
+        list.Add(r);
+return list.ToArray();                                 // empty in, empty out
+
+// CurrentSettings::SetResolution  (0x2196D40)
+var res = ConfigSettingsUtility.GetMyResolutions();
+if ((uint)index >= res.Length) throw new IndexOutOfRangeException();   // 0 >= 0
+Screen.SetResolution(res[index].width, res[index].height, refreshRate, fullscreenMode);
+```
+
+and `Player.log` matches exactly:
+
+```
+IndexOutOfRangeException: Index was outside the bounds of the array.
+  at CurrentSettings+<DoUpdateResolution>d__17.MoveNext ()
+  at CurrentSettings.OnSettingUpdated (System.String name, System.Object value, System.Object oldValue)
+  at CurrentSettings.UpdateSave ()
+```
+
+So the whole chain reduces to one question: why is `Screen.resolutions` empty.
+
+### Why: SDL reports a display with zero modes
+
+`UnityPlayer.so` is stripped but `get_resolutions_Injected` is registered in the
+scripting table at file offset `0x92e8`; its implementation builds the array at
+`0xde2700`:
+
+```c
+// 0xde2700  DisplayManager::GetAvailableResolutions
+for (int d = 0; ; d++) {
+    int n = SDL_GetNumVideoDisplays();                       // 0x18b2ee7
+    if (n <= 0) { Log("Error getting num native displays: %s", SDL_GetError()); break; }
+    if (d >= n) break;
+    Entry* e = push_new_entry(d);
+    if (!GetDisplayInfo(d, e)) break;                         // 0xde2640
+}
+```
+
+`0xde2640` calls `SDL_GetNumDisplayModes` (`0x18b2f9a`), which simply returns
+`display->num_display_modes`, and `SDL_GetDisplayMode`-style helpers that copy
+`display + 0x18`.
+
+`libX11_fake.c` now probes SDL's live state from inside the guest: it resolves the
+`UnityPlayer.so` load bias with `dladdr(__builtin_return_address(0))` and reads
+SDL's `_this` (vaddr `0x1fb5138`, `num_displays` at `+0x2d0`, `displays` at `+0x2d8`,
+stride `0x78`). Output:
+
+```
+probe(XCreateWindow) base=0x7a135d0000 _this=0x481600
+num_displays=1 displays=0x431c00
+display[0] raw: +0x00 20 38 48 00 ...        <- driverdata
+                +0x18 03 18 40 17 98 0a ...  <- desktop_mode  2712x1220 @60   (correct)
+                +0x38 03 18 40 17 98 0a ...  <- current_mode  2712x1220 @60   (correct)
+display_modes=0x483820 num_display_modes=0                                <- BUG
+```
+
+The display exists and carries the right size, but its **mode list is empty**, so
+Unity produces a zero-entry `Screen.resolutions`.
+
+### SDL's mode enumeration never runs
+
+The RANDR fake now logs `__builtin_return_address(0)` on every call, and the whole
+X11 init sequence is:
+
+```
+XRRQueryVersion -> XRRGetOutputPrimary -> XRRGetScreenResourcesCurrent
+  -> XRRGetOutputInfo -> XRRGetCrtcInfo -> XRRGetCrtcInfo
+  -> XRRGetScreenResourcesCurrent        (second looking_for_primary pass)
+```
+
+That is exactly SDL2's `X11_InitModes_XRandR`: two passes over
+`looking_for_primary = 1, 0`, one `XRRGetOutputInfo` from `X11_AddXRandRDisplay`,
+and the second `XRRGetCrtcInfo` from `SetXRandRModeInfo`.
+
+**SDL's `X11_GetDisplayModes` is never entered** - it would issue its own
+`XRRGetScreenResources` + `XRRGetOutputInfo` pair, and neither appears. Xinerama
+and XF86VidMode are not consulted either (both fakes now log; neither fires).
+Unity's bundled SDL therefore relies on modes being filled during
+`SDL_VideoInit`, and that pass adds nothing.
+
+Not ruled out yet, and the next thing to check:
+
+- whether Unity's SDL is SDL3 rather than SDL2 (the mode struct carries a
+  `pixel_density` double, which is SDL3-only). In SDL3 `SDL_GetNumDisplayModes`
+  is documented to be non-lazy as well, so the missing step is the same either way.
+- whether `X11_AddXRandRDisplay` returned before reaching `SDL_AddVideoDisplay` in
+  a path that still registered the display - the desktop mode is set, so it did
+  run; the open question is only who was supposed to call `GetDisplayModes`.
+
+### Tooling added
+
+- `scripts/build_x11_fakes.sh` - builds every guest X11 fake for x86_64 against
+  `guest-tests/graphics/rootfs`. Several sonames need more than one translation
+  unit (`libX11.so.6` = `libX11_fake.c` + `libX11_sdl_stubs.c`); dropping one
+  silently removes exported symbols and SDL reports "x11 not available".
+- `scripts/grab_log.ps1` - `adb logcat` capture. PowerShell's `>` writes UTF-16,
+  which silently corrupts logs.
+- `guest-tests/x11-fake/libXxf86vm_fake.c` - real `libXxf86vm.so.1` replacing the
+  all-NULL stub (kept because SDL consults it when XRandR is unavailable).
+- `libXrandr_fake.c` `VEXA_RANDR_TRACE` now logs the guest return address so
+  call sites can be located in the stripped engine.
+- `libX11_fake.c` `vexa_probe_sdl()` - reads SDL's live display list from inside
+  the guest via `dladdr` + known offsets.
+
 - [ ] Stabilize SDL3 host thunk lifecycle in
   `FEX/ThunkLibs/libSDL3/libSDL3_Host.cpp`.
   Problem: managed EGL state (`TryCreateManagedEGLContext`/`RebuildManagedSurfaceFromRuntimeWindow`)
@@ -109,6 +277,16 @@ VEXA is a general-purpose Linux x86_64 runner. Older items that name one game ar
   which risks nondeterministic proc resolution.
   Method: codify a strict precedence table and add a lookup audit log mode that records proc name,
   chosen source, and pointer hash for reproducibility.
+- [ ] Investigate per-frame glViewport alternation in
+  `FEX/ThunkLibs/libGL/libGL_Host.cpp`.
+  Problem: Godot (Brotato) and FNA3D (Celeste) each issue two glViewport calls per frame —
+  full surface `0,0 2712x1220` then a narrower centered `272,0 2168x1220` — so the host remap
+  path toggles the visible rect every frame and produces a visible "flicker"/shimmer of splash
+  and UI elements. Both games stay stable at ~120 fps, so this is cosmetic, but the alternating
+  viewport is a rendering-correctness smell.
+  Method: capture the glViewport call sequence with caller context (draw/read FBO binding),
+  determine whether the narrow rect is a genuine guest off-screen pass, and either suppress the
+  remap for the matching case or record why the guest alternates.
 - [ ] Harden Android guest GL proc handling in
   `FEX/ThunkLibs/libGL/libGL_Guest.cpp`.
   Problem: unresolved proc path currently returns `MissingGLProcStub` (fatal) and alias/compat
