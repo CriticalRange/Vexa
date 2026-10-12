@@ -123,7 +123,7 @@ VEXA is a general-purpose Linux x86_64 runner. Older items that name one game ar
   hiding `GL_ARB_compute_shader` (the game's `boot.config` sets
   `gfx-enable-gfx-jobs=1 / gfx-enable-native-gfx-jobs=1`, but removing the spoof changed nothing).
   Method: the 256x256 backbuffer is chosen by Unity before any GL call, so trace it from the
-  engine side next — dump the resolved `Screen.width/height` and the URP
+  engine side next â€” dump the resolved `Screen.width/height` and the URP
   `UniversalRenderPipelineAsset` render scale / `m_UseDynamicResolution` at device creation, and
   check whether `ScalableBufferManager.ResizeBuffers` is ever invoked. Celeste (Unity 2019) is
   unaffected because it renders straight to FB0, which makes this an offscreen-backbuffer path
@@ -279,8 +279,8 @@ Not ruled out yet, and the next thing to check:
   chosen source, and pointer hash for reproducibility.
 - [ ] Investigate per-frame glViewport alternation in
   `FEX/ThunkLibs/libGL/libGL_Host.cpp`.
-  Problem: Godot (Brotato) and FNA3D (Celeste) each issue two glViewport calls per frame —
-  full surface `0,0 2712x1220` then a narrower centered `272,0 2168x1220` — so the host remap
+  Problem: Godot (Brotato) and FNA3D (Celeste) each issue two glViewport calls per frame â€”
+  full surface `0,0 2712x1220` then a narrower centered `272,0 2168x1220` â€” so the host remap
   path toggles the visible rect every frame and produces a visible "flicker"/shimmer of splash
   and UI elements. Both games stay stable at ~120 fps, so this is cosmetic, but the alternating
   viewport is a rendering-correctness smell.
@@ -556,6 +556,71 @@ Not ruled out yet, and the next thing to check:
   `libsteambootstrap.so`. Do not copy or reverse it. Do not write a
   replacement pipe server.
 
-## Later: Additional Categories
+## Unity / IL2CPP Linux player
 
-- [ ] Add new TODO categories here as runtime architecture evolves.
+- [x] Make Unity build its display list. Unity asks for displays before SDL
+  video is up, caches the empty answer and never asks again. Two failures
+  follow: `Screen.resolutions` comes back empty (games that restore a saved
+  resolution index die with `IndexOutOfRangeException` before loading a
+  scene) and with no display there is no camera, so the scene never
+  renders. `vexa_unity_fixup()` in `libX11_fake.c` calls the refresh at
+  `UnityPlayer.so+0x15ea030` and the enumeration at `+0xde04c0` again once
+  the window exists. Both are guarded by an instruction-byte signature, so
+  a different Unity build skips them instead of jumping into the wrong
+  function.
+- [x] Drop the launcher shim. `-force-gfx-direct` and `-force-glcore` are
+  passed as ordinary arguments from `GuestProgram.kt`; the real
+  `Megabonk.x86_64` stub stays in place. `boot.config` asks for
+  `gfx-enable-gfx-jobs=1` / `gfx-threading-mode=4`, which selects
+  `kGfxThreadingModeClientWorkerJobs`; the job worker produces no output
+  here and the scene comes out empty. Direct mode works.
+- [x] Put the desktop mode first in `Screen.resolutions`. Unity finds real
+  display modes through SDL's video backend, and SDL reports none, so the
+  engine falls back to its hardcoded table of safe resolutions - 35
+  entries starting at 640x480. Megabonk stores index 0, so it asked for
+  640x480 and drew a 4:3 image into a 16:9 window. Entry 0 is overwritten
+  in place; layout is stride 16 of `{int width, int height, int refresh,
+  int display}`.
+
+### Thunks: host and guest must be rebuilt together
+
+- [ ] Treat `libGL-host.so` and `libGL-guest.so` as one unit. The GLX
+  bridge changed from a single implicit context to an explicit registry:
+  `VEXA_BindGlxSurface(void)` became
+  `VEXA_BindGlxSurface(uintptr_t context)` and
+  `VEXA_CreateGlxContext` / `VEXA_DestroyGlxContext` were added. A new
+  host with an old guest never populates the registry, so the bind returns
+  early with no log line and `glXMakeCurrent` returns 0. Unity then prints
+  "Unable to find a supported OpenGL Core profile" and exits - a black
+  screen with no error that points at the real cause. Old+old works and
+  new+new works; only mixed pairs fail.
+- [ ] Ignore `fexldr_init_libGL missing symbol: VEXA_*`. It prints in
+  working and broken runs alike. FEX resolves those through its generated
+  interface, not `dlsym`, so it is not a fault indicator.
+- [ ] Stage the host and guest thunk into the APK together. The first
+  launch after an install re-stages the runtime from assets, and a
+  half-updated pair silently breaks the game.
+
+### Grass renders black (open)
+
+- [ ] `Custom/GrassShaderOptimized` fails to link because Unity emits a
+  vertex-stage SSBO and this Mali reports
+  `GL_MAX_VERTEX_SHADER_STORAGE_BLOCKS == 0`. Unity paints the object with
+  a black fallback, which is why the ground is black while the bare path
+  beside it renders correctly. Unity is told GL 4.3 by the spoof in
+  `libGL_Host.cpp`, and `#version 430` is what it compiles to; the source
+  is then rewritten to `#version 320 es` on the way to the driver, where
+  the limit is the same.
+- [ ] A vertex shader only reads such a block, so `buffer` -> `uniform` is
+  the obvious rewrite. It gets past the link error and then fails with
+  `S0018: Array size must be defined` - ES forbids an unsized array in a
+  uniform block. Sizing it is not free: the grass instance struct is
+  several mat4s, UBO space is around 64 KB, and the instance count is not
+  known at shader compile time. Not solved.
+- [ ] Do not reach for the runtime shader translator
+  (`VEXA_ENABLE_RUNTIME_SHADER_TRANSLATOR`) to fix this. It needs shaderc
+  and spirv-cross, neither is present, and it ends at `#version 320 es`
+  anyway - SPIR-V is only an intermediate, the same driver limit applies
+  afterwards. It would not have been a root fix.
+
+## Later: Additional Categories
