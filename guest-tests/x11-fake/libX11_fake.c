@@ -1323,6 +1323,36 @@ Status XMatchVisualInfo(Display* dpy, int screen, int depth, int klass, XVisualI
    byte signature and a wrong Unity build simply skips the call instead of
    jumping into the wrong function. */
 
+/* Unity only finds real display modes through SDL's video backend. Our X11/RANDR
+   fakes report a perfectly good desktop, but SDL reports no *modes*, so the
+   engine falls back to a hardcoded table of "safe resolutions" that begins at
+   640x480. Games pick their mode by index out of Screen.resolutions, and
+   Megabonk stores index 0, so it asks for 640x480 and we render a 4:3 image
+   with black bars and an upscale that wrecks every pixel in it.
+
+   Overwrite entry 0 in place with the desktop mode. Layout is stride 16 of
+   {int width, int height, int refresh, int display}; only the mode fields move,
+   the display index is left alone. */
+static void vexa_unity_native_first_resolution(char* mgr) {
+  unsigned char* res = *(unsigned char**)(mgr + 0xc8);
+  unsigned long count = *(unsigned long*)(mgr + 0xd8);
+  if (!res || count == 0) {
+    fprintf(stderr, "[VEXA][UNITY] no resolution array (res=%p count=%lu)\n", res, count);
+    return;
+  }
+  for (unsigned i = 0; i < count && i < 4; ++i) {
+    unsigned char* e = res + i * 16;
+    fprintf(stderr, "[VEXA][UNITY]   res[%u] = %dx%d @%d (display %d)\n", i, *(int*)(e + 0), *(int*)(e + 4),
+            *(int*)(e + 8), *(int*)(e + 12));
+  }
+  unsigned char* e0 = res;
+  fprintf(stderr, "[VEXA][UNITY] forcing res[0] -> %dx%d @%d (was %dx%d @%d)\n", *(int*)(mgr + 0xb4),
+          *(int*)(mgr + 0xb8), 60, *(int*)(e0 + 0), *(int*)(e0 + 4), *(int*)(e0 + 8));
+  *(int*)(e0 + 0) = *(int*)(mgr + 0xb4);
+  *(int*)(e0 + 4) = *(int*)(mgr + 0xb8);
+  *(int*)(e0 + 8) = 60;
+}
+
 static void vexa_unity_fixup(void) {
   static int done = 0;
   if (done) {
@@ -1352,6 +1382,7 @@ static void vexa_unity_fixup(void) {
       ((void (*)(void*, int))(base + 0x15ea030))(mgr, 0);
       fprintf(stderr, "[VEXA][UNITY] display after  refresh %dx%d entries=%lu\n", *(int*)(mgr + 0xb4),
               *(int*)(mgr + 0xb8), *(unsigned long*)(mgr + 0xd8));
+      vexa_unity_native_first_resolution(mgr);
     }
   }
 
