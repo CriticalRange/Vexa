@@ -144,8 +144,64 @@ object GuestCatalog {
             fileName = "Megabonk.x86_64",
             // Unity queries the native desktop size before SDL video is up and gets 0x0;
             // FullScreenWindow then renders nothing. Force an explicit windowed size.
-            args = listOf("-screen-fullscreen", "0", "-screen-width", "2712", "-screen-height", "1220"),
+            args = listOf(
+                "-screen-fullscreen", "0",
+                "-screen-width", "2712",
+                "-screen-height", "1220",
+                "-force-glcore",
+                "-force-gfx-direct",
+            ),
             env = listOf("DISPLAY=:0", "SDL_VIDEODRIVER=x11", "SteamAppId=3405340"),
+            preinstalled = true,
+        ),
+        GuestProgram(
+            id = "vampiresurvivors",
+            title = "Vampire Survivors",
+            summary = "Unity game. Native Linux build (Mono runtime). The Linux depot files are already in the app files directory.",
+            assetPath = "",
+            fileName = "VampireSurvivors.exe",
+            // Same Unity workarounds as Megabonk: native desktop size queries return 0x0,
+            // and the gfx job worker never produces output on this host.
+            args = listOf(
+                "-screen-fullscreen", "0",
+                "-screen-width", "2712",
+                "-screen-height", "1220",
+                "-force-glcore",
+                "-force-gfx-direct",
+            ),
+            env = listOf("DISPLAY=:0", "SDL_VIDEODRIVER=x11", "SteamAppId=1794680", "VEXA_STEAM_TRACE=1"),
+            preinstalled = true,
+        ),
+        GuestProgram(
+            id = "undertale",
+            title = "Undertale",
+            summary = "GameMaker Studio game. Native Linux build (depot 391544). Control test: a second Linux-native " +
+                "engine on the same GL stack. Not a Unity title, so it does not exercise the Unity offscreen-backbuffer path.",
+            assetPath = "",
+            fileName = "runner",
+            env = listOf("DISPLAY=:0", "SDL_VIDEODRIVER=x11", "SteamAppId=391540", "VEXA_STEAM_TRACE=1"),
+            preinstalled = true,
+        ),
+        GuestProgram(
+            id = "unturned",
+            title = "Unturned",
+            summary = "Unity game (Smartly Dressed Games). Native 64-bit Linux build, depot from app_update " +
+                "304930 -os linux. Third Unity data point, older engine generation than Megabonk.",
+            assetPath = "",
+            fileName = "Unturned.x86_64",
+            args = listOf("-screen-fullscreen", "0", "-screen-width", "2712", "-screen-height", "1220"),
+            env = listOf("DISPLAY=:0", "SDL_VIDEODRIVER=x11", "SteamAppId=304930", "VEXA_STEAM_TRACE=1"),
+            preinstalled = true,
+        ),
+        GuestProgram(
+            id = "summer-demo",
+            title = "Summer at the Edge of the Universe (Demo)",
+            summary = "Free Unity URP demo (app 2757760, depot from app_update -os linux). Reference title for the " +
+                "Unity 2022+ URP offscreen-backbuffer path that Megabonk stalls on.",
+            assetPath = "",
+            fileName = "Summer at the Edge of the Universe.x86_64",
+            args = listOf("-screen-fullscreen", "0", "-screen-width", "2712", "-screen-height", "1220"),
+            env = listOf("DISPLAY=:0", "SDL_VIDEODRIVER=x11", "SteamAppId=2757760", "VEXA_STEAM_TRACE=1"),
             preinstalled = true,
         ),
         GuestProgram(

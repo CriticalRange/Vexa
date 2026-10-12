@@ -372,7 +372,16 @@ namespace Vexa::Runtime::Init {
         // atomic counters (observed: Unity job counters go permanently
         // negative and PlayerMain waits forever). Serializing split-lock
         // handling makes the emulation atomic.
-        FEXCore::Config::Set(FEXCore::Config::CONFIG_STRICTINPROCESSSPLITLOCKS, "1");
+        // Bisect: files/fex_splitlock_off.flag disables the strict lock to test
+        // whether the serialized fixup path itself wedges the guest.
+        const bool splitLockOff =
+                ::access("/data/data/com.critical.vexaemulator/files/fex_splitlock_off.flag",
+                         F_OK) == 0;
+        FEXCore::Config::Set(FEXCore::Config::CONFIG_STRICTINPROCESSSPLITLOCKS,
+                             splitLockOff ? "0" : "1");
+        if (splitLockOff) {
+            VEXA_LOGW(env, "FEX", "StrictInProcessSplitLocks disabled via flag", "");
+        }
 
         // Profiling: per-block JIT symbols ("UnityPlayer.so+0x...") written to
         // /data/local/tmp/perf-<pid>.map so simpleperf can attribute JIT code
