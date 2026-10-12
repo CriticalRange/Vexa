@@ -149,7 +149,9 @@ object GuestCatalog {
                 "-screen-width", "2712",
                 "-screen-height", "1220",
                 "-force-glcore",
-                "-force-gfx-direct",
+                // -force-gfx-direct deliberately omitted: it serialises draw
+                // submission onto the single emulated render thread. Re-test it before
+                // adding it back - it was needed when the display list was broken.
             ),
             env = listOf("DISPLAY=:0", "SDL_VIDEODRIVER=x11", "SteamAppId=3405340"),
             preinstalled = true,
@@ -167,7 +169,9 @@ object GuestCatalog {
                 "-screen-width", "2712",
                 "-screen-height", "1220",
                 "-force-glcore",
-                "-force-gfx-direct",
+                // -force-gfx-direct deliberately omitted: it serialises draw
+                // submission onto the single emulated render thread. Re-test it before
+                // adding it back - it was needed when the display list was broken.
             ),
             env = listOf("DISPLAY=:0", "SDL_VIDEODRIVER=x11", "SteamAppId=1794680", "VEXA_STEAM_TRACE=1"),
             preinstalled = true,
