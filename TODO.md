@@ -123,7 +123,7 @@ VEXA is a general-purpose Linux x86_64 runner. Older items that name one game ar
   hiding `GL_ARB_compute_shader` (the game's `boot.config` sets
   `gfx-enable-gfx-jobs=1 / gfx-enable-native-gfx-jobs=1`, but removing the spoof changed nothing).
   Method: the 256x256 backbuffer is chosen by Unity before any GL call, so trace it from the
-  engine side next â€” dump the resolved `Screen.width/height` and the URP
+  engine side next Ã¢â‚¬â€ dump the resolved `Screen.width/height` and the URP
   `UniversalRenderPipelineAsset` render scale / `m_UseDynamicResolution` at device creation, and
   check whether `ScalableBufferManager.ResizeBuffers` is ever invoked. Celeste (Unity 2019) is
   unaffected because it renders straight to FB0, which makes this an offscreen-backbuffer path
@@ -279,8 +279,8 @@ Not ruled out yet, and the next thing to check:
   chosen source, and pointer hash for reproducibility.
 - [ ] Investigate per-frame glViewport alternation in
   `FEX/ThunkLibs/libGL/libGL_Host.cpp`.
-  Problem: Godot (Brotato) and FNA3D (Celeste) each issue two glViewport calls per frame â€”
-  full surface `0,0 2712x1220` then a narrower centered `272,0 2168x1220` â€” so the host remap
+  Problem: Godot (Brotato) and FNA3D (Celeste) each issue two glViewport calls per frame Ã¢â‚¬â€
+  full surface `0,0 2712x1220` then a narrower centered `272,0 2168x1220` Ã¢â‚¬â€ so the host remap
   path toggles the visible rect every frame and produces a visible "flicker"/shimmer of splash
   and UI elements. Both games stay stable at ~120 fps, so this is cosmetic, but the alternating
   viewport is a rendering-correctness smell.
@@ -623,4 +623,23 @@ Not ruled out yet, and the next thing to check:
   anyway - SPIR-V is only an intermediate, the same driver limit applies
   afterwards. It would not have been a root fix.
 
-## Later: Additional Categories
+### Frame rate: what it is not
+
+- [ ] The bottleneck is not GL tracing. Disabling every per-draw diagnostic
+  (`VexaPostDrawDiag` and the error drain in `VexaGLEnumCompat`, both now
+  behind `VEXA_GL_TRACE`) left the frame rate unchanged: 38.4 swaps/s before
+  and after. glGetError per draw is a pipeline drain on a tiled GPU and was
+  worth looking at, but it was not the cost here.
+- [ ] The bottleneck is not resolution. 640x480 and 2712x1220 - 15.5x the
+  pixels - both run at 34-38 swaps/s. The game is not fill bound. Putting the
+  desktop mode first in `Screen.resolutions` costs nothing.
+- [ ] The device is not saturated: 8 cores, ~33% idle, the guest using ~3.
+  Two threads carry ~85% of the load, which is a serialised pipeline.
+- [x] Stop forcing `kGfxThreadingModeDirect`. `boot.config` asks for
+  gfx-threading-mode=4, and `-force-gfx-direct` overrode it to put all draw
+  submission on the single emulated render thread. That switch was added
+  when the display list was broken, and the symptom it was blamed for
+  ("the job worker produces no output") was the empty display list, not the
+  worker. With the display list and resolution fixed, the worker mode
+  renders correctly and is worth ~38% more frames: 38.4 -> 53 swaps/s, and
+  32 -> 88 on the in-game counter. Do not re-add it without measuring.
