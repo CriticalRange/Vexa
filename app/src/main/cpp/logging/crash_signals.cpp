@@ -66,9 +66,8 @@ namespace {
     static volatile sig_atomic_t g_early_busy = 0;
     static int g_crash_fd = -1;
     static int g_last_fd = -1;
-    static int g_maps_fd = -1;
     static int g_maps_out_fd = -1;
-    static char g_capture[4096];
+    static char g_capture[16384];
     static size_t g_capture_n = 0;
     static bool g_capture_on = false;
     static bool g_capture_to_log = false;
@@ -190,35 +189,77 @@ namespace {
         WriteLit(static_cast<const char *>(s), N - 1);
     }
 
-    static bool ReadU32(uintptr_t addr, uint32_t *out) {
-#if defined(SYS_process_vm_readv)
-        if (!out || addr < 0x10000u) return false;
-        struct iovec local {};
-        struct iovec remote {};
-        local.iov_base = out;
-        local.iov_len = sizeof(*out);
-        remote.iov_base = reinterpret_cast<void *>(addr);
-        remote.iov_len = sizeof(*out);
-        const long n = syscall(SYS_process_vm_readv, static_cast<long>(getpid()),
-                               &local, 1L, &remote, 1L, 0L);
-        return n == static_cast<long>(sizeof(*out));
-#else
-        (void) addr;
-        (void) out;
-        return false;
-#endif
+    // Returns the end address of the mapping containing addr, or 0 if
+    // unmapped. Fresh maps fd per call; usable inside the signal handler.
+    static uintptr_t MappedHi(uintptr_t addr) {
+        if (addr < 0x10000u) return 0;
+        const int fd = ::open("/proc/self/maps", O_RDONLY | O_CLOEXEC);
+        if (fd < 0) return 0;
+        uintptr_t hi = 0;
+        char chunk[8192];
+        char line[1024];
+        size_t llen = 0;
+        bool done = false;
+        while (!done) {
+            const ssize_t n = read(fd, chunk, sizeof(chunk));
+            if (n <= 0) break;
+            for (ssize_t i = 0; i < n && !done; ++i) {
+                if (chunk[i] != '\n') {
+                    if (llen < sizeof(line) - 1) line[llen++] = chunk[i];
+                    continue;
+                }
+                line[llen] = '\0';
+                llen = 0;
+                char *end = nullptr;
+                const uint64_t lo = strtoull(line, &end, 16);
+                if (end == line || !end || *end != '-') continue;
+                const uint64_t rhi = strtoull(end + 1, &end, 16);
+                if (addr < lo || addr >= rhi) continue;
+                hi = rhi;
+                done = true;
+            }
+        }
+        close(fd);
+        return hi;
     }
 
+    // Reads own-process memory directly after a /proc/self/maps check.
+    // process_vm_readv is filtered by Android app seccomp, so it always
+    // short-reads in this process; a guarded memcpy is reliable here.
+    static bool ReadDirect(uintptr_t addr, void *out, size_t len) {
+        if (!out || addr < 0x10000u) return false;
+        const uintptr_t hi = MappedHi(addr);
+        if (hi == 0 || addr + len > hi) return false;
+        memcpy(out, reinterpret_cast<const void *>(addr), len);
+        return true;
+    }
+
+    static bool ReadU32(uintptr_t addr, uint32_t *out) {
+        return ReadDirect(addr, out, sizeof(*out));
+    }
+
+    static bool ReadU64(uintptr_t addr, uint64_t *out) {
+        return ReadDirect(addr, out, sizeof(*out));
+    }
+
+    // Reads /proc/self/maps with a fresh fd. The previous implementation
+    // cached the fd at init and rewound it in the signal handler; on this
+    // device the rewound seq_file produced an empty file, so every call
+    // opens and closes its own descriptor instead.
     static void CopyMaps() {
-        if (g_maps_fd < 0 || g_maps_out_fd < 0) return;
+        if (g_maps_out_fd < 0) return;
+        const int fd = ::open("/proc/self/maps", O_RDONLY | O_CLOEXEC);
+        if (fd < 0) return;
         (void) ftruncate(g_maps_out_fd, 0);
-        if (lseek(g_maps_fd, 0, SEEK_SET) < 0) return;
-        if (lseek(g_maps_out_fd, 0, SEEK_SET) < 0) return;
+        if (lseek(g_maps_out_fd, 0, SEEK_SET) < 0) {
+            close(fd);
+            return;
+        }
         char buf[4096];
         size_t total = 0;
         constexpr size_t kCap = 2u * 1024u * 1024u;
         for (;;) {
-            const ssize_t n = read(g_maps_fd, buf, sizeof(buf));
+            const ssize_t n = read(fd, buf, sizeof(buf));
             if (n < 0) {
                 if (errno == EINTR) continue;
                 break;
@@ -228,16 +269,70 @@ namespace {
             total += static_cast<size_t>(n);
             if (total >= kCap) break;
         }
+        close(fd);
+    }
+
+    // Resolves an address to its /proc/self/maps region and writes
+    // "map:<key>=0xADDR lo=0x.. off=0x.. <path>" into the active capture.
+    // Fresh fd per call keeps this usable inside the signal handler.
+    static void WriteMapFor(const char *key, uint64_t addr) {
+        if (addr < 0x10000u) return;
+        const int fd = ::open("/proc/self/maps", O_RDONLY | O_CLOEXEC);
+        if (fd < 0) return;
+        char chunk[8192];
+        char line[1024];
+        size_t llen = 0;
+        bool done = false;
+        while (!done) {
+            const ssize_t n = read(fd, chunk, sizeof(chunk));
+            if (n <= 0) break;
+            for (ssize_t i = 0; i < n && !done; ++i) {
+                if (chunk[i] != '\n') {
+                    if (llen < sizeof(line) - 1) line[llen++] = chunk[i];
+                    continue;
+                }
+                line[llen] = '\0';
+                llen = 0;
+                char *end = nullptr;
+                const uint64_t lo = strtoull(line, &end, 16);
+                if (end == line || !end || *end != '-') continue;
+                const uint64_t hi = strtoull(end + 1, &end, 16);
+                if (addr < lo || addr >= hi) continue;
+                while (*end == ' ') ++end;            // perms
+                while (*end && *end != ' ') ++end;
+                while (*end == ' ') ++end;
+                const uint64_t off = strtoull(end, &end, 16);
+                while (*end == ' ') ++end;            // dev
+                while (*end && *end != ' ') ++end;
+                while (*end == ' ') ++end;            // inode
+                while (*end && *end != ' ') ++end;
+                while (*end == ' ') ++end;            // path
+                WriteLit("[VEXA][CRASH] map:");
+                WriteCStr(key);
+                WriteLit("=");
+                WriteHex64(addr);
+                WriteLit(" lo=");
+                WriteHex64(lo);
+                WriteLit(" off=");
+                WriteHex64(off);
+                WriteLit(" ");
+                WriteCStr(end);
+                WriteLit("\n");
+                done = true;
+            }
+        }
+        close(fd);
     }
 
     static void ScanJitRanges() {
         g_jit_range_count = 0;
-        if (g_maps_fd >= 0) {
-            if (lseek(g_maps_fd, 0, SEEK_SET) == 0) {
+        const int fd = ::open("/proc/self/maps", O_RDONLY | O_CLOEXEC);
+        if (fd >= 0) {
+            {
                 static char buf[1024 * 1024];
                 size_t used = 0;
                 for (;;) {
-                    const ssize_t n = read(g_maps_fd, buf + used, sizeof(buf) - used - 1);
+                    const ssize_t n = read(fd, buf + used, sizeof(buf) - used - 1);
                     if (n < 0) {
                         if (errno == EINTR) continue;
                         break;
@@ -246,6 +341,7 @@ namespace {
                     used += static_cast<size_t>(n);
                     if (used >= sizeof(buf) - 1) break;
                 }
+                close(fd);
                 buf[used] = '\0';
 
                 char *line = buf;
@@ -368,6 +464,31 @@ namespace {
         return Ptr & 0x00FFFFFFFFFFFFFFULL;
     }
 
+    // g_old[] holds the dispositions that were installed before VEXA's plain
+    // sigaction handlers — i.e. ART's signal handlers. A FEX thread that is
+    // JNI-attached executes JIT'd Java inside CallVoidMethod; an implicit
+    // null-check SEGV there must reach ART's handler so it becomes a
+    // NullPointerException instead of a fatal "host-code-fault" kill. For
+    // genuine native bugs, ART's chain still produces a debuggerd tombstone,
+    // which is strictly better than _exit.
+    // Returns true when the previous disposition handled (or ignored) it.
+    static bool ChainToPreviousHandler(int sig, siginfo_t *info, void *uctx) {
+        for (size_t i = 0; i < sizeof(kSignals) / sizeof(kSignals[0]); ++i) {
+            if (kSignals[i] != sig) continue;
+            const struct sigaction &old = g_old[i];
+            const auto handler = reinterpret_cast<uintptr_t>(old.sa_handler);
+            if (handler == reinterpret_cast<uintptr_t>(SIG_IGN)) return true;
+            if (handler == reinterpret_cast<uintptr_t>(SIG_DFL) || handler == 0) return false;
+            if (old.sa_flags & SA_SIGINFO) {
+                old.sa_sigaction(sig, info, uctx);
+            } else {
+                old.sa_handler(sig);
+            }
+            return true;
+        }
+        return false;
+    }
+
     static bool IsInternalFexFault(FEXCore::Core::InternalThreadState *Thread,
                                    int sig,
                                    const siginfo_t *si) {
@@ -382,12 +503,31 @@ namespace {
         return false;
     }
 
+    static uint32_t g_bt_map_budget = 0;
+
+    static _Unwind_Reason_Code BacktraceCb(struct _Unwind_Context *ctx, void *) {
+        const uintptr_t pc = static_cast<uintptr_t>(_Unwind_GetIP(ctx));
+        if (pc == 0) return _URC_END_OF_STACK;
+        WriteLit("[VEXA][CRASH] bt_pc=");
+        WriteHex64(pc);
+        WriteLit("\n");
+        if (g_bt_map_budget < 16) {
+            ++g_bt_map_budget;
+            WriteMapFor("bt", pc);
+        }
+        return _URC_NO_REASON;
+    }
+
     static inline void DumpHostState(const ucontext_t *uc) {
 #if defined(__aarch64__)
         if (!uc) return;
+        g_bt_map_budget = 0;
         WriteKeyHex("host_pc", uc->uc_mcontext.pc);
         WriteKeyHex("host_lr", uc->uc_mcontext.regs[30]);
         WriteKeyHex("host_sp", uc->uc_mcontext.sp);
+        WriteMapFor("pc", static_cast<uint64_t>(uc->uc_mcontext.pc));
+        WriteMapFor("lr", static_cast<uint64_t>(uc->uc_mcontext.regs[30]));
+        WriteMapFor("sp", static_cast<uint64_t>(uc->uc_mcontext.sp));
         WriteKeyHex("host_x0", uc->uc_mcontext.regs[0]);
         WriteKeyHex("host_x1", uc->uc_mcontext.regs[1]);
         WriteKeyHex("host_x2", uc->uc_mcontext.regs[2]);
@@ -397,6 +537,50 @@ namespace {
         WriteKeyHex("host_x6", uc->uc_mcontext.regs[6]);
         WriteKeyHex("host_x7", uc->uc_mcontext.regs[7]);
         WriteKeyHex("host_x8", uc->uc_mcontext.regs[8]);
+        {
+            static const char *const kRegNames[] = {
+                    "host_x9", "host_x10", "host_x11", "host_x12", "host_x13",
+                    "host_x14", "host_x15", "host_x16", "host_x17", "host_x18",
+                    "host_x19", "host_x20", "host_x21", "host_x22", "host_x23",
+                    "host_x24", "host_x25", "host_x26", "host_x27", "host_x28",
+                    "host_x29",
+            };
+            for (int i = 9; i <= 29; ++i) {
+                WriteKeyHex(kRegNames[i - 9], uc->uc_mcontext.regs[i]);
+            }
+        }
+        // AAPCS64 frame chain from the faulting context: [x29]=prev fp,
+        // [x29+8]=return address. Captures the real fault stack, which
+        // _Unwind_Backtrace below (handler context) cannot see.
+        {
+            uint64_t fp = uc->uc_mcontext.regs[29];
+            for (int i = 0; i < 48 && fp >= 0x10000u; ++i) {
+                uint64_t prev = 0, ret = 0;
+                if (!ReadU64(fp, &prev) || !ReadU64(fp + 8, &ret)) break;
+                WriteLit("[VEXA][CRASH] frame_fp=");
+                WriteHex64(fp);
+                WriteLit(" ret=");
+                WriteHex64(ret);
+                WriteLit("\n");
+                if (i < 16) WriteMapFor("frame_ret", ret);
+                if (prev <= fp || prev - fp > (1u << 24)) break;
+                fp = prev;
+            }
+        }
+        // Raw stack scan: potential return addresses get resolved offline
+        // against runtime_worker.maps.
+        {
+            const uintptr_t sp = static_cast<uintptr_t>(uc->uc_mcontext.sp);
+            for (uintptr_t a = sp; a < sp + 0x1000; a += 8) {
+                uint64_t w = 0;
+                if (!ReadU64(a, &w)) break;
+                WriteLit("[VEXA][CRASH] stack@");
+                WriteHex64(a - sp);
+                WriteLit("=");
+                WriteHex64(w);
+                WriteLit("\n");
+            }
+        }
         WriteKeyHex("alt_sp", static_cast<uint64_t>(reinterpret_cast<uintptr_t>(uc->uc_stack.ss_sp)));
         WriteKeyHex("alt_size", static_cast<uint64_t>(uc->uc_stack.ss_size));
         uint32_t insn = 0;
@@ -407,12 +591,49 @@ namespace {
         if (lr >= 4 && ReadU32(static_cast<uintptr_t>(lr - 4), &insn)) {
             WriteKeyHex("host_lr_insn", insn);
         }
+        // Dump code around the faulting PC so JIT/dispatcher blocks can be
+        // disassembled offline. Each word is one little-endian instruction.
+        // A second window around lr captures the call site (blr/br) that
+        // entered the faulting stub; dispatcher stubs are spaced ~0x300
+        // apart so a wide window is needed.
+        {
+            const uintptr_t pc = static_cast<uintptr_t>(uc->uc_mcontext.pc);
+            const uintptr_t start = pc >= 0x400 ? pc - 0x400 : pc;
+            WriteLit("[VEXA][CRASH] insn_window_base=");
+            WriteHex64(start);
+            WriteLit("\n");
+            for (uintptr_t a = start; a < pc + 0x40; a += 4) {
+                uint32_t w = 0;
+                if (!ReadU32(a, &w)) break;
+                WriteLit("[VEXA][CRASH] insn@");
+                WriteHex64(a - pc);
+                WriteLit("=");
+                WriteHex64(w);
+                WriteLit("\n");
+            }
+            const uintptr_t lrw = static_cast<uintptr_t>(lr);
+            const uintptr_t lstart = lrw >= 0x48 ? lrw - 0x48 : lrw;
+            WriteLit("[VEXA][CRASH] insn_lr_window_base=");
+            WriteHex64(lstart);
+            WriteLit("\n");
+            for (uintptr_t a = lstart; a < lrw + 0x10 && lrw >= 0x10000u; a += 4) {
+                uint32_t w = 0;
+                if (!ReadU32(a, &w)) break;
+                WriteLit("[VEXA][CRASH] insn_lr@");
+                WriteHex64(a - lrw);
+                WriteLit("=");
+                WriteHex64(w);
+                WriteLit("\n");
+            }
+        }
+        _Unwind_Backtrace(BacktraceCb, nullptr);
 #endif
     }
 
     static inline void DumpGuestStateRaw(FEXCore::Core::InternalThreadState *Thread) {
         if (!Thread || !Thread->CurrentFrame) return;
         WriteKeyHex("guest_rip", Thread->CurrentFrame->State.rip);
+        WriteMapFor("guest_rip", Thread->CurrentFrame->State.rip);
         const auto &g = Thread->CurrentFrame->State.gregs;
         WriteKeyHex("guest_rsp", g[4]);
         WriteKeyHex("guest_rbp", g[5]);
@@ -658,6 +879,45 @@ namespace {
                 return false;
             }
         }
+
+        // Deliberate dispatcher faults: the GuestSignal_*/SignalReturn/pause
+        // stubs live in the FEXMem_Misc code buffer (outside the JIT region)
+        // and fault on purpose to deliver guest signals or unwind state.
+        // IsAddressInCodeBuffer doesn't cover them, so without this check a
+        // plain guest SIGSEGV is misclassified as a fatal host-code fault.
+        // Let FEX's delegator (HandleGuestSignal) handle them instead.
+        if (uctx && Thread && Thread->CurrentFrame) {
+            const uintptr_t pc = static_cast<uintptr_t>(
+                reinterpret_cast<const ucontext_t *>(uctx)->uc_mcontext.pc);
+            const auto &P = Thread->CurrentFrame->Pointers;
+            const uint64_t stubs[] = {
+                P.DispatcherLoopTopFillSRA, P.DispatcherLoopTop,
+                P.DispatcherLoopTopEnterEC, P.DispatcherLoopTopEnterECFillSRA,
+                P.ExitFunctionLinker, P.ThreadStopHandlerSpillSRA,
+                P.ThreadPauseHandlerSpillSRA, P.GuestSignal_SIGILL,
+                P.GuestSignal_SIGTRAP, P.GuestSignal_SIGSEGV,
+                P.SignalReturnHandler, P.SignalReturnHandlerRT,
+                P.LUDIVHandler, P.LDIVHandler,
+            };
+            uint64_t lo = UINT64_MAX;
+            for (uint64_t s : stubs) {
+                if (s && s < lo) lo = s;
+            }
+            if (lo != UINT64_MAX) {
+                const uint64_t base = lo & ~0xFFFULL;
+                // MAX_DISPATCHER_CODE_SIZE is 4 pages.
+                if (pc >= base && pc < base + 0x4000) {
+                    WriteLit("[VEXA][CRASH] dispatcher_stub_fault pc=");
+                    WriteHex64(pc);
+                    WriteLit(" base=");
+                    WriteHex64(base);
+                    WriteLit(" signal=");
+                    WriteS32(Signal);
+                    WriteLit("\n");
+                    return false;
+                }
+            }
+        }
 #endif
         if (__atomic_exchange_n(&g_in_handler, 1, __ATOMIC_ACQ_REL) != 0) {
             // Re-entry. Let FEX continue.
@@ -716,6 +976,14 @@ namespace {
 
         __atomic_store_n(&g_in_handler, 0, __ATOMIC_RELEASE);
         if (hostCodeFault) {
+            // Fault while executing host code on a FEX thread. Two cases:
+            //  - managed/JNI code (jit-cache, oat, libart): ART's handler turns
+            //    implicit null checks into NPEs; the process must survive.
+            //  - native thunk/FEX/syscall code: chaining still ends the run,
+            //    but through debuggerd so a real tombstone is produced.
+            if (ChainToPreviousHandler(Signal, static_cast<siginfo_t *>(info), uctx)) {
+                return true;
+            }
             _exit(128 + Signal);
         }
         return false; // let FEX Continue handling
@@ -729,6 +997,12 @@ namespace {
         DumpSignalContext("runtime-sigaction", sig, info, uctx);
         WriteLit("[VEXA][CRASH] === crash dump end ===\n");
         EndCapture();
+        __atomic_store_n(&g_in_handler, 0, __ATOMIC_RELEASE);
+        // Give ART/debuggerd the last word: managed faults become NPEs and the
+        // process survives; real native faults still die with a tombstone.
+        if (ChainToPreviousHandler(sig, info, uctx)) {
+            return;
+        }
         _exit(128 + sig);
     }
 } // namespace
@@ -746,7 +1020,6 @@ namespace Vexa::Log {
         const int lastFd = ::open(path, O_CREAT | O_RDWR | O_TRUNC | O_CLOEXEC, 0644);
         if (lastFd >= 0) g_last_fd = lastFd;
 
-        g_maps_fd = ::open("/proc/self/maps", O_RDONLY | O_CLOEXEC);
         snprintf(path, sizeof(path), "%s/runtime_worker.maps", artifactDir);
         const int mapsFd = ::open(path, O_CREAT | O_RDWR | O_TRUNC | O_CLOEXEC, 0644);
         if (mapsFd >= 0) g_maps_out_fd = mapsFd;

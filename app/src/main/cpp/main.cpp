@@ -62,6 +62,13 @@ namespace {
             return nullptr;
         }
 
+        // This thread becomes the FEX guest main thread inside StartRuntime.
+        // FEX threads repurpose TPIDR_EL0 so ART's signal handlers cannot map
+        // them to a managed Thread — any implicit null check while executing
+        // Java on this thread is unrecoverable. Route all its logging through
+        // liblog so no managed code ever runs here.
+        Vexa::Log::MarkFexManagedThread();
+
         pthread_attr_t selfAttr{};
         if (pthread_getattr_np(pthread_self(), &selfAttr) == 0) {
             void *stackAddr = nullptr;
