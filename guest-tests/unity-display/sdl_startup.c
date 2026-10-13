@@ -17,9 +17,14 @@ int main(void) {
   const Uint32 flags = SDL_INIT_TIMER | SDL_INIT_VIDEO | SDL_INIT_JOYSTICK |
                        SDL_INIT_GAMECONTROLLER | SDL_INIT_HAPTIC;
   assert(flags == 0x3221); /* The flags used by the inspected Unity player. */
+  /* Isolate haptic rollback in the negative control: SDL 2.0.22 can crash
+     during joystick cleanup after a failed UDEV init with the full flags.
+     The positive test always exercises Unity's full subsystem set. */
+  const Uint32 tested_flags = getenv("VEXA_TEST_FAIL_MONITOR")
+    ? SDL_INIT_TIMER | SDL_INIT_VIDEO | SDL_INIT_HAPTIC : flags;
   const int before = fd_count();
   for (int i = 0; i < 50; ++i) {
-    int result = SDL_Init(flags);
+    int result = SDL_Init(tested_flags);
     if (getenv("VEXA_TEST_FAIL_MONITOR")) {
       fprintf(stderr, "negative control: SDL_Init=%d error=%s video=%u\n",
               result, SDL_GetError(), SDL_WasInit(SDL_INIT_VIDEO));

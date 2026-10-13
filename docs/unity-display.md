@@ -47,8 +47,10 @@ haptic/UDEV. `guest-tests/unity-display/run.sh <SDL-install-prefix>` checks:
   cleanup, plus genuine descriptor exhaustion and recovery.
 - 50 SDL startup/shutdown cycles using Unity's initialization flags: video stays
   initialized, desktop dimensions and display modes are nonzero, and no fds leak.
-- A test-only failing monitor reproduces the old SDL initialization error and
-  confirms that SDL rolls video back. This also checks that SDL actually uses
+- A test-only failing monitor, with timer/video/haptic flags, reproduces the old
+  SDL initialization error and confirms that SDL rolls video back. This checks
+  the haptic failure independently of joystick cleanup (SDL 2.0.22 crashed when
+  the full flags were used for this negative control). It also checks that SDL uses
   the tested udev path rather than silently bypassing it.
 
 These Linux tests use SDL's dummy video driver. They exercise the startup failure,
@@ -64,6 +66,9 @@ remain in place; native-first resolution mutation is intentionally removed.
 
 Build `GL-guest` in FEX's guest build and `GL-host-64` in its Android build, then
 stage **both** `libGL-guest.so` and `libGL-host.so` into `runtime/thunks` together.
+The Gradle `stageSDL3Thunks` task now stages the GL pair as well and validates
+all source files before copying. The shipped pair was built from FEX
+`bd0a2bc18dedd993e22aedb15e5ef20b78329425`.
 Build `scripts/build_x11_fakes.sh libX11.so.6 libudev.so.1`, copy those shims into
 the staged rootfs and APK runtime rootfs, and regenerate `runtime/STAMP`.
 Do not mix old and new thunk interfaces or restore the retired engine-offset patch.
