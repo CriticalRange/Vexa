@@ -1,4 +1,4 @@
-"""Stage only the SDL3 thunk payloads, preserving the existing runtime assets."""
+"""Stage paired GL/SDL thunks, preserving the existing guest rootfs assets."""
 
 import hashlib
 import os
@@ -12,6 +12,8 @@ FEX_BUILD = os.path.normpath(os.path.join(VEXA, "..", "FEX", "build-android-arm6
 THIRD_PARTY = os.path.join(VEXA, "third_party", "install-android-arm64")
 
 PAYLOADS = (
+    ("x86_64", os.path.join(FEX_BUILD, "Guest", "libGL-guest.so"), "thunks/guest/libGL-guest.so"),
+    ("aarch64", os.path.join(FEX_BUILD, "HostLibs_64", "libGL-host.so"), "thunks/host/libGL-host.so"),
     ("x86_64", os.path.join(FEX_BUILD, "Guest", "libSDL3-guest.so"), "thunks/guest/libSDL3-guest.so"),
     (
         "x86_64",
@@ -80,12 +82,14 @@ def update_stamp():
 
 
 def main():
-    os.makedirs(RUNTIME, exist_ok=True)
+    # Validate every source before modifying assets, including both GL sides.
     for expected_arch, source, relative in PAYLOADS:
         if not os.path.isfile(source):
-            raise SystemExit(f"missing SDL3 thunk payload: {source}")
+            raise SystemExit(f"missing thunk payload: {source}")
         if machine(source) != ELF_MACHINES[expected_arch]:
             raise SystemExit(f"unexpected ELF architecture for {source}; expected {expected_arch}")
+    os.makedirs(RUNTIME, exist_ok=True)
+    for expected_arch, source, relative in PAYLOADS:
         destination = os.path.join(RUNTIME, *relative.split("/"))
         os.makedirs(os.path.dirname(destination), exist_ok=True)
         shutil.copy2(source, destination)

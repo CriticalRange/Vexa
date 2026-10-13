@@ -495,7 +495,7 @@ val stageGuestRuntime by tasks.registering(Exec::class) {
 
 val stageSDL3Thunks by tasks.registering(Exec::class) {
     group = "build setup"
-    description = "Adds SDL3 thunk payloads without replacing existing runtime assets."
+    description = "Stages paired GL/SDL thunk payloads without replacing guest rootfs assets."
     dependsOn(buildFEXCore)
     onlyIf { buildThunks.get() == "ON" }
     commandLine(
