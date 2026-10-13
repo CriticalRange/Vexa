@@ -88,6 +88,15 @@ namespace Vexa::Runtime::Init {
             return {Vexa::Common::Code::ExecutePrereqMissing, Vexa::Common::Phase::Execute,
                     "Missing base syscall handler"};
         }
+        // Linux does not have the Windows module observer that enables FEX's
+        // Mono decoder rules. Opt in before any guest code is translated.
+        for (const auto &entry: launchEnv) {
+            if (entry == "VEXA_MONO_COMPAT=1") {
+                state.ctx->MarkMonoDetected();
+                VEXA_LOGI(env, "FEX", "Mono JIT compatibility enabled", "{}");
+                break;
+            }
+        }
         // Guest programs such as Dead Cells search LD_LIBRARY_PATH=. and open
         // hlboot.dat from the working directory. FEX shares this process cwd.
         if (!paths.workingDir.empty() && ::chdir(paths.workingDir.c_str()) != 0) {
