@@ -172,7 +172,7 @@ object GuestCatalog {
                 // submission onto the single emulated render thread. Re-test it before
                 // adding it back - it was needed when the display list was broken.
             ),
-            env = listOf("DISPLAY=:0", "SDL_VIDEODRIVER=x11", "SteamAppId=1794680", "VEXA_STEAM_TRACE=1"),
+            env = listOf("DISPLAY=:0", "SDL_VIDEODRIVER=x11", "SteamAppId=1794680", "VEXA_STEAM_TRACE=1", "VEXA_MONO_COMPAT=1", "VEXA_ALSA_BLOCKING=1"),
             preinstalled = true,
         ),
         GuestProgram(

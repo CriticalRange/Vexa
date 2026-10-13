@@ -228,6 +228,10 @@ int snd_pcm_open(void** pcm, const char* name, int stream, int mode) {
   g_writes = 0;
   /* SND_PCM_NONBLOCK */
   g_nonblock = mode & 1;
+  /* Opt-in pacing for clients that do not retry EAGAIN: it
+     retains every PCM block while the host drains its queue. */
+  const char* blocking = getenv("VEXA_ALSA_BLOCKING");
+  if (blocking && strcmp(blocking, "1") == 0) g_nonblock = 0;
   *pcm = &g_cookie;
   fprintf(stderr, "[VEXA][ALSA] open %s tid=%ld\n", name ? name : "(null)",
           (long)syscall(SYS_gettid));
@@ -353,18 +357,22 @@ long snd_pcm_writei(void* pcm, const void* buffer, unsigned long frames) {
   al_current();
   /* Blocking-mode writes wait for room instead of bouncing EAGAIN; the guest
      retry loop burns a full core and starves the OpenSL mixer otherwise. */
-  for (int tries = 0; g_nfree == 0; ++tries) {
+  const unsigned long wait_started = now_ms();
+  for (; g_nfree == 0;) {
     al_reclaim();
     if (g_nfree > 0) {
       break;
     }
-    if (g_nonblock || tries >= 20) {
+    if (g_nonblock) {
       static int eagain;
       if ((eagain++ & 15) == 0) {
         fprintf(stderr, "[VEXA][ALSA] EAGAIN n=%d qf=%lu\n", eagain, g_queued_frames);
       }
       return -EAGAIN;
     }
+    /* Blocking mode must not turn ordinary host mixer latency into EAGAIN.
+       Only fail if playback makes no progress for a full second. */
+    if (now_ms() - wait_started >= 1000) return -EPIPE;
     struct timespec ts = { 0, 2000000L };
     nanosleep(&ts, NULL);
   }
@@ -427,11 +435,13 @@ long snd_pcm_avail_update(void* pcm) {
     return -ENODEV;
   }
   al_reclaim();
-  const long capacity = (long)NBUF * (long)g_period;
+  const long pool_capacity = (long)NBUF * (long)g_period;
+  const long capacity = (long)g_buffer < pool_capacity ? (long)g_buffer : pool_capacity;
   long room = capacity - (long)est_queued();
-  if (room > (long)g_buffer) {
-    room = (long)g_buffer;
-  }
+  /* A buffer cannot be reused until OpenAL marks it processed. Time-based
+     estimates alone can advertise space while every buffer is still owned. */
+  const long writable = (long)g_nfree * (long)g_period;
+  if (room > writable) room = writable;
   return room < 0 ? 0 : room;
 }
 
@@ -542,6 +552,9 @@ int snd_pcm_drain(void* pcm) {
 int snd_pcm_nonblock(void* pcm, int nonblock) {
   (void)pcm;
   g_nonblock = nonblock;
+  const char* blocking = getenv("VEXA_ALSA_BLOCKING");
+  if (blocking && strcmp(blocking, "1") == 0) g_nonblock = 0;
+  fprintf(stderr, "[VEXA][ALSA] nonblock requested=%d effective=%d\n", nonblock, g_nonblock);
   return 0;
 }
 

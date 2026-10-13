@@ -33,6 +33,7 @@ static int g_pointer_x;
 static int g_pointer_y;
 static unsigned int g_pointer_state;
 static int g_pointer_logs;
+static Window g_input_window = 1;
 static off_t g_pointer_off;
 static int g_map[10];
 static int g_map_on;
@@ -549,7 +550,7 @@ static void vexa_fill_key(XEvent* event, Display* dpy, int type, KeySym sym, uns
   memset(event, 0, sizeof(*event));
   event->type = type;
   event->xkey.display = dpy;
-  event->xkey.window = 1;
+  event->xkey.window = g_input_window;
   event->xkey.root = 1;
   event->xkey.state = state | g_mod_state;
   event->xkey.keycode = vexa_code_for_sym(sym);
@@ -583,7 +584,7 @@ static void vexa_fill_pointer(XEvent* event, Display* dpy, int type, int x, int 
   memset(event, 0, sizeof(*event));
   event->type = type;
   event->xbutton.display = dpy;
-  event->xbutton.window = 1;
+  event->xbutton.window = g_input_window;
   event->xbutton.root = 1;
   event->xbutton.x = x;
   event->xbutton.y = y;
@@ -1201,10 +1202,9 @@ Status XGetWindowAttributes(Display* dpy, Window window, XWindowAttributes* attr
 
 int XGetInputFocus(Display* dpy, Window* focus, int* revert_to) {
   (void)dpy;
-  /* Unity and SDL both poll focus. Reporting the root window keeps them from
-     waiting for a window that will never be activated. */
+  /* Report the input target rather than the first helper/root window. */
   if (focus) {
-    *focus = 1;
+    *focus = g_input_window;
   }
   if (revert_to) {
     *revert_to = 0;
@@ -1214,7 +1214,7 @@ int XGetInputFocus(Display* dpy, Window* focus, int* revert_to) {
 
 int XSetInputFocus(Display* dpy, Window window, int revert_to, Time time) {
   (void)dpy;
-  (void)window;
+  if (window > PointerRoot) g_input_window = window;
   (void)revert_to;
   (void)time;
   return 0;
@@ -1276,8 +1276,10 @@ int XMoveWindow(Display* dpy, Window window, int x, int y) {
 
 int XSelectInput(Display* dpy, Window window, long mask) {
   (void)dpy;
-  (void)window;
-  (void)mask;
+  if (mask & (KeyPressMask | KeyReleaseMask | ButtonPressMask | ButtonReleaseMask | PointerMotionMask)) {
+    g_input_window = window;
+    fprintf(stderr, "[VEXA][X11] input_window=%lu mask=0x%lx\n", window, mask);
+  }
   return 1;
 }
 

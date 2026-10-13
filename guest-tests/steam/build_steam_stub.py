@@ -2,8 +2,10 @@
 
 The export list is taken from the game's own libsteam_api.so so every flat-API
 entry point Steamworks.NET (or any other binding) can ask for resolves. Calls
-succeed and report an empty, offline-but-"logged in" Steam: initialisation and
-ownership checks pass, everything else returns zero.
+report an offline-but-"logged in" Steam: initialisation and ownership checks
+pass. Flat RemoteStorage reads/writes use local files, and asynchronous writes
+return typed completed results. Unimplemented API calls retain their empty
+responses; unknown async handles report failure rather than waiting forever.
 
 Usage: python build_steam_stub.py <real libsteam_api.so>... [-o output.so]
 
@@ -51,6 +53,20 @@ STRINGS = {
 FAKE_STEAM_ID = 76561198000000000
 
 CUSTOM = {
+    "SteamAPI_ISteamRemoteStorage_FileWrite":
+        "EXPORT bool SteamAPI_ISteamRemoteStorage_FileWrite(void* self, const char* name, const void* data, int32_t size) { return size >= 0 && storage_write(name, data, (uint32_t)size); }",
+    "SteamAPI_ISteamRemoteStorage_FileWriteAsync":
+        "EXPORT uint64_t SteamAPI_ISteamRemoteStorage_FileWriteAsync(void* self, const char* name, const void* data, uint32_t size) { return storage_write_async(name, data, size); }",
+    "SteamAPI_ISteamRemoteStorage_GetFileSize":
+        "EXPORT int32_t SteamAPI_ISteamRemoteStorage_GetFileSize(void* self, const char* name) { return storage_size(name); }",
+    "SteamAPI_ISteamRemoteStorage_FileRead":
+        "EXPORT int32_t SteamAPI_ISteamRemoteStorage_FileRead(void* self, const char* name, void* data, int32_t size) { return storage_read(name, data, size); }",
+    "SteamAPI_ISteamRemoteStorage_FileExists":
+        "EXPORT bool SteamAPI_ISteamRemoteStorage_FileExists(void* self, const char* name) { char path[PATH_MAX]; struct stat st; return storage_path(name, path) && !stat(path, &st) && S_ISREG(st.st_mode); }",
+    "SteamAPI_ISteamUtils_IsAPICallCompleted":
+        "EXPORT bool SteamAPI_ISteamUtils_IsAPICallCompleted(void* self, uint64_t call, bool* failed) { return storage_completed(call, failed); }",
+    "SteamAPI_ISteamUtils_GetAPICallResult":
+        "EXPORT bool SteamAPI_ISteamUtils_GetAPICallResult(void* self, uint64_t call, void* data, int size, int callback, bool* failed) { return storage_result(call, data, size, callback, failed); }",
     "SteamInternal_ContextInit": (
         "EXPORT void* SteamInternal_ContextInit(void** ctx) {"
         " trace(\"SteamInternal_ContextInit\");"
@@ -200,6 +216,8 @@ def render(names):
         "static void *fake_interface_for_export(const char *n) { return fake_interface_for_version(n); }",
         "#define EXPORT __attribute__((visibility(\"default\")))",
     ]
+    with open(os.path.join(ROOT, "remote_storage.c"), encoding="utf-8") as helper:
+        lines.append(helper.read())
     for n in names:
         if n in CUSTOM:
             lines.append(CUSTOM[n])

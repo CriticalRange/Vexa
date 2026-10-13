@@ -1,4 +1,4 @@
-"""Stage paired GL/SDL thunks, preserving the existing guest rootfs assets."""
+"""Stage paired GL/SDL/OpenAL thunks, preserving the guest rootfs assets."""
 
 import hashlib
 import os
@@ -12,6 +12,8 @@ FEX_BUILD = os.environ.get("FEX_BUILD_DIR", os.path.normpath(os.path.join(VEXA, 
 THIRD_PARTY = os.path.join(VEXA, "third_party", "install-android-arm64")
 
 PAYLOADS = (
+    ("x86_64", os.path.join(FEX_BUILD, "Guest", "libopenal-guest.so"), "thunks/guest/libopenal-guest.so"),
+    ("aarch64", os.path.join(FEX_BUILD, "HostLibs_64", "libopenal-host.so"), "thunks/host/libopenal-host.so"),
     ("x86_64", os.path.join(FEX_BUILD, "Guest", "libGL-guest.so"), "thunks/guest/libGL-guest.so"),
     ("aarch64", os.path.join(FEX_BUILD, "HostLibs_64", "libGL-host.so"), "thunks/host/libGL-host.so"),
     ("x86_64", os.path.join(FEX_BUILD, "Guest", "libSDL3-guest.so"), "thunks/guest/libSDL3-guest.so"),
