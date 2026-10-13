@@ -26,7 +26,6 @@ namespace Vexa::Runtime {
             Init::TeardownParentThread(g_state);
         }
         Init::TeardownThreadHandlers(g_state);
-        Init::ShutdownAllocator();
         // SetSyscallHandler(nullptr) dereferences the handler; the context is destroyed below anyway.
         if (g_state.ctx) {
             g_state.ctx->SetThunkHandler(nullptr);
@@ -36,6 +35,9 @@ namespace Vexa::Runtime {
         g_state.thunkHandler.reset();
         g_state.signalDelegator.reset();
         g_state.ctx.reset();
+        // FEX objects (including the x32 handler's allocator) must be destroyed
+        // before their allocator hooks and reserved address ranges disappear.
+        Init::ShutdownAllocator();
         g_state.parentThread = nullptr;
         g_state.fexStarted = false;
         // Removing logs last to show all the other logs
@@ -58,6 +60,9 @@ namespace Vexa::Runtime {
         // (libGL-host) inspect VEXA_HEADLESS via getenv to pick a pbuffer over
         // a SurfaceTexture-backed window. Mirror just the VEXA_HEADLESS* keys
         // into this process's environment.
+        for (const char *key : {"VEXA_HEADLESS", "VEXA_HEADLESS_W", "VEXA_HEADLESS_H"}) {
+            ::unsetenv(key);
+        }
         for (const auto &entry: launchEnv) {
             const auto eq = entry.find('=');
             if (eq == std::string::npos) continue;

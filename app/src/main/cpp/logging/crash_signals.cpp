@@ -58,6 +58,7 @@ namespace {
     static volatile sig_atomic_t g_in_handler = 0;
     static bool g_handlers_installed = false;
     static bool g_altstack_installed = false;
+    static pid_t g_altstack_tid = 0;
     static void *g_altstack_mem = nullptr;
     static size_t g_altstack_size = 0;
     static stack_t g_prev_altstack{};
@@ -67,7 +68,7 @@ namespace {
     static int g_crash_fd = -1;
     static int g_last_fd = -1;
     static int g_maps_out_fd = -1;
-    static char g_capture[16384];
+    static char g_capture[65536];
     static size_t g_capture_n = 0;
     static bool g_capture_on = false;
     static bool g_capture_to_log = false;
@@ -189,49 +190,18 @@ namespace {
         WriteLit(static_cast<const char *>(s), N - 1);
     }
 
-    // Returns the end address of the mapping containing addr, or 0 if
-    // unmapped. Fresh maps fd per call; usable inside the signal handler.
-    static uintptr_t MappedHi(uintptr_t addr) {
-        if (addr < 0x10000u) return 0;
-        const int fd = ::open("/proc/self/maps", O_RDONLY | O_CLOEXEC);
-        if (fd < 0) return 0;
-        uintptr_t hi = 0;
-        char chunk[8192];
-        char line[1024];
-        size_t llen = 0;
-        bool done = false;
-        while (!done) {
-            const ssize_t n = read(fd, chunk, sizeof(chunk));
-            if (n <= 0) break;
-            for (ssize_t i = 0; i < n && !done; ++i) {
-                if (chunk[i] != '\n') {
-                    if (llen < sizeof(line) - 1) line[llen++] = chunk[i];
-                    continue;
-                }
-                line[llen] = '\0';
-                llen = 0;
-                char *end = nullptr;
-                const uint64_t lo = strtoull(line, &end, 16);
-                if (end == line || !end || *end != '-') continue;
-                const uint64_t rhi = strtoull(end + 1, &end, 16);
-                if (addr < lo || addr >= rhi) continue;
-                hi = rhi;
-                done = true;
-            }
-        }
-        close(fd);
-        return hi;
-    }
-
-    // Reads own-process memory directly after a /proc/self/maps check.
-    // process_vm_readv is filtered by Android app seccomp, so it always
-    // short-reads in this process; a guarded memcpy is reliable here.
+    // Never dereference a potentially stale/protected mapping in a signal handler.
+    // The kernel returns EIO/EFAULT for unreadable memory instead of recursively
+    // faulting here. Android may deny /proc/self/mem; in that case omit the data.
     static bool ReadDirect(uintptr_t addr, void *out, size_t len) {
-        if (!out || addr < 0x10000u) return false;
-        const uintptr_t hi = MappedHi(addr);
-        if (hi == 0 || addr + len > hi) return false;
-        memcpy(out, reinterpret_cast<const void *>(addr), len);
-        return true;
+        if (!out || addr < 0x10000u || len > UINTPTR_MAX - addr) return false;
+        const int savedErrno = errno;
+        const int fd = ::open("/proc/self/mem", O_RDONLY | O_CLOEXEC);
+        if (fd < 0) { errno = savedErrno; return false; }
+        const ssize_t n = ::pread(fd, out, len, static_cast<off_t>(addr));
+        ::close(fd);
+        errno = savedErrno;
+        return n == static_cast<ssize_t>(len);
     }
 
     static bool ReadU32(uintptr_t addr, uint32_t *out) {
@@ -368,8 +338,13 @@ namespace {
                         while (name > perms && name[-1] != ' ' && name[-1] != '\t') --name;
                         const bool anon_tag = (tail - name) >= 6 && memcmp(name, "[anon:", 6) == 0;
                         // Anonymous regions leave the inode field as the last
-                        // token (a digit); named files end in a path.
-                        const bool inode_tail = (name < tail) && (*name >= '0' && *name <= '9');
+                        // token (all digits); named files end in a path. Check
+                        // the whole token so digit-leading filenames aren't
+                        // mistaken for anonymous JIT regions.
+                        bool inode_tail = name < tail;
+                        for (char *c = name; inode_tail && c < tail; ++c) {
+                            inode_tail = (*c >= '0' && *c <= '9');
+                        }
                         if (anon_tag || inode_tail) {
                             g_jit_ranges[g_jit_range_count].lo = lo;
                             g_jit_ranges[g_jit_range_count].hi = hi;
@@ -801,6 +776,7 @@ namespace {
 
         g_altstack_mem = mem;
         g_altstack_size = kAltStackSize;
+        g_altstack_tid = static_cast<pid_t>(syscall(SYS_gettid));
         g_altstack_installed = true;
         __android_log_print(ANDROID_LOG_INFO, kCrashTag,
                             "Installed alt signal stack size=%zu", kAltStackSize);
@@ -808,6 +784,18 @@ namespace {
 
     void UninstallAltStackIfNeeded() {
         if (!g_altstack_installed) {
+            return;
+        }
+
+        // sigaltstack is per-thread: InstallSignalHandlers ran on the JNI
+        // caller's thread while UninstallSignalHandlers runs on the
+        // runtime_worker pthread. Restoring thread A's saved state onto
+        // thread B and then unmapping the buffer would leave thread A's
+        // registered alt stack pointing at freed memory — a fault there
+        // would be delivered onto unmapped pages. On a foreign thread we
+        // simply leave the alt stack in place; the worker process is
+        // single-use and exits with the run anyway.
+        if (g_altstack_tid != static_cast<pid_t>(syscall(SYS_gettid))) {
             return;
         }
 
@@ -823,6 +811,7 @@ namespace {
         g_altstack_mem = nullptr;
         g_altstack_size = 0;
         g_altstack_installed = false;
+        g_altstack_tid = 0;
         memset(&g_prev_altstack, 0, sizeof(g_prev_altstack));
     }
 

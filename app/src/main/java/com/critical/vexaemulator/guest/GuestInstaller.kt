@@ -80,6 +80,16 @@ object GuestInstaller {
         var installed = 0
         targets.forEach { target ->
             if (!target.isFile) return@forEach
+            val header = ByteArray(20)
+            val isAmd64 = target.inputStream().use { input ->
+                input.read(header) == header.size &&
+                    header[0] == 0x7f.toByte() && header[1] == 'E'.code.toByte() &&
+                    header[2] == 'L'.code.toByte() && header[3] == 'F'.code.toByte() &&
+                    header[4] == 2.toByte() && header[5] == 1.toByte() &&
+                    header[18] == 62.toByte() && header[19] == 0.toByte()
+            }
+            // The bundled Steam stub is amd64. Never overwrite an i386 DLL.
+            if (!isAmd64) return@forEach
             val backup = File(target.parentFile, "libsteam_api.so.real")
             if (!backup.exists()) target.copyTo(backup)
             context.assets.open("guests/libsteam_api_stub.so").use { input ->
@@ -102,7 +112,8 @@ object GuestInstaller {
         return env + "XDG_RUNTIME_DIR=/tmp/vexa-xdg"
     }
 
-    private fun ensureRuntime(context: Context, root: File) {
+    @Synchronized
+    fun ensureRuntime(context: Context, root: File = context.filesDir) {
         val stamp = File(root, "runtime.stamp")
         // runtime/STAMP carries a content hash, so updated thunks/rootfs replace the old copy.
         val expected = runCatching {
@@ -115,8 +126,7 @@ object GuestInstaller {
             return
         }
         copyAssetTree(context, "runtime/rootfs", File(root, "rootfs"))
-        copyAssetTree(context, "runtime/thunks/host", File(root, "thunks/host"))
-        copyAssetTree(context, "runtime/thunks/guest", File(root, "thunks/guest"))
+        copyAssetTree(context, "runtime/thunks", File(root, "thunks"))
         stamp.writeText(expected)
     }
 

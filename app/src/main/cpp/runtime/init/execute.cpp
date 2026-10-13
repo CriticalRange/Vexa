@@ -162,7 +162,7 @@ namespace Vexa::Runtime::Init {
 
             const auto hostType = ELFLoader::ELFContainer::GetELFType(paths.executable.c_str());
 
-            VEXA_LOGI(env, "FEX", "ELF type (host path",
+            VEXA_LOGI(env, "FEX", "ELF type (host path)",
                       Vexa::Log::AddFields({
                                                    Vexa::Log::F("type", static_cast<int>(hostType))
                                            }).c_str());

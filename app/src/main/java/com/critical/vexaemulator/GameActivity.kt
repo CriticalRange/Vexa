@@ -816,7 +816,18 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
                     )
                 }
             }
-            val request = com.critical.vexaemulator.guest.GuestInstaller.install(this@GameActivity, program)
+            val request = try {
+                com.critical.vexaemulator.guest.GuestInstaller.install(this@GameActivity, program)
+            } catch (t: Throwable) {
+                VexaLogger.log(
+                    level = LogLevel.ERROR,
+                    category = LogCategory.FAILURE,
+                    message = "Guest install failed: ${t.message}",
+                    fields = mapOf("id" to program.id)
+                )
+                finish()
+                return@launch
+            }
             bootInstalled = true
             VexaLogger.log(
                 level = LogLevel.INFO,

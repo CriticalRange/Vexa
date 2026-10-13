@@ -22,9 +22,9 @@ import java.util.concurrent.TimeUnit
 /**
  * NoDisplay trampoline so `am start` can drive a guest launch with no window
  * ever appearing on screen. The activity must finish() before onResume, so
- * all long-lived work lives in [HeadlessLaunch]. The worker process creates
- * its own offscreen SurfaceTexture when the launch env carries
- * VEXA_HEADLESS=1 — no UI-process surface is ever involved.
+ * all long-lived work lives in [HeadlessLaunch]. The GL thunk renders into an
+ * EGL pbuffer when the launch env carries VEXA_HEADLESS=1 — no UI-process or
+ * worker-process surface is ever involved.
  *
  *   am start -n com.critical.vexaemulator/.runtime.HeadlessLaunchActivity \
  *     --es programId brotato
@@ -54,7 +54,8 @@ private object HeadlessLaunch {
     @Volatile private var runtimeMessenger: Messenger? = null
     @Volatile private var bound = false
     private var bindLatch = CountDownLatch(1)
-    private var stopAfterBind = false
+    @Volatile private var binding = false
+    private var expiry: Runnable? = null
 
     private val replyHandler = object : Handler(Looper.getMainLooper()) {
         override fun handleMessage(msg: Message) {
@@ -68,7 +69,7 @@ private object HeadlessLaunch {
 
                 RuntimeIpc.MSG_START_RESULT -> {
                     Log.i(TAG, "start result code=${msg.data.getInt(RuntimeIpc.KEY_CODE, -1)}")
-                    unbind()
+                    handler.post { unbind() }
                 }
 
                 else -> super.handleMessage(msg)
@@ -77,7 +78,7 @@ private object HeadlessLaunch {
     }
     private val replyMessenger = Messenger(replyHandler)
 
-    private val runtimeConnection = object : ServiceConnection {
+    private val runtimeConnection: ServiceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
             runtimeMessenger = Messenger(service)
             bound = true
@@ -88,7 +89,28 @@ private object HeadlessLaunch {
         override fun onServiceDisconnected(name: ComponentName?) {
             runtimeMessenger = null
             bound = false
+            // Drop the dead binding entirely so a later launch can bind fresh.
+            if (binding) runCatching { appContext.unbindService(runtimeConnection) }
+            binding = false
             Log.w(TAG, "runtime service disconnected")
+        }
+
+        override fun onBindingDied(name: ComponentName?) {
+            runtimeMessenger = null
+            bound = false
+            if (binding) runCatching { appContext.unbindService(runtimeConnection) }
+            binding = false
+            Log.w(TAG, "runtime service binding died")
+        }
+
+        override fun onNullBinding(name: ComponentName?) {
+            // A null binder still requires unbindService to release registration.
+            if (binding) runCatching { appContext.unbindService(runtimeConnection) }
+            runtimeMessenger = null
+            bound = false
+            binding = false
+            Log.w(TAG, "runtime service returned null binder")
+            bindLatch.countDown()
         }
     }
 
@@ -115,16 +137,24 @@ private object HeadlessLaunch {
     private fun bind(): Boolean {
         if (bound) return true
         bindLatch = CountDownLatch(1)
-        appContext.bindService(
+        binding = appContext.bindService(
             Intent(appContext, RuntimeService::class.java),
             runtimeConnection,
             Context.BIND_AUTO_CREATE
         )
-        return bindLatch.await(BIND_TIMEOUT_S, TimeUnit.SECONDS)
+        if (!binding) return false
+        if (!bindLatch.await(BIND_TIMEOUT_S, TimeUnit.SECONDS)) {
+            unbind()
+            return false
+        }
+        return bound
     }
 
     private fun unbind() {
-        if (bound) runCatching { appContext.unbindService(runtimeConnection) }
+        expiry?.let { handler.removeCallbacks(it) }
+        expiry = null
+        if (binding) runCatching { appContext.unbindService(runtimeConnection) }
+        binding = false
         bound = false
         runtimeMessenger = null
     }
@@ -153,6 +183,7 @@ private object HeadlessLaunch {
         val programId = intent.getStringExtra("programId").orEmpty()
 
         if (exe.isNotEmpty()) {
+            GuestInstaller.ensureRuntime(context)
             val root = context.filesDir
             val rootfs = File(root, "rootfs").apply { mkdirs() }
             val thunkHost = File(root, "thunks/host").apply { mkdirs() }
@@ -173,7 +204,13 @@ private object HeadlessLaunch {
 
         val program = GuestCatalog.find(programId)
             ?: throw IllegalStateException("unknown programId: $programId")
-        return GuestInstaller.install(context, program)
+        val request = GuestInstaller.install(context, program)
+        val overrides = intent.getStringArrayExtra("env")?.toList().orEmpty()
+        val keys = overrides.map { it.substringBefore('=') }.toSet()
+        return request.copy(
+            launchEnv = request.launchEnv.filterNot { it.substringBefore('=') in keys } + overrides,
+            launchArgs = intent.getStringArrayExtra("args")?.toList() ?: request.launchArgs,
+        )
     }
 
     private fun launch(context: Context, intent: Intent?) {
@@ -181,12 +218,16 @@ private object HeadlessLaunch {
             Log.e(TAG, "null intent")
             return
         }
-        val width = safeIntent.getIntExtra("width", 1280)
-        val height = safeIntent.getIntExtra("height", 720)
-        val ttlMinutes = safeIntent.getIntExtra("ttlMinutes", 10)
+        val width = safeIntent.getIntExtra("width", 1280).coerceIn(1, 8192)
+        val height = safeIntent.getIntExtra("height", 720).coerceIn(1, 8192)
+        val ttlMinutes = safeIntent.getIntExtra("ttlMinutes", 10).coerceIn(1, 1440)
 
         handler.post {
             try {
+                if (binding) {
+                    Log.w(TAG, "a headless session is already active; stop it before launching another")
+                    return@post
+                }
                 val request = buildRequest(context, safeIntent)
                 publishGuestWindowSize(request.rootfsPath, width, height)
 
@@ -196,7 +237,9 @@ private object HeadlessLaunch {
                 }
 
                 send(RuntimeIpc.MSG_REGISTER_CLIENT)
-                val env = ArrayList(request.launchEnv).apply {
+                val env = ArrayList(request.launchEnv.filterNot {
+                    it.substringBefore('=') in setOf("VEXA_HEADLESS", "VEXA_HEADLESS_W", "VEXA_HEADLESS_H")
+                }).apply {
                     add("VEXA_HEADLESS=1")
                     add("VEXA_HEADLESS_W=$width")
                     add("VEXA_HEADLESS_H=$height")
@@ -213,14 +256,18 @@ private object HeadlessLaunch {
                 }
                 Log.i(TAG, "launch sent=$sent exe=${request.executablePath}")
 
-                handler.postDelayed({
-                    if (bound) {
+                if (!sent) { unbind(); return@post }
+                expiry = object : Runnable {
+                    override fun run() {
+                        // A dead worker may have been replaced before this timer fires.
+                        if (expiry !== this || !bound) return
                         Log.w(TAG, "ttl expired, stopping runtime")
                         send(RuntimeIpc.MSG_STOP_RUNTIME)
-                        handler.postDelayed({ unbind() }, 2000)
+                        handler.postDelayed({ if (expiry === this) unbind() }, 2000)
                     }
-                }, ttlMinutes * 60_000L)
+                }.also { handler.postDelayed(it, ttlMinutes * 60_000L) }
             } catch (t: Throwable) {
+                unbind()
                 Log.e(TAG, "headless launch failed", t)
             }
         }
