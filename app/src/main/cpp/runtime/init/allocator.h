@@ -9,8 +9,18 @@
 
 #include "../../common/status.h"
 
+#include <FEXCore/fextl/memory.h>
+
+namespace FEX::HLE {
+    class MemAllocator;
+}
+
 namespace Vexa::Runtime::Init {
     Vexa::Common::Result SetupAllocator(JNIEnv *env);
+
+    // Hands the 32-bit passthrough allocator to the x32 syscall handler.
+    // Returns nullptr when the runtime is in 64-bit mode.
+    fextl::unique_ptr<FEX::HLE::MemAllocator> TakeGuestAllocator();
 
     void ShutdownAllocator();
 }

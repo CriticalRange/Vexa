@@ -4,6 +4,7 @@
 
 #include <FEXCore/HLE/SyscallHandler.h>
 #include <Tools/LinuxEmulation/LinuxSyscalls/GdbServer.h>
+#include <Tools/LinuxEmulation/LinuxSyscalls/LinuxAllocator.h>
 #include <Tools/LinuxEmulation/LinuxSyscalls/Syscalls.h>
 
 #include <cstdlib>
@@ -11,23 +12,40 @@
 
 #include "syscalls.h"
 #include "resources.h"
+#include "allocator.h"
 #include "../../logging/native_log.h"
 
 namespace FEX::HLE::x64 {
-    fextl::unique_ptr<FEXCore::HLE::SyscallHandler> CreateHandler(
+    fextl::unique_ptr<FEX::HLE::SyscallHandler> CreateHandler(
             FEXCore::Context::Context *ctx,
             FEX::HLE::SignalDelegator *signalDelegator,
             FEX::HLE::ThunkHandler *thunkHandler
     );
 }
 
+namespace FEX::HLE::x32 {
+    fextl::unique_ptr<FEX::HLE::SyscallHandler> CreateHandler(
+            FEXCore::Context::Context *ctx,
+            FEX::HLE::SignalDelegator *signalDelegator,
+            FEX::HLE::ThunkHandler *thunkHandler,
+            fextl::unique_ptr<FEX::HLE::MemAllocator> allocator
+    );
+}
+
 namespace Vexa::Runtime::Init {
     Vexa::Common::Result SetupSyscalls(JNIEnv *env, Resources &state) {
-        auto sysHandler = FEX::HLE::x64::CreateHandler(
-                state.ctx.get(),
-                state.signalDelegator.get(),
-                state.thunkHandler.get()
-        );
+        auto sysHandler = state.is64BitMode
+                          ? FEX::HLE::x64::CreateHandler(
+                                state.ctx.get(),
+                                state.signalDelegator.get(),
+                                state.thunkHandler.get()
+                        )
+                          : FEX::HLE::x32::CreateHandler(
+                                state.ctx.get(),
+                                state.signalDelegator.get(),
+                                state.thunkHandler.get(),
+                                TakeGuestAllocator()
+                        );
         if (!sysHandler) {
             return {Vexa::Common::Code::CreateSyscallHandlerFailed, Vexa::Common::Phase::Init,
                     "Failed to create Syscall Handler"};

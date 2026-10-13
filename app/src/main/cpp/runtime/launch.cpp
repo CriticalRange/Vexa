@@ -54,9 +54,23 @@ namespace Vexa::Runtime {
         g_state.fexStarted = true;
         VEXA_LOGI(env, "FEX", "FEXCore initialized", "{}");
 
+        // launchEnv feeds the guest envp only, but host-side thunk libraries
+        // (libGL-host) inspect VEXA_HEADLESS via getenv to pick a pbuffer over
+        // a SurfaceTexture-backed window. Mirror just the VEXA_HEADLESS* keys
+        // into this process's environment.
+        for (const auto &entry: launchEnv) {
+            const auto eq = entry.find('=');
+            if (eq == std::string::npos) continue;
+            if (entry.compare(0, eq, "VEXA_HEADLESS") == 0 ||
+                entry.compare(0, eq, "VEXA_HEADLESS_W") == 0 ||
+                entry.compare(0, eq, "VEXA_HEADLESS_H") == 0) {
+                ::setenv(entry.substr(0, eq).c_str(), entry.c_str() + eq + 1, 1);
+            }
+        }
+
         Init::InstallLogHandlers();
 
-        auto r = Init::SetupConfig(env, paths, launchEnv);
+        auto r = Init::SetupConfig(env, paths, launchEnv, g_state);
         if (!r.Ok()) {
             const std::string fields = Vexa::Log::AddFields({
                                                                     Vexa::Log::F("code", r.code),

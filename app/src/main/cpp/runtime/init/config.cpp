@@ -247,7 +247,8 @@ namespace Vexa::Runtime::Init {
 
     Vexa::Common::Result
     SetupConfig(JNIEnv *env, const Vexa::Common::Paths &paths,
-                const std::vector<std::string> &launchEnv) {
+                const std::vector<std::string> &launchEnv,
+                Resources &state) {
         const char *programName =
                 paths.executable.empty() ? "unknown" : paths.executable.c_str();
         const std::string stderrPath = paths.artifactDir + "/fex_stderr.log";
@@ -314,6 +315,7 @@ namespace Vexa::Runtime::Init {
             };
         }
         const bool is64 = elfType == ELFLoader::ELFContainer::TYPE_X86_64;
+        state.is64BitMode = is64;
 
 
         int fd = ::open(stderrPath.c_str(), O_CREAT | O_WRONLY | O_TRUNC, 0644);
@@ -364,7 +366,9 @@ namespace Vexa::Runtime::Init {
         const bool is64bitSet = FEXCore::Config::Exists(FEXCore::Config::CONFIG_IS64BIT_MODE);
 
         // ReloadMetaLayer can overwrite these, so applying them later.
-        FEXCore::Config::Set(FEXCore::Config::CONFIG_IS64BIT_MODE, "1");
+        // Bitness follows the guest ELF header, not a hardcoded mode: an i386
+        // guest takes the x32 syscall handler and the low-4GB allocator path.
+        FEXCore::Config::Set(FEXCore::Config::CONFIG_IS64BIT_MODE, is64 ? "1" : "0");
         FEXCore::Config::Set(FEXCore::Config::CONFIG_ROOTFS, paths.rootfs);
         // Unaligned (split) guest atomics are emulated in the SIGBUS handler.
         // Without the strict process-wide split lock the emulation is a plain

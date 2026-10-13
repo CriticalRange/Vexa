@@ -26,6 +26,10 @@ namespace FEX::HLE {
 namespace Vexa::Runtime {
     struct Resources {
         bool fexStarted{false};
+        // Probed from the guest ELF header before allocator/syscall setup.
+        // Drives CONFIG_IS64BIT_MODE, the allocator path, and the x64/x32
+        // syscall handler selection.
+        bool is64BitMode{true};
         fextl::unique_ptr<FEXCore::Context::Context> ctx{};
         fextl::unique_ptr<FEX::HLE::SignalDelegator> signalDelegator{};
         fextl::unique_ptr<FEX::HLE::ThunkHandler> thunkHandler{};
