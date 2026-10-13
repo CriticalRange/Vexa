@@ -38,6 +38,7 @@ SONAMES = (
     "libXrender.so.1",
     "libXi.so.6",
     "libdbus-1.so.3",
+    "libudev.so.1",
     "libsteam_api.so",
     "libvulkan.so.1",
     "libwayland-client.so.0",
@@ -80,6 +81,7 @@ REQUIRED = (
     "libXrender.so.1",
     "libXi.so.6",
     "libdbus-1.so.3",
+    "libudev.so.1",
     "libsteam_api.so",
 )
 PROGRAMS = (
@@ -143,6 +145,7 @@ def find_elf(soname):
 # not the real Ubuntu socket clients. The shims stamp "VEXA" into their
 # vendor/setup bytes; the real libs never carry that string.
 FAKE_LIB_MARKERS = {
+    "libudev.so.1": b"VEXA empty udev backend",
     "libxcb.so.1": b"VEXA",
     "libX11.so.6": b"VEXA",
 }
@@ -266,6 +269,8 @@ def main():
     for dirpath, dirs, files in os.walk(runtime):
         dirs.sort()
         for name in sorted(files):
+            if dirpath == runtime and name == "STAMP":
+                continue
             path = os.path.join(dirpath, name)
             digest.update(os.path.relpath(path, runtime).replace(os.sep, "/").encode())
             with open(path, "rb") as handle:

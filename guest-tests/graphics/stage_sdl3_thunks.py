@@ -66,6 +66,8 @@ def update_stamp():
     for dirpath, dirs, files in os.walk(RUNTIME):
         dirs.sort()
         for name in sorted(files):
+            if dirpath == RUNTIME and name == "STAMP":
+                continue
             path = os.path.join(dirpath, name)
             relative = os.path.relpath(path, RUNTIME).replace(os.sep, "/")
             digest.update(relative.encode())
