@@ -12,6 +12,10 @@ cmake_minimum_required(VERSION 3.22.1)
 # build script scope).
 project("vexa")
 
+# Host thunks are dlopened independently of Java's System.loadLibrary group.
+# Export FEX's callback/guest-stack helpers into Android's global lookup group.
+# Otherwise their weak imports resolve to null, notably for i386 guest malloc.
+
 # Creates and names a library, sets it as either STATIC
 # or SHARED, and provides the relative paths to its source code.
 # You can define multiple libraries, and CMake builds them for you.
@@ -101,6 +105,7 @@ ASSERTIONS_ENABLED=1
 # Specifies libraries CMake should link to your target library. You
 # can link libraries from various origins, such as libraries defined in this
 # build script, prebuilt third-party libraries, or Android system libraries.
+target_link_options(${CMAKE_PROJECT_NAME} PRIVATE "-Wl,-z,global")
 target_link_libraries(${CMAKE_PROJECT_NAME}
     # List libraries link to the target library
     android

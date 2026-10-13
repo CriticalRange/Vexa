@@ -18,7 +18,7 @@ namespace FEX::HLE {
 namespace Vexa::Runtime::Init {
     Vexa::Common::Result SetupAllocator(JNIEnv *env);
 
-    // Hands the 32-bit passthrough allocator to the x32 syscall handler.
+    // Transfers the low-address allocator to the x32 syscall handler.
     // Returns nullptr when the runtime is in 64-bit mode.
     fextl::unique_ptr<FEX::HLE::MemAllocator> TakeGuestAllocator();
 

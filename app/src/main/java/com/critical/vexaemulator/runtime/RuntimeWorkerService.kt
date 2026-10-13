@@ -2,7 +2,6 @@ package com.critical.vexaemulator.runtime
 
 import android.app.Service
 import android.content.Intent
-import android.graphics.SurfaceTexture
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -22,7 +21,6 @@ class RuntimeWorkerService : Service() {
     private val mainHandler = Handler(Looper.getMainLooper())
     private var supervisorMessenger: Messenger? = null
     private var currentSurface: Surface? = null
-    private var headlessTexture: SurfaceTexture? = null
     private var pendingStartRequest: LaunchRequest? = null
     private var rootSession: RootLogCollector.Session? = null
 
@@ -228,27 +226,14 @@ class RuntimeWorkerService : Service() {
         if (currentSurface?.isValid == true) return true
         if (!isTruthy(envValue(request.launchEnv, "VEXA_HEADLESS"))) return false
 
-        val width = envValue(request.launchEnv, "VEXA_HEADLESS_W")?.toIntOrNull() ?: 1280
-        val height = envValue(request.launchEnv, "VEXA_HEADLESS_H")?.toIntOrNull() ?: 720
-        val tex = SurfaceTexture(0).apply {
-            detachFromGLContext()
-            setDefaultBufferSize(width, height)
-            // Nobody displays these frames; release each buffer as it arrives
-            // so eglSwapBuffers never stalls on a full BufferQueue.
-            setOnFrameAvailableListener({ st -> st.releaseTexImage() }, mainHandler)
-        }
-        val surface = Surface(tex)
-        headlessTexture?.release()
-        headlessTexture = tex
+        // Headless runs render into an EGL pbuffer inside the GL thunk
+        // (VEXA_HEADLESS_* env), so no SurfaceTexture is needed at all. Skipping
+        // it also removes the BufferQueue frame listener — the native→Java
+        // callback that used to crash when it fired on a FEX thread.
         currentSurface?.release()
-        currentSurface = surface
-        RuntimeBridge.setRuntimeSurface(surface)
-        sendWorkerLog(
-            "INFO",
-            "SURFACE",
-            "Headless offscreen surface created",
-            """{"width":$width,"height":$height}"""
-        )
+        currentSurface = null
+        RuntimeBridge.setRuntimeSurface(null)
+        sendWorkerLog("INFO", "SURFACE", "Headless launch, no surface needed")
         return true
     }
 
@@ -340,8 +325,6 @@ class RuntimeWorkerService : Service() {
         RuntimeBridge.setRuntimeSurface(null)
         currentSurface?.release()
         currentSurface = null
-        headlessTexture?.release()
-        headlessTexture = null
         workerExecutor.shutdownNow()
         super.onDestroy()
         android.os.Process.killProcess(android.os.Process.myPid())

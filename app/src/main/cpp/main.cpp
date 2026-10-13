@@ -230,9 +230,6 @@ Java_com_critical_vexaemulator_RuntimeBridge_nativeStartRuntime(JNIEnv *env, job
     const jint result = payload->result;
     payload.reset();
     return result;
-
-    VEXA_LOGI(env, "BOOT", "Runtime started", "{}");
-    return 0;
 }
 
 extern "C"

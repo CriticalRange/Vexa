@@ -189,19 +189,24 @@ class GuestPadState {
         when (event.keyCode) {
             KeyEvent.KEYCODE_BUTTON_A -> {
                 sink.pad(PadCtl.A, padDown)
+                sink.key(down, XKeys.Z)
+                sink.key(down, XKeys.RETURN)
                 physLeftClick = down
             }
             KeyEvent.KEYCODE_BUTTON_B, KeyEvent.KEYCODE_BACK -> {
                 sink.pad(PadCtl.B, padDown)
-                sink.key(down, XKeys.ESCAPE)
+                sink.key(down, XKeys.X)
+                sink.key(down, XKeys.SHIFT_L)
             }
             KeyEvent.KEYCODE_BUTTON_X -> {
                 sink.pad(PadCtl.X, padDown)
                 sink.key(down, XKeys.SPACE)
+                sink.key(down, XKeys.C)
             }
             KeyEvent.KEYCODE_BUTTON_Y -> {
                 sink.pad(PadCtl.Y, padDown)
                 sink.key(down, XKeys.E)
+                sink.key(down, XKeys.C)
             }
             KeyEvent.KEYCODE_BUTTON_L1 -> {
                 sink.pad(PadCtl.LB, padDown)
@@ -220,6 +225,7 @@ class GuestPadState {
             KeyEvent.KEYCODE_BUTTON_SELECT -> {
                 sink.pad(PadCtl.BACK, padDown)
                 sink.key(down, XKeys.TAB)
+                sink.key(down, XKeys.ESCAPE)
             }
             KeyEvent.KEYCODE_BUTTON_THUMBL -> {
                 sink.pad(PadCtl.LSTICK, padDown)
@@ -243,19 +249,27 @@ class GuestPadState {
         val ly = pick(virtLeftY, physLeftY)
         emitPadAxis(0, (lx * 32767f).roundToInt(), sink)
         emitPadAxis(1, (ly * 32767f).roundToInt(), sink)
-        hold(XKeys.W, ly < -MOVE_DEADZONE, sink)
-        hold(XKeys.S, ly > MOVE_DEADZONE, sink)
-        hold(XKeys.A, lx < -MOVE_DEADZONE, sink)
-        hold(XKeys.D, lx > MOVE_DEADZONE, sink)
+        val stickUp = ly < -MOVE_DEADZONE
+        val stickDown = ly > MOVE_DEADZONE
+        val stickLeft = lx < -MOVE_DEADZONE
+        val stickRight = lx > MOVE_DEADZONE
+        hold(XKeys.W, stickUp, sink)
+        hold(XKeys.S, stickDown, sink)
+        hold(XKeys.A, stickLeft, sink)
+        hold(XKeys.D, stickRight, sink)
 
-        val up = dpadKey[0] || dpadVirt[0] || hatY < -0.5f
-        val down = dpadKey[1] || dpadVirt[1] || hatY > 0.5f
-        val left = dpadKey[2] || dpadVirt[2] || hatX < -0.5f
-        val right = dpadKey[3] || dpadVirt[3] || hatX > 0.5f
-        emitPadButton(PadCtl.DPAD_UP, up, sink)
-        emitPadButton(PadCtl.DPAD_DOWN, down, sink)
-        emitPadButton(PadCtl.DPAD_LEFT, left, sink)
-        emitPadButton(PadCtl.DPAD_RIGHT, right, sink)
+        val dpadUp = dpadKey[0] || dpadVirt[0] || hatY < -0.5f
+        val dpadDown = dpadKey[1] || dpadVirt[1] || hatY > 0.5f
+        val dpadLeft = dpadKey[2] || dpadVirt[2] || hatX < -0.5f
+        val dpadRight = dpadKey[3] || dpadVirt[3] || hatX > 0.5f
+        emitPadButton(PadCtl.DPAD_UP, dpadUp, sink)
+        emitPadButton(PadCtl.DPAD_DOWN, dpadDown, sink)
+        emitPadButton(PadCtl.DPAD_LEFT, dpadLeft, sink)
+        emitPadButton(PadCtl.DPAD_RIGHT, dpadRight, sink)
+        val up = dpadUp || stickUp
+        val down = dpadDown || stickDown
+        val left = dpadLeft || stickLeft
+        val right = dpadRight || stickRight
         hold(XKeys.UP, up && !down, sink)
         hold(XKeys.DOWN, down && !up, sink)
         hold(XKeys.LEFT, left && !right, sink)
@@ -414,7 +428,13 @@ fun GuestPadOverlay(pad: GuestPadState) {
             Modifier.align(Alignment.TopCenter).padding(top = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            HoldButton("BK", { pad.face(it, PadCtl.BACK, XKeys.TAB) })
+            HoldButton(
+                "BK",
+                {
+                    pad.face(it, PadCtl.BACK, XKeys.TAB)
+                    pad.onFaceKey(it, XKeys.ESCAPE)
+                },
+            )
             HoldButton("ST", { pad.face(it, PadCtl.START, XKeys.RETURN) })
         }
         Row(
@@ -483,14 +503,36 @@ private fun Dpad(pad: GuestPadState, modifier: Modifier) {
 @Composable
 private fun Diamond(pad: GuestPadState, modifier: Modifier) {
     Box(modifier.size(164.dp)) {
-        HoldButton("Y", { pad.face(it, PadCtl.Y, XKeys.E) }, modifier = Modifier.align(Alignment.TopCenter))
-        HoldButton("X", { pad.face(it, PadCtl.X, XKeys.SPACE) }, modifier = Modifier.align(Alignment.CenterStart))
-        HoldButton("B", { pad.face(it, PadCtl.B, XKeys.ESCAPE) }, modifier = Modifier.align(Alignment.CenterEnd))
+        HoldButton(
+            "Y",
+            {
+                pad.face(it, PadCtl.Y, XKeys.E)
+                pad.onFaceKey(it, XKeys.C)
+            },
+            modifier = Modifier.align(Alignment.TopCenter),
+        )
+        HoldButton(
+            "X",
+            {
+                pad.face(it, PadCtl.X, XKeys.SPACE)
+                pad.onFaceKey(it, XKeys.C)
+            },
+            modifier = Modifier.align(Alignment.CenterStart),
+        )
+        HoldButton(
+            "B",
+            {
+                pad.face(it, PadCtl.B, XKeys.X)
+                pad.onFaceKey(it, XKeys.SHIFT_L)
+            },
+            modifier = Modifier.align(Alignment.CenterEnd),
+        )
         HoldButton(
             "A",
             {
                 pad.virtLeftClick = it
-                pad.onPadButton(it, PadCtl.A)
+                pad.face(it, PadCtl.A, XKeys.Z)
+                pad.onFaceKey(it, XKeys.RETURN)
             },
             emphasized = pad.virtLeftClick,
             modifier = Modifier.align(Alignment.BottomCenter),

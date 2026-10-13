@@ -122,6 +122,8 @@ namespace Vexa::Runtime::Init {
             std::vector<std::string> openalOverlays = {
                     "@PREFIX_LIB@/libopenal.so",
                     "@PREFIX_LIB@/libopenal.so.1",
+                    "/usr/lib/i386-linux-gnu/libopenal.so",
+                    "/usr/lib/i386-linux-gnu/libopenal.so.1",
                     "/proc/openal.so",
                     "/proc/libopenal.so",
                     "/proc/libopenal.so.1",
@@ -134,6 +136,10 @@ namespace Vexa::Runtime::Init {
                     "@PREFIX_LIB@/libGL.so.1",
                     "@PREFIX_LIB@/libGL.so.1.2.0",
                     "@PREFIX_LIB@/libGL.so.1.7.0",
+                    "/usr/lib/i386-linux-gnu/libGL.so",
+                    "/usr/lib/i386-linux-gnu/libGL.so.1",
+                    "/usr/lib/i386-linux-gnu/libGL.so.1.2.0",
+                    "/usr/lib/i386-linux-gnu/libGL.so.1.7.0",
                     "/proc/libGL.so",
                     "/proc/libGL.so.1",
             };
@@ -143,6 +149,8 @@ namespace Vexa::Runtime::Init {
             std::vector<std::string> eglOverlays = {
                     "@PREFIX_LIB@/libEGL.so",
                     "@PREFIX_LIB@/libEGL.so.1",
+                    "/usr/lib/i386-linux-gnu/libEGL.so",
+                    "/usr/lib/i386-linux-gnu/libEGL.so.1",
                     "/proc/libEGL.so",
                     "/proc/libEGL.so.1",
             };
@@ -152,6 +160,8 @@ namespace Vexa::Runtime::Init {
             std::vector<std::string> glesOverlays = {
                     "@PREFIX_LIB@/libGLESv2.so",
                     "@PREFIX_LIB@/libGLESv2.so.2",
+                    "/usr/lib/i386-linux-gnu/libGLESv2.so",
+                    "/usr/lib/i386-linux-gnu/libGLESv2.so.2",
                     "/proc/libGLESv2.so",
                     "/proc/libGLESv2.so.2",
             };
@@ -161,6 +171,8 @@ namespace Vexa::Runtime::Init {
             std::vector<std::string> vulkanOverlays = {
                     "@PREFIX_LIB@/libvulkan.so",
                     "@PREFIX_LIB@/libvulkan.so.1",
+                    "/usr/lib/i386-linux-gnu/libvulkan.so",
+                    "/usr/lib/i386-linux-gnu/libvulkan.so.1",
                     "/proc/libvulkan.so",
                     "/proc/libvulkan.so.1",
             };
@@ -207,24 +219,33 @@ namespace Vexa::Runtime::Init {
             return json.str();
         }
 
-        int ThunkGuestPresent(const Vexa::Common::Paths &paths, const char *fileName) {
+        int ThunkGuestPresent(const Vexa::Common::Paths &paths, const char *fileName, bool is64) {
             std::error_code ec;
-            const auto full = std::filesystem::path(paths.thunkGuest) / fileName;
-            return std::filesystem::is_regular_file(full, ec) ? 1 : 0;
+            const auto directory = paths.thunkGuest + (is64 ? "" : "_32");
+            const auto full = std::filesystem::path(directory) / fileName;
+            const auto expected = is64 ? ELFLoader::ELFContainer::TYPE_X86_64
+                                       : ELFLoader::ELFContainer::TYPE_X86_32;
+            if (ELFLoader::ELFContainer::GetELFType(full.string().c_str()) != expected) return 0;
+            std::string hostName = fileName;
+            const auto pos = hostName.find("-guest.so");
+            if (pos == std::string::npos) return 0;
+            hostName.replace(pos, 9, "-host.so");
+            const auto host = std::filesystem::path(paths.thunkHost + (is64 ? "" : "_32")) / hostName;
+            return std::filesystem::is_regular_file(host, ec) ? 1 : 0;
         }
 
-        std::string BuildAppTHunkConfigJson(const Vexa::Common::Paths &paths) {
+        std::string BuildAppTHunkConfigJson(const Vexa::Common::Paths &paths, bool is64) {
             std::ostringstream json;
             json << "{\n"
                  << "  \"ThunksDB\": {\n"
-                 << "    \"SDL3\": " << ThunkGuestPresent(paths, "libSDL3-guest.so") << ",\n"
-                 << "    \"SDL3_image\": " << ThunkGuestPresent(paths, "libSDL3_image-guest.so") << ",\n"
-                 << "    \"SDL2\": " << ThunkGuestPresent(paths, "libSDL2-guest.so") << ",\n"
-                 << "    \"openal\": " << ThunkGuestPresent(paths, "libopenal-guest.so") << ",\n"
-                 << "    \"GL\": " << ThunkGuestPresent(paths, "libGL-guest.so") << ",\n"
-                 << "    \"EGL\": " << ThunkGuestPresent(paths, "libEGL-guest.so") << ",\n"
-                 << "    \"GLESv2\": " << ThunkGuestPresent(paths, "libGLESv2-guest.so") << ",\n"
-                 << "    \"Vulkan\": " << ThunkGuestPresent(paths, "libvulkan-guest.so") << "\n"
+                 << "    \"SDL3\": " << ThunkGuestPresent(paths, "libSDL3-guest.so", is64) << ",\n"
+                 << "    \"SDL3_image\": " << ThunkGuestPresent(paths, "libSDL3_image-guest.so", is64) << ",\n"
+                 << "    \"SDL2\": " << ThunkGuestPresent(paths, "libSDL2-guest.so", is64) << ",\n"
+                 << "    \"openal\": " << ThunkGuestPresent(paths, "libopenal-guest.so", is64) << ",\n"
+                 << "    \"GL\": " << ThunkGuestPresent(paths, "libGL-guest.so", is64) << ",\n"
+                 << "    \"EGL\": " << ThunkGuestPresent(paths, "libEGL-guest.so", is64) << ",\n"
+                 << "    \"GLESv2\": " << ThunkGuestPresent(paths, "libGLESv2-guest.so", is64) << ",\n"
+                 << "    \"Vulkan\": " << ThunkGuestPresent(paths, "libvulkan-guest.so", is64) << "\n"
                  << "  }\n"
                  << "}\n";
             return json.str();
@@ -255,6 +276,24 @@ namespace Vexa::Runtime::Init {
         const auto portableInfo = FEX::ReadPortabilityInformation();
 
         const bool fdBacked = paths.execFd != -1;
+
+        const auto elfType = fdBacked ? ELFLoader::ELFContainer::GetELFType(paths.execFd)
+                                      : ELFLoader::ELFContainer::GetELFType(paths.executable.c_str());
+        if (elfType == ELFLoader::ELFContainer::TYPE_NONE) {
+            return {
+                    Vexa::Common::Code::ElfLoaderFailed,
+                    Vexa::Common::Phase::Init,
+                    "Executable missing, unreadable, or not an ELF"
+            };
+        } else if (elfType == ELFLoader::ELFContainer::TYPE_OTHER_ELF) {
+            return {
+                    Vexa::Common::Code::ElfLoaderFailed,
+                    Vexa::Common::Phase::Init,
+                    "Unsupported ELF architecture for executable"
+            };
+        }
+        const bool is64 = elfType == ELFLoader::ELFContainer::TYPE_X86_64;
+        state.is64BitMode = is64;
 
         const std::string appConfigName = fdBacked
                                           ? "<Anonymous>"
@@ -289,7 +328,7 @@ namespace Vexa::Runtime::Init {
                                          }).c_str()
             );
         }
-        if (!WriteTextFile(appCfgPath, BuildAppTHunkConfigJson(paths))) {
+        if (!WriteTextFile(appCfgPath, BuildAppTHunkConfigJson(paths, is64))) {
             VEXA_LOGW(
                     env,
                     "FEX",
@@ -300,22 +339,7 @@ namespace Vexa::Runtime::Init {
             );
         }
 
-        const auto elfType = ELFLoader::ELFContainer::GetELFType(paths.executable.c_str());
-        if (elfType == ELFLoader::ELFContainer::TYPE_NONE) {
-            return {
-                    Vexa::Common::Code::ElfLoaderFailed,
-                    Vexa::Common::Phase::Init,
-                    "Unsupported ELF type for executable"
-            };
-        } else if (elfType == ELFLoader::ELFContainer::TYPE_OTHER_ELF) {
-            return {
-                    Vexa::Common::Code::ElfLoaderFailed,
-                    Vexa::Common::Phase::Init,
-                    "Executable missing, unreadable, or not an ELF"
-            };
-        }
-        const bool is64 = elfType == ELFLoader::ELFContainer::TYPE_X86_64;
-        state.is64BitMode = is64;
+
 
 
         int fd = ::open(stderrPath.c_str(), O_CREAT | O_WRONLY | O_TRUNC, 0644);

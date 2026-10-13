@@ -62,37 +62,14 @@ namespace Vexa::Log {
             return;
         }
         if (!env) return;
-        if (env->ExceptionCheck()) {
-            env->ExceptionClear();
-            return;
-        }
-        if (!env) return;
-
+        if (env->ExceptionCheck()) return;
 
         jstring jLevel = env->NewStringUTF(level ? level : "INFO");
-        if (env->ExceptionCheck() || !jLevel) {
+        jstring jCategory = jLevel ? env->NewStringUTF(category ? category : "RUNTIME") : nullptr;
+        jstring jMsg = jCategory ? env->NewStringUTF(msg ? msg : "") : nullptr;
+        jstring jFields = jMsg ? env->NewStringUTF(fieldsJson ? fieldsJson : "{}") : nullptr;
+        if (env->ExceptionCheck() || !jLevel || !jCategory || !jMsg || !jFields) {
             env->ExceptionClear();
-            return;
-        }
-        jstring jCategory = env->NewStringUTF(category ? category : "RUNTIME");
-        if (env->ExceptionCheck() || !jCategory) {
-            env->ExceptionClear();
-            return;
-        }
-        jstring jMsg = env->NewStringUTF(msg ? msg : "");
-        if (env->ExceptionCheck() || !jMsg) {
-            env->ExceptionClear();
-            return;
-        }
-        jstring jFields = env->NewStringUTF(fieldsJson ? fieldsJson : "{}");
-        if (env->ExceptionCheck() || !jFields) {
-            env->ExceptionClear();
-            return;
-        }
-
-        if (!jLevel || !jCategory || !jMsg || !jFields) {
-            __android_log_print(ANDROID_LOG_ERROR, VEXA_TAG,
-                                "NewStringUTF failed (OOM or invalid input)");
             if (jLevel) env->DeleteLocalRef(jLevel);
             if (jCategory) env->DeleteLocalRef(jCategory);
             if (jMsg) env->DeleteLocalRef(jMsg);
@@ -102,25 +79,29 @@ namespace Vexa::Log {
 
         jobject sink = nullptr;
         jmethodID methodId = nullptr;
-        std::lock_guard<std::mutex> lock(g_log_sink_mutex);
-        if (g_log_sink && g_on_native_log) {
-            sink = g_log_sink;
+        {
+            std::lock_guard<std::mutex> lock(g_log_sink_mutex);
+            sink = g_log_sink ? env->NewLocalRef(g_log_sink) : nullptr;
             methodId = g_on_native_log;
-            if (jLevel && jCategory && jMsg && jFields) {
-                env->CallVoidMethod(
-                        sink,
-                        methodId,
-                        jLevel,
-                        jCategory,
-                        jMsg,
-                        jFields);
-                if (env->ExceptionCheck()) {
-                    env->ExceptionDescribe();
-                    env->ExceptionClear();
-                }
+        }
+        // Pin the object while locked: replacing the sink deletes its global
+        // reference. Call Java unlocked so reentrant logging cannot deadlock.
+        if (sink && methodId) {
+            env->CallVoidMethod(
+                    sink,
+                    methodId,
+                    jLevel,
+                    jCategory,
+                    jMsg,
+                    jFields);
+            if (env->ExceptionCheck()) {
+                env->ExceptionDescribe();
+                env->ExceptionClear();
             }
         }
 
+        if (env->ExceptionCheck()) env->ExceptionClear();
+        if (sink) env->DeleteLocalRef(sink);
         env->DeleteLocalRef(jLevel);
         env->DeleteLocalRef(jCategory);
         env->DeleteLocalRef(jMsg);
