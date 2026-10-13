@@ -142,8 +142,8 @@ object GuestCatalog {
             summary = "Unity game. Native Linux build. The Linux files are already in the app files directory.",
             assetPath = "",
             fileName = "Megabonk.x86_64",
-            // Unity queries the native desktop size before SDL video is up and gets 0x0;
-            // FullScreenWindow then renders nothing. Force an explicit windowed size.
+            // Preserve the tested windowed launch preset. Display initialization
+            // is handled by the X11/RandR and empty libudev backends.
             args = listOf(
                 "-screen-fullscreen", "0",
                 "-screen-width", "2712",
@@ -162,8 +162,7 @@ object GuestCatalog {
             summary = "Unity game. Native Linux build (Mono runtime). The Linux depot files are already in the app files directory.",
             assetPath = "",
             fileName = "VampireSurvivors.exe",
-            // Same Unity workarounds as Megabonk: native desktop size queries return 0x0,
-            // and the gfx job worker never produces output on this host.
+            // Preserve the tested windowed launch preset, as for Megabonk.
             args = listOf(
                 "-screen-fullscreen", "0",
                 "-screen-width", "2712",

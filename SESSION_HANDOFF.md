@@ -1,5 +1,8 @@
 # VEXA + Unity Linux Player — Session Handoff
 
+> Historical investigation, superseded by [the version-independent display fix](docs/unity-display.md).
+> The private Unity offsets and display-refresh hooks below are no longer shipped.
+
 **Date:** 2026-10-12
 **Target:** make Unity games (Megabonk, Vampire Survivors) render on the VEXA Android/Linux runner
 **Current symptom:** game boots, Unity creates a real GL 4.3 device, runs game C#, but the

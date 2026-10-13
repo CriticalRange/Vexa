@@ -1,0 +1,39 @@
+name: Unity display compatibility
+on:
+  push:
+    paths:
+      - 'guest-tests/x11-fake/**'
+      - 'guest-tests/unity-display/**'
+      - '.github/workflows/unity-display.yml'
+  pull_request:
+    paths:
+      - 'guest-tests/x11-fake/**'
+      - 'guest-tests/unity-display/**'
+      - '.github/workflows/unity-display.yml'
+  workflow_dispatch:
+jobs:
+  sdl-startup:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        sdl: ['2.0.22', '2.28.5', '2.30.12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: libsdl-org/SDL
+          ref: release-${{ matrix.sdl }}
+          path: .test-sdl
+      - run: sudo apt-get update && sudo apt-get install -y libudev-dev
+      - name: Build SDL with Linux haptic and UDEV
+        run: |
+          cmake -S .test-sdl -B .test-sdl/build -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/sdl" -DSDL_SHARED=ON -DSDL_STATIC=OFF \
+            -DSDL_TEST=OFF -DSDL_TESTS=OFF -DSDL_UDEV=ON -DSDL_HAPTIC=ON \
+            -DSDL_X11=OFF -DSDL_WAYLAND=OFF -DSDL_KMSDRM=OFF -DSDL_OPENGL=OFF \
+            -DSDL_OPENGLES=OFF -DSDL_VULKAN=OFF -DSDL_ALSA=OFF -DSDL_PULSEAUDIO=OFF
+          cmake --build .test-sdl/build -j2
+          cmake --install .test-sdl/build
+      - name: Test empty backend and SDL initialization rollback
+        run: bash guest-tests/unity-display/run.sh "$RUNNER_TEMP/sdl"

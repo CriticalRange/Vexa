@@ -558,29 +558,15 @@ Not ruled out yet, and the next thing to check:
 
 ## Unity / IL2CPP Linux player
 
-- [x] Make Unity build its display list. Unity asks for displays before SDL
-  video is up, caches the empty answer and never asks again. Two failures
-  follow: `Screen.resolutions` comes back empty (games that restore a saved
-  resolution index die with `IndexOutOfRangeException` before loading a
-  scene) and with no display there is no camera, so the scene never
-  renders. `vexa_unity_fixup()` in `libX11_fake.c` calls the refresh at
-  `UnityPlayer.so+0x15ea030` and the enumeration at `+0xde04c0` again once
-  the window exists. Both are guarded by an instruction-byte signature, so
-  a different Unity build skips them instead of jumping into the wrong
-  function.
-- [x] Drop the launcher shim. `-force-gfx-direct` and `-force-glcore` are
-  passed as ordinary arguments from `GuestProgram.kt`; the real
-  `Megabonk.x86_64` stub stays in place. `boot.config` asks for
-  `gfx-enable-gfx-jobs=1` / `gfx-threading-mode=4`, which selects
-  `kGfxThreadingModeClientWorkerJobs`; the job worker produces no output
-  here and the scene comes out empty. Direct mode works.
-- [x] Put the desktop mode first in `Screen.resolutions`. Unity finds real
-  display modes through SDL's video backend, and SDL reports none, so the
-  engine falls back to its hardcoded table of safe resolutions - 35
-  entries starting at 640x480. Megabonk stores index 0, so it asked for
-  640x480 and drew a 4:3 image into a 16:9 window. Entry 0 is overwritten
-  in place; layout is stride 16 of `{int width, int height, int refresh,
-  int display}`.
+- [x] Replace the build-specific display refresh with a working empty libudev
+  backend. NULL monitor construction caused SDL haptic init to fail and roll back
+  video. X11 and GL no longer read or call Unity private addresses.
+- [x] Retire the private resolution-array mutation. Keep the existing windowed
+  launch presets and ordinary `-force-glcore`; gfx jobs remain enabled.
+- [ ] Validate the replacement on Android with Megabonk, Vampire Survivors,
+  surface recreation and another Unity generation. See [details and Linux
+  regression tests](docs/unity-display.md). Historical investigation above is
+  not evidence of universal Unity compatibility.
 
 ### Thunks: host and guest must be rebuilt together
 

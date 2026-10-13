@@ -15,7 +15,7 @@ CLANG="$NDK/toolchains/llvm/prebuilt/windows-x86_64/bin/x86_64-linux-android24-c
 TARGETS=(
   "libX11_fake.c libX11_sdl_stubs.c:libX11.so.6"
   "libxcb_fake.c:libxcb.so.1"
-  "libXrandr_fake.c:libXrandr_sdl_stubs.c:libXrandr.so.2"
+  "libXrandr_fake.c libXrandr_sdl_stubs.c:libXrandr.so.2"
   "libXinerama_fake.c:libXinerama.so.1"
   "libXcursor_fake.c:libXcursor.so.1"
   "libXfixes_stub.c libXext_sdl_stubs.c:libXfixes.so.3"

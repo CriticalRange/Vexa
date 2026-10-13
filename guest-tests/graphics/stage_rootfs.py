@@ -50,6 +50,7 @@ TAR = r"C:\Windows\System32\tar.exe" if os.name == "nt" else "tar"
 FAKE_X11 = os.path.normpath(os.path.join(ROOT, "..", "x11-fake", "libX11_fake.c"))
 FAKE_X11_DIR = os.path.normpath(os.path.join(ROOT, "..", "x11-fake"))
 X11_EXTRAS = (
+    ("libudev_stub.c", "libudev.so.1"),
     ("libXcursor_fake.c", "libXcursor.so.1"),
     ("libXinerama_fake.c", "libXinerama.so.1"),
     ("libXext_fake.c", "libXext.so.6"),
