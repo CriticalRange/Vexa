@@ -27,6 +27,12 @@ jint JNI_OnLoad(JavaVM *vm, void *) {
 
 namespace Vexa::Log {
 
+    static thread_local bool t_fex_thread = false;
+
+    void MarkFexManagedThread() {
+        t_fex_thread = true;
+    }
+
     std::string AddFields(
             std::initializer_list<std::pair<std::string, std::string>> fields
     ) {
@@ -51,6 +57,10 @@ namespace Vexa::Log {
 
     void VexaNativeLog(JNIEnv *env, const char *level, const char *category, const char *msg,
                        const char *fieldsJson) {
+        if (t_fex_thread) {
+            VexaNativeLogRaw(level, category, msg, fieldsJson);
+            return;
+        }
         if (!env) return;
         if (env->ExceptionCheck()) {
             env->ExceptionClear();
