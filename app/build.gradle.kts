@@ -93,6 +93,8 @@ val pythonExe: String =
         ?: if (isWindowsHost) "python" else "python3"
 val buildThunks =
     providers.environmentVariable("BUILD_THUNKS").orElse("ON")
+val build32BitThunks =
+    providers.environmentVariable("VEXA_BUILD_32BIT_THUNKS").orElse("ON")
 val enableRuntimeShaderTranslator =
     providers.environmentVariable("VEXA_ENABLE_RUNTIME_SHADER_TRANSLATOR").orElse("OFF")
 
@@ -285,11 +287,34 @@ val buildAndroidSDL3Image by tasks.registering(org.gradle.api.tasks.Exec::class)
     )
 }
 
+val prepareI386Sysroot by tasks.registering(Exec::class) {
+    group = "build setup"
+    onlyIf { buildThunks.get() == "ON" && build32BitThunks.get() == "ON" }
+    inputs.file(rootProject.file("guest-tests/graphics/stage_i386_sysroot.py"))
+    outputs.file(rootProject.file("guest-tests/graphics/rootfs/lib/ld-linux.so.2"))
+    outputs.dir(rootProject.file("guest-tests/graphics/rootfs/usr/lib/i386-linux-gnu"))
+    commandLine(pythonExe, rootProject.file("guest-tests/graphics/stage_i386_sysroot.py").absolutePath)
+}
+
+val buildI386X11Shims by tasks.registering(Exec::class) {
+    group = "build setup"
+    dependsOn(prepareI386Sysroot)
+    onlyIf { buildThunks.get() == "ON" && build32BitThunks.get() == "ON" }
+    inputs.files(rootProject.fileTree("guest-tests/x11-fake") { include("*.c", "*.h") })
+    inputs.file(rootProject.file("scripts/build_x11_fakes.sh"))
+    outputs.dir(rootProject.file("guest-tests/x11-fake/i386"))
+    environment("GUEST_ARCH", "i686")
+    environment("NDK", cmakePath(File(sdkDirPath, "ndk/29.0.14206865").absolutePath))
+    commandLine(if (isWindowsHost) "C:/Program Files/Git/bin/bash.exe" else "bash",
+        rootProject.file("scripts/build_x11_fakes.sh").absolutePath)
+}
+
 val configureFexAndroid by
 tasks.registering(org.gradle.api.tasks.Exec::class) {
     group = "build setup"
     description = "Configures FEX Android build."
     dependsOn(buildAndroidSDL3Image)
+    dependsOn(prepareI386Sysroot)
     workingDir = rootProject.rootDir
     val pkgConfig = File(fexRoot.get(), ".hosttools/pkg-config.cmd")
     val hostPath = hostToolPath()
@@ -315,6 +340,7 @@ tasks.registering(org.gradle.api.tasks.Exec::class) {
         "-DBUILD_TESTING=OFF",
         "-DBUILD_STEAM_SUPPORT=OFF",
         "-DBUILD_THUNKS=${buildThunks.get()}",
+        "-DVEXA_BUILD_32BIT_THUNKS=${build32BitThunks.get()}",
         "-DENABLE_GDB_SYMBOLS=OFF",
         "-DENABLE_LTO=OFF",
         "-DENABLE_CCACHE=OFF",
@@ -384,6 +410,9 @@ val buildFEXCore = tasks.register<org.gradle.api.tasks.Exec>("buildFEXCore") {
             "--target", "SDL2-host-64",
             "--target", "guest-libs"
         )
+        if (build32BitThunks.get() == "ON") {
+            buildArgs += listOf("--target", "GL-host-32", "--target", "guest-libs-32")
+        }
     }
     buildArgs += "-j"
     commandLine(buildArgs)
@@ -486,6 +515,9 @@ val stageGuestRuntime by tasks.registering(Exec::class) {
     group = "build setup"
     description = "Re-stages the full guest rootfs, graphics programs, and thunk libraries."
     dependsOn(buildFEXCore)
+    dependsOn(buildI386X11Shims)
+    environment("VEXA_BUILD_32BIT_THUNKS", if (buildThunks.get() == "ON") build32BitThunks.get() else "OFF")
+    environment("FEX_BUILD_DIR", fexBuildDir.get())
     environment("REQUIRE_THUNKS", if (buildThunks.get() == "ON") "1" else "0")
     commandLine(
         pythonExe,
@@ -497,6 +529,9 @@ val stageSDL3Thunks by tasks.registering(Exec::class) {
     group = "build setup"
     description = "Stages paired GL/SDL thunk payloads without replacing guest rootfs assets."
     dependsOn(buildFEXCore)
+    dependsOn(buildI386X11Shims)
+    environment("VEXA_BUILD_32BIT_THUNKS", build32BitThunks.get())
+    environment("FEX_BUILD_DIR", fexBuildDir.get())
     onlyIf { buildThunks.get() == "ON" }
     commandLine(
         pythonExe,

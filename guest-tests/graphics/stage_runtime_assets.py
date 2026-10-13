@@ -15,7 +15,7 @@ ROOTFS = os.path.join(ROOT, "tree")
 SYSROOT = os.path.join(ROOT, "rootfs")
 VEXA = os.path.normpath(os.path.join(ROOT, "..", ".."))
 ASSETS = os.path.join(VEXA, "app", "src", "main", "assets")
-FEX_BUILD = os.path.normpath(os.path.join(VEXA, "..", "FEX", "build-android-arm64-ninja"))
+FEX_BUILD = os.environ.get("FEX_BUILD_DIR", os.path.normpath(os.path.join(VEXA, "..", "FEX", "build-android-arm64-ninja")))
 
 SONAMES = (
     "ld-linux-x86-64.so.2",
@@ -165,6 +165,10 @@ def copy_file(src, dest):
 
 
 def main():
+    i386 = None
+    if os.environ.get('VEXA_BUILD_32BIT_THUNKS', 'ON') == 'ON':
+        import stage_i386_runtime as i386
+        i386.payloads()
     runtime = os.path.join(ASSETS, "runtime")
     if os.environ.get("RESET_RUNTIME_ASSETS") == "1" and os.path.isdir(runtime):
         shutil.rmtree(runtime)
@@ -264,6 +268,8 @@ def main():
         else:
             print(f"skip host {name}", flush=True)
 
+    if i386:
+        i386.stage()
     # The installer re-copies the runtime whenever this content hash changes.
     digest = hashlib.sha256()
     for dirpath, dirs, files in os.walk(runtime):
