@@ -8,7 +8,7 @@ import struct
 ROOT = os.path.dirname(os.path.abspath(__file__))
 VEXA = os.path.normpath(os.path.join(ROOT, "..", ".."))
 RUNTIME = os.path.join(VEXA, "app", "src", "main", "assets", "runtime")
-FEX_BUILD = os.path.normpath(os.path.join(VEXA, "..", "FEX", "build-android-arm64-ninja"))
+FEX_BUILD = os.environ.get("FEX_BUILD_DIR", os.path.normpath(os.path.join(VEXA, "..", "FEX", "build-android-arm64-ninja")))
 THIRD_PARTY = os.path.join(VEXA, "third_party", "install-android-arm64")
 
 PAYLOADS = (
@@ -52,7 +52,7 @@ PAYLOADS = (
     ),
 )
 
-ELF_MACHINES = {"x86_64": 62, "aarch64": 183}
+ELF_MACHINES = {"x86_64": (2, 62), "aarch64": (2, 183)}
 
 
 def machine(path):
@@ -60,7 +60,7 @@ def machine(path):
         header = source.read(20)
     if len(header) != 20 or header[:4] != b"\x7fELF" or header[5] != 1:
         return None
-    return struct.unpack_from("<H", header, 18)[0]
+    return header[4], struct.unpack_from("<H", header, 18)[0]
 
 
 def update_stamp():
@@ -82,6 +82,10 @@ def update_stamp():
 
 
 def main():
+    i386 = None
+    if os.environ.get('VEXA_BUILD_32BIT_THUNKS', 'ON') == 'ON':
+        import stage_i386_runtime as i386
+        i386.payloads()  # Validate before modifying either architecture.
     # Validate every source before modifying assets, including both GL sides.
     for expected_arch, source, relative in PAYLOADS:
         if not os.path.isfile(source):
@@ -95,6 +99,8 @@ def main():
         shutil.copy2(source, destination)
         print(f"staged {relative}", flush=True)
 
+    if i386:
+        i386.stage()
     update_stamp()
     print("SDL3_THUNKS_READY", flush=True)
 
