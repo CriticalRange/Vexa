@@ -40,6 +40,14 @@
             android:name=".runtime.RuntimeWorkerService"
             android:exported="false"
             android:process=":runtime_worker" />
+
+        <!-- NoDisplay trampoline for `am start`-driven headless runs. Creates
+             no window, so nothing reaches the screen. -->
+        <activity
+            android:name=".runtime.HeadlessLaunchActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:theme="@android:style/Theme.NoDisplay" />
     </application>
 
 </manifest>
