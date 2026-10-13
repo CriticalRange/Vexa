@@ -19,22 +19,39 @@
 /* XF86VidModeModeInfo, verbatim from <X11/extensions/xf86vmode.h>. Kept locally
    because the sysroot we build against does not ship the header. */
 typedef struct {
-  int dotClock;
-  short hDisplay;
-  short vDisplay;
-  short hSyncStart;
-  short hSyncEnd;
-  short hTotal;
-  short hSkew;
-  short vSyncStart;
-  short vSyncEnd;
-  short vTotal;
-  unsigned char hSyncPolarity;
-  unsigned char vSyncPolarity;
-  unsigned char flags;
-  unsigned char pad1;
-  unsigned short pad2;
+  unsigned int dotclock;
+  unsigned short hdisplay;
+  unsigned short hsyncstart;
+  unsigned short hsyncend;
+  unsigned short htotal;
+  unsigned short hskew;
+  unsigned short vdisplay;
+  unsigned short vsyncstart;
+  unsigned short vsyncend;
+  unsigned short vtotal;
+  unsigned int flags;
+  int privsize;
+  long* c_private;
 } XF86VidModeModeInfo;
+
+typedef struct {
+  unsigned short hdisplay;
+  unsigned short hsyncstart;
+  unsigned short hsyncend;
+  unsigned short htotal;
+  unsigned short hskew;
+  unsigned short vdisplay;
+  unsigned short vsyncstart;
+  unsigned short vsyncend;
+  unsigned short vtotal;
+  unsigned int flags;
+  int privsize;
+  long* c_private;
+} XF86VidModeModeLine;
+
+typedef char vexa_assert_vidmode_hdisplay[(offsetof(XF86VidModeModeInfo, hdisplay) == 4) ? 1 : -1];
+typedef char vexa_assert_vidmode_vdisplay[(offsetof(XF86VidModeModeInfo, vdisplay) == 14) ? 1 : -1];
+typedef char vexa_assert_vidmode_flags[(offsetof(XF86VidModeModeInfo, flags) == 24) ? 1 : -1];
 
 static void vexa_vidmode_size(int* width, int* height) {
   char buf[64];
@@ -58,23 +75,26 @@ static void vexa_vidmode_size(int* width, int* height) {
   }
 }
 
-/* The list SDL will walk: current surface size first, then a couple of sizes
-   common enough that games which persisted one of them still find it. */
-static const int kExtra[3][2] = {{1920, 1080}, {1280, 720}, {1024, 768}};
+/* The list SDL/GameMaker will walk: current surface size first, then common
+   resolutions so games that look for a specific mode (e.g. 640x480) find it. */
+static const int kExtra[4][2] = {{1920, 1080}, {1280, 720}, {1024, 768}, {640, 480}};
 
 static void vexa_fill_mode(XF86VidModeModeInfo* m, int w, int h) {
   memset(m, 0, sizeof(*m));
-  m->dotClock = (w + 96) * (h + 10) * 60;
-  m->hDisplay = (short)w;
-  m->vDisplay = (short)h;
-  m->hSyncStart = (short)w;
-  m->hSyncEnd = (short)(w + 32);
-  m->hTotal = (short)(w + 96);
-  m->hSkew = 0;
-  m->vSyncStart = (short)h;
-  m->vSyncEnd = (short)(h + 3);
-  m->vTotal = (short)(h + 10);
+  /* dotclock in kHz so dotclock * 1000 / (htotal * vtotal) == 60 Hz */
+  m->dotclock = (unsigned int)(((w + 96) * (h + 10) * 60) / 1000);
+  m->hdisplay = (unsigned short)w;
+  m->hsyncstart = (unsigned short)w;
+  m->hsyncend = (unsigned short)(w + 32);
+  m->htotal = (unsigned short)(w + 96);
+  m->hskew = 0;
+  m->vdisplay = (unsigned short)h;
+  m->vsyncstart = (unsigned short)h;
+  m->vsyncend = (unsigned short)(h + 3);
+  m->vtotal = (unsigned short)(h + 10);
   m->flags = 0;
+  m->privsize = 0;
+  m->c_private = NULL;
 }
 
 Bool XF86VidModeQueryExtension(Display* dpy, int* event_base, int* error_base) {
@@ -101,63 +121,87 @@ Bool XF86VidModeQueryVersion(Display* dpy, int* major, int* minor) {
   return True;
 }
 
-Bool XF86VidModeGetModeLine(Display* dpy, int screen, XF86VidModeModeInfo* mode) {
+Bool XF86VidModeGetModeLine(Display* dpy, int screen, int* dotclock, XF86VidModeModeLine* mode) {
   (void)dpy;
   (void)screen;
   int w;
   int h;
   vexa_vidmode_size(&w, &h);
+  if (dotclock) {
+    *dotclock = ((w + 96) * (h + 10) * 60) / 1000;
+  }
   if (!mode) {
     return False;
   }
-  vexa_fill_mode(mode, w, h);
+  memset(mode, 0, sizeof(*mode));
+  mode->hdisplay = (unsigned short)w;
+  mode->hsyncstart = (unsigned short)w;
+  mode->hsyncend = (unsigned short)(w + 32);
+  mode->htotal = (unsigned short)(w + 96);
+  mode->hskew = 0;
+  mode->vdisplay = (unsigned short)h;
+  mode->vsyncstart = (unsigned short)h;
+  mode->vsyncend = (unsigned short)(h + 3);
+  mode->vtotal = (unsigned short)(h + 10);
   fprintf(stderr, "[VEXA][VIDMODE] get_mode_line -> %dx%d\n", w, h);
   return True;
 }
 
-XF86VidModeModeInfo** XF86VidModeGetAllModeLines(Display* dpy, int screen, int* count) {
+Bool XF86VidModeGetAllModeLines(Display* dpy, int screen, int* count, XF86VidModeModeInfo*** modesinfo) {
   (void)dpy;
   (void)screen;
   int w;
   int h;
   vexa_vidmode_size(&w, &h);
   const int total = 1 + (int)(sizeof(kExtra) / sizeof(kExtra[0]));
-  XF86VidModeModeInfo** lines = (XF86VidModeModeInfo**)calloc((size_t)total, sizeof(*lines));
+  /* Single contiguous allocation so callers that free with a single XFree(modes)
+     release both the pointer table and the mode structs. */
+  const size_t ptrs_bytes = (size_t)total * sizeof(XF86VidModeModeInfo*);
+  const size_t modes_bytes = (size_t)total * sizeof(XF86VidModeModeInfo);
+  XF86VidModeModeInfo** lines = (XF86VidModeModeInfo**)calloc(1, ptrs_bytes + modes_bytes);
   if (!lines) {
     if (count) {
       *count = 0;
     }
-    return NULL;
+    if (modesinfo) {
+      *modesinfo = NULL;
+    }
+    return False;
   }
-  lines[0] = (XF86VidModeModeInfo*)calloc(1, sizeof(**lines));
+  XF86VidModeModeInfo* pool = (XF86VidModeModeInfo*)((char*)lines + ptrs_bytes);
+  lines[0] = &pool[0];
   vexa_fill_mode(lines[0], w, h);
   for (int i = 0; i < total - 1; ++i) {
-    lines[i + 1] = (XF86VidModeModeInfo*)calloc(1, sizeof(**lines));
+    lines[i + 1] = &pool[i + 1];
     vexa_fill_mode(lines[i + 1], kExtra[i][0], kExtra[i][1]);
   }
   if (count) {
     *count = total;
   }
+  if (modesinfo) {
+    *modesinfo = lines;
+  }
   fprintf(stderr, "[VEXA][VIDMODE] get_all_mode_lines -> %d modes (current %dx%d)\n", total, w, h);
-  return lines;
+  return True;
 }
 
-int XF86VidModeLockModeSwitch(Display* dpy, int screen) {
+Bool XF86VidModeLockModeSwitch(Display* dpy, int screen, int lock) {
   (void)dpy;
   (void)screen;
+  (void)lock;
   fprintf(stderr, "[VEXA][VIDMODE] lock_mode_switch\n");
-  return 1;
+  return True;
 }
 
-int XF86VidModeSwitchToMode(Display* dpy, int screen, XF86VidModeModeInfo* mode) {
+Bool XF86VidModeSwitchToMode(Display* dpy, int screen, XF86VidModeModeInfo* mode) {
   (void)dpy;
   (void)screen;
   (void)mode;
   fprintf(stderr, "[VEXA][VIDMODE] switch_to_mode\n");
-  return 1;
+  return True;
 }
 
-int XF86VidModeGetViewPort(Display* dpy, int screen, short* x, short* y) {
+Bool XF86VidModeGetViewPort(Display* dpy, int screen, int* x, int* y) {
   (void)dpy;
   (void)screen;
   if (x) {
@@ -166,10 +210,10 @@ int XF86VidModeGetViewPort(Display* dpy, int screen, short* x, short* y) {
   if (y) {
     *y = 0;
   }
-  return 1;
+  return True;
 }
 
-int XF86VidModeGetAllViewPorts(Display* dpy, int screen, short** viewports, int* count) {
+Bool XF86VidModeGetAllViewPorts(Display* dpy, int screen, short** viewports, int* count) {
   (void)dpy;
   (void)screen;
   if (viewports) {
@@ -178,5 +222,14 @@ int XF86VidModeGetAllViewPorts(Display* dpy, int screen, short** viewports, int*
   if (count) {
     *count = 0;
   }
-  return 0;
+  return False;
+}
+
+Bool XF86VidModeSetViewPort(Display* dpy, int screen, int x, int y) {
+  (void)dpy;
+  (void)screen;
+  (void)x;
+  (void)y;
+  fprintf(stderr, "[VEXA][VIDMODE] set_view_port\n");
+  return True;
 }

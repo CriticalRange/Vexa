@@ -360,20 +360,30 @@ static void vexa_push_property(Display* dpy, Atom atom, int state) {
 }
 
 static void vexa_configure(Display* dpy, int x, int y, int w, int h) {
+  vexa_read_window_size();
   if (x < -100000 || x > 100000) {
     x = 0;
   }
   if (y < -100000 || y > 100000) {
     y = 0;
   }
-  /* Never propagate a 0-size request: a 0x0 ConfigureNotify makes SDL report a
-     0x0 window and Unity then skips all draw submission. Clamp to the real
-     screen geometry instead. */
-  if (w < 1) {
+  /* On Android single-surface mode (g_published), the native window covers the
+     entire screen surface. Keep the main window at full screen dimensions so
+     windowed-mode room resets (e.g. GameMaker / Undertale calling
+     XConfigureWindow(640, 480) after room change) do not shrink the viewport to
+     the bottom-left corner of the screen. */
+  if (g_published && g_screen.width > 1 && g_screen.height > 1) {
+    x = 0;
+    y = 0;
     w = g_screen.width;
-  }
-  if (h < 1) {
     h = g_screen.height;
+  } else {
+    if (w < 1) {
+      w = g_screen.width;
+    }
+    if (h < 1) {
+      h = g_screen.height;
+    }
   }
   g_win_x = x;
   g_win_y = y;
@@ -551,9 +561,12 @@ static int vexa_lookup_key(XKeyEvent* event, char* buffer, int bytes, KeySym* ke
   if (keysym) {
     *keysym = sym;
   }
-  if (buffer && bytes > 0 && sym >= 32 && sym < 127) {
-    buffer[0] = (char)sym;
-    return 1;
+  if (buffer && bytes > 0) {
+    if (sym >= 32 && sym < 127) {
+      buffer[0] = (char)sym;
+      return 1;
+    }
+    buffer[0] = 0;
   }
   return 0;
 }
@@ -735,8 +748,11 @@ int XCloseDisplay(Display* dpy) {
   return 0;
 }
 
+static Window g_next_window = 1;
+
 Window XCreateWindow(Display* dpy, Window parent, int x, int y, unsigned int width, unsigned int height, unsigned int border,
                      int depth, unsigned int klass, Visual* visual, unsigned long valuemask, XSetWindowAttributes* attrs) {
+  Window win;
   (void)dpy;
   (void)parent;
   (void)x;
@@ -748,21 +764,26 @@ Window XCreateWindow(Display* dpy, Window parent, int x, int y, unsigned int wid
   (void)valuemask;
   (void)attrs;
   vexa_read_window_size();
+  win = g_next_window++;
   /* Godot asks for the project size (1920x1080). The published surface is the
      real screen, and a later ConfigureNotify makes Godot adopt it. */
-  if (!g_published && width > 1 && height > 1) {
-    g_screen.width = (int)width;
-    g_screen.height = (int)height;
+  if (win == 1) {
+    if (!g_published && width > 1 && height > 1) {
+      g_screen.width = (int)width;
+      g_screen.height = (int)height;
+    }
+    g_win_x = (x < -100000 || x > 100000) ? 0 : x;
+    g_win_y = (y < -100000 || y > 100000) ? 0 : y;
+    g_win_w = (int)width;
+    g_win_h = (int)height;
+    g_win_valid = 1;
   }
-  g_win_x = (x < -100000 || x > 100000) ? 0 : x;
-  g_win_y = (y < -100000 || y > 100000) ? 0 : y;
-  g_win_w = (int)width;
-  g_win_h = (int)height;
-  g_win_valid = 1;
-  fprintf(stderr, "[VEXA][X11] create_window -> %lu at %d,%d %ux%u depth=%d\n", (unsigned long)1UL, x, y, width, height,
+  fprintf(stderr, "[VEXA][X11] create_window -> %lu at %d,%d %ux%u depth=%d\n", (unsigned long)win, x, y, width, height,
           depth);
-  vexa_enqueue_configure(dpy);
-  return 1;
+  if (win == 1) {
+    vexa_enqueue_configure(dpy);
+  }
+  return win;
 }
 
 Window XCreateSimpleWindow(Display* dpy, Window parent, int x, int y, unsigned int width, unsigned int height, unsigned int border,
@@ -781,11 +802,13 @@ Colormap XCreateColormap(Display* dpy, Window window, Visual* visual, int alloc)
 }
 
 int XMapWindow(Display* dpy, Window window) {
-  (void)window;
   fprintf(stderr, "[VEXA][X11] map_window %lu\n", (unsigned long)window);
-  vexa_push_map(dpy, 1);
-  vexa_push_configure(dpy, g_win_x, g_win_y, g_win_w > 1 ? g_win_w : g_screen.width,
-                      g_win_h > 1 ? g_win_h : g_screen.height);
+  if (window == 1) {
+    int cfg_w = (g_published && g_screen.width > 1) ? g_screen.width : (g_win_w > 1 ? g_win_w : g_screen.width);
+    int cfg_h = (g_published && g_screen.height > 1) ? g_screen.height : (g_win_h > 1 ? g_win_h : g_screen.height);
+    vexa_push_map(dpy, 1);
+    vexa_push_configure(dpy, g_published ? 0 : g_win_x, g_published ? 0 : g_win_y, cfg_w, cfg_h);
+  }
   return 1;
 }
 
@@ -947,7 +970,15 @@ Bool XCheckTypedEvent(Display* dpy, int type, XEvent* event) {
 
 // Like real Xlib, return immediately. Render loops call this once per frame and
 // eglSwapBuffers already paces them, so sleeping here only capped the frame rate.
+static int g_pending_calls = 0;
+
 int XPending(Display* dpy) {
+  if (g_published && g_screen.width > 1 && g_screen.height > 1 && g_pending_calls < 200) {
+    g_pending_calls++;
+    if (g_pending_calls == 5 || g_pending_calls == 200) {
+      vexa_configure(dpy, 0, 0, g_screen.width, g_screen.height);
+    }
+  }
   vexa_poll_input(dpy);
   return vexa_q_count_of();
 }
@@ -1219,8 +1250,10 @@ Status XGetGeometry(Display* dpy, Drawable drawable, Window* root, int* x, int* 
 }
 
 int XResizeWindow(Display* dpy, Window window, unsigned int width, unsigned int height) {
-  (void)window;
   fprintf(stderr, "[VEXA][X11] resize_window w=%lu %ux%u\n", (unsigned long)window, width, height);
+  if (window != 1) {
+    return 1;
+  }
   if (!g_published && width > 1 && height > 1) {
     g_screen.width = (int)width;
     g_screen.height = (int)height;
@@ -1230,8 +1263,14 @@ int XResizeWindow(Display* dpy, Window window, unsigned int width, unsigned int 
 }
 
 int XMoveWindow(Display* dpy, Window window, int x, int y) {
-  (void)window;
-  vexa_configure(dpy, x, y, g_win_w, g_win_h);
+  (void)dpy;
+  if (window != 1) {
+    return 1;
+  }
+  if (!g_published) {
+    g_win_x = (x < -100000 || x > 100000) ? 0 : x;
+    g_win_y = (y < -100000 || y > 100000) ? 0 : y;
+  }
   return 1;
 }
 
@@ -1242,9 +1281,13 @@ int XSelectInput(Display* dpy, Window window, long mask) {
   return 1;
 }
 
+static int g_clear_configured = 0;
+
 int XClearWindow(Display* dpy, Window window) {
-  (void)dpy;
-  (void)window;
+  if (window == 1 && !g_clear_configured && g_published && g_screen.width > 1 && g_screen.height > 1) {
+    g_clear_configured = 1;
+    vexa_configure(dpy, 0, 0, g_screen.width, g_screen.height);
+  }
   return 1;
 }
 
@@ -1492,9 +1535,11 @@ int XGrabPointer(Display* dpy, Window grab_window, Bool owner_events, unsigned i
 }
 
 int XMoveResizeWindow(Display* dpy, Window window, int x, int y, unsigned int width, unsigned int height) {
-  (void)window;
   fprintf(stderr, "[VEXA][X11] move_resize_window w=%lu %d,%d %ux%u\n", (unsigned long)window, x, y, width,
           height);
+  if (window != 1) {
+    return 1;
+  }
   vexa_configure(dpy, x, y, (int)width, (int)height);
   return 1;
 }
@@ -1504,7 +1549,6 @@ int XConfigureWindow(Display* dpy, Window window, unsigned int valuemask, XWindo
   int y = g_win_y;
   int w = g_win_w;
   int h = g_win_h;
-  (void)window;
   if (values) {
     if (valuemask & CWX) {
       x = values->x;
@@ -1520,6 +1564,9 @@ int XConfigureWindow(Display* dpy, Window window, unsigned int valuemask, XWindo
     }
   }
   fprintf(stderr, "[VEXA][X11] configure_window w=%lu %d,%d %dx%d\n", (unsigned long)window, x, y, w, h);
+  if (window != 1) {
+    return 1;
+  }
   vexa_configure(dpy, x, y, w, h);
   return 1;
 }
@@ -1950,4 +1997,132 @@ Bool XkbSetDetectableAutoRepeat(Display* dpy, Bool detectable, Bool* supported) 
     *supported = False;
   }
   return True;
+}
+
+/* GameMaker 1.x (Undertale runner) calls the function forms rather than the
+   Xlib display-macros. Single-screen fake: answer straight from g_screen. */
+int XDisplayWidth(Display* dpy, int screen_number) {
+  (void)dpy;
+  (void)screen_number;
+  vexa_read_window_size();
+  return g_screen.width;
+}
+
+int XDisplayHeight(Display* dpy, int screen_number) {
+  (void)dpy;
+  (void)screen_number;
+  vexa_read_window_size();
+  return g_screen.height;
+}
+
+int XDisplayWidthMM(Display* dpy, int screen_number) {
+  (void)dpy;
+  (void)screen_number;
+  vexa_read_window_size();
+  return g_screen.mwidth;
+}
+
+int XDisplayHeightMM(Display* dpy, int screen_number) {
+  (void)dpy;
+  (void)screen_number;
+  vexa_read_window_size();
+  return g_screen.mheight;
+}
+
+int XDrawLine(Display* dpy, Drawable d, GC gc, int x1, int y1, int x2, int y2) {
+  (void)dpy;
+  (void)d;
+  (void)gc;
+  (void)x1;
+  (void)y1;
+  (void)x2;
+  (void)y2;
+  return 0;
+}
+
+int XSetFillStyle(Display* dpy, GC gc, int fill_style) {
+  (void)dpy;
+  (void)gc;
+  (void)fill_style;
+  return 0;
+}
+
+int XSetFont(Display* dpy, GC gc, Font font) {
+  (void)dpy;
+  (void)gc;
+  (void)font;
+  return 0;
+}
+
+Status XStringListToTextProperty(char** list, int count, XTextProperty* text_prop) {
+  if (!text_prop) {
+    return 0;
+  }
+  memset(text_prop, 0, sizeof(*text_prop));
+  text_prop->encoding = XA_STRING;
+  text_prop->format = 8;
+  if (list && count > 0 && list[0]) {
+    size_t len = strlen(list[0]);
+    unsigned char* copy = (unsigned char*)malloc(len + 1);
+    if (!copy) {
+      return 0;
+    }
+    memcpy(copy, list[0], len + 1);
+    text_prop->value = copy;
+    text_prop->nitems = (unsigned long)len;
+  }
+  return 1;
+}
+
+void XSetWMName(Display* dpy, Window w, XTextProperty* text_prop) {
+  (void)dpy;
+  (void)w;
+  if (text_prop && text_prop->value && text_prop->format == 8) {
+    fprintf(stderr, "[VEXA][X11] wm_name %s\n", (const char*)text_prop->value);
+  }
+}
+
+XFontStruct* XLoadQueryFont(Display* dpy, const char* name) {
+  XFontStruct* font;
+  (void)dpy;
+  (void)name;
+  font = (XFontStruct*)calloc(1, sizeof(XFontStruct));
+  if (!font) {
+    return NULL;
+  }
+  font->fid = 1;
+  font->ascent = 12;
+  font->descent = 4;
+  font->min_bounds.width = 8;
+  font->max_bounds.width = 8;
+  font->max_bounds.ascent = 12;
+  font->max_bounds.descent = 4;
+  return font;
+}
+
+int XFreeFont(Display* dpy, XFontStruct* font_struct) {
+  (void)dpy;
+  free(font_struct);
+  return 1;
+}
+
+Pixmap XCreateBitmapFromData(Display* dpy, Drawable d, const char* data, unsigned int width, unsigned int height) {
+  (void)dpy;
+  (void)d;
+  (void)data;
+  (void)width;
+  (void)height;
+  return 2;
+}
+
+Cursor XCreateFontCursor(Display* dpy, unsigned int shape) {
+  (void)dpy;
+  (void)shape;
+  return 1;
+}
+
+int XTextWidth(XFontStruct* font, const char* string, int count) {
+  int advance = font && font->max_bounds.width > 0 ? font->max_bounds.width : 8;
+  (void)string;
+  return count > 0 ? count * advance : 0;
 }

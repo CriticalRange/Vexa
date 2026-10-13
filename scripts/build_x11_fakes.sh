@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the guest X11 fake libraries for x86_64 against the graphics sysroot.
+# Build guest X11 shims; GUEST_ARCH=i686 builds separate i386 outputs.
 # Usage: scripts/build_x11_fakes.sh [name ...]   (default: all fakes present)
 set -euo pipefail
 
@@ -7,6 +7,13 @@ NDK="${NDK:-C:/Users/zeytu/AppData/Local/Android/Sdk/ndk/30.0.16248370}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SRC="$ROOT/guest-tests/x11-fake"
 SYSROOT="$ROOT/guest-tests/graphics/rootfs"
+GUEST_ARCH="${GUEST_ARCH:-x86_64}"
+case "$GUEST_ARCH" in
+  x86_64) OUTPUT="$SRC" ;;
+  i686) OUTPUT="$SRC/i386" ;;
+  *) printf 'unsupported GUEST_ARCH: %s\n' "$GUEST_ARCH" >&2; exit 1 ;;
+esac
+mkdir -p "$OUTPUT"
 CLANG="$NDK/toolchains/llvm/prebuilt/windows-x86_64/bin/x86_64-linux-android24-clang"
 
 # fake source(s) -> produced soname.  Several fakes are assembled from more than
@@ -44,13 +51,13 @@ for t in "${TARGETS[@]}"; do
     done
     [ "$match" = 1 ] || continue
   fi
-  out="$SRC/$so"
+  out="$OUTPUT/$so"
   if [ ! -x "$CLANG" ]; then
     CLANG="$NDK/toolchains/llvm/prebuilt/windows-x86_64/bin/clang"
-    "$CLANG" --target=x86_64-linux-gnu -c /dev/null -o /dev/null 2>/dev/null || \
+    "$CLANG" --target="$GUEST_ARCH-linux-gnu" -c /dev/null -o /dev/null 2>/dev/null || \
       CLANG="$NDK/toolchains/llvm/prebuilt/windows-x86_64/bin/x86_64-linux-android-clang"
   fi
-  "$CLANG" --target=x86_64-linux-gnu --sysroot="$SYSROOT" -O1 -fPIC -shared \
+  "$CLANG" --target="$GUEST_ARCH-linux-gnu" --sysroot="$SYSROOT" -O1 -fPIC -shared \
            -fno-stack-protector -Wl,-soname,"$so" -I"$SRC" \
            -o "$out" "${srcs[@]}"
   printf 'built %-22s %8d bytes\n' "$so" "$(stat -c %s "$out")"

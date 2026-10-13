@@ -7,10 +7,6 @@ const char vexa_sdl_stub[] = "VEXA";
    A null return is a 32-bit store at address 0x8. */
 void *XAllocWMHints(void) { return calloc(1, 64); }
 
-void *XCreateBitmapFromData(void) { return 0; }
-
-void *XCreateFontCursor(void) { return 0; }
-
 void *XCreateFontSet(void) { return 0; }
 
 void *XCreateImage(void) { return 0; }
@@ -18,8 +14,6 @@ void *XCreateImage(void) { return 0; }
 void *XDrawRectangle(void) { return 0; }
 
 void *XDrawString(void) { return 0; }
-
-void *XFreeFont(void) { return 0; }
 
 void *XFreeFontSet(void) { return 0; }
 
@@ -48,8 +42,6 @@ void *XInstallColormap(void) { return 0; }
 void *XKeysymToString(void) { return 0; }
 
 void *XListPixmapFormats(void) { return 0; }
-
-void *XLoadQueryFont(void) { return 0; }
 
 void *XPutImage(void) { return 0; }
 
@@ -121,8 +113,6 @@ void *XGetErrorDatabaseText(void) { return 0; }
 void *XGetPointerControl(void) { return 0; }
 
 void *XMissingExtension(void) { return 0; }
-
-void *XStringListToTextProperty(void) { return 0; }
 
 void *XUnloadFont(void) { return 0; }
 
