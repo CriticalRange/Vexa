@@ -18,8 +18,8 @@ typedef struct XcursorImage {
   uint32_t* pixels;
 } XcursorImage;
 
-_Static_assert(sizeof(XcursorImage) == 40, "XcursorImage size");
-_Static_assert(offsetof(XcursorImage, pixels) == 32, "XcursorImage.pixels");
+_Static_assert(sizeof(XcursorImage) == (sizeof(void*) == 8 ? 40 : 32), "XcursorImage size");
+_Static_assert(offsetof(XcursorImage, pixels) == (sizeof(void*) == 8 ? 32 : 28), "XcursorImage.pixels");
 
 int XcursorGetDefaultSize(Display* dpy) {
   (void)dpy;

@@ -1,5 +1,5 @@
 /* SHM and Xdbe are absent. SDL falls back to the core X path. */
-const char vexa_sdl_stub[] = "VEXA";
+__attribute__((weak)) const char vexa_sdl_stub[] = "VEXA";
 
 void *XShapeCombineMask(void) { return 0; }
 

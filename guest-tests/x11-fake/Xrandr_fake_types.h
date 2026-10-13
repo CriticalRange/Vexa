@@ -23,6 +23,7 @@
 #define VEXA_FAKE_XRANDR_TYPES_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 #include <X11/Xlib.h>
 
@@ -107,6 +108,7 @@ typedef struct _XRRCrtcInfo {
    offsets, so a mismatch has to fail the build rather than corrupt reads. */
 #define VEXA_STATIC_ASSERT(cond, name) typedef char vexa_static_assert_##name[(cond) ? 1 : -1]
 
+#if UINTPTR_MAX == UINT64_MAX
 VEXA_STATIC_ASSERT(offsetof(XRRModeInfo, id) == 0, modeinfo_id);
 VEXA_STATIC_ASSERT(offsetof(XRRModeInfo, width) == 8, modeinfo_width);
 VEXA_STATIC_ASSERT(offsetof(XRRModeInfo, height) == 12, modeinfo_height);
@@ -140,6 +142,18 @@ VEXA_STATIC_ASSERT(sizeof(XRROutputInfo) == 96, outputinfo_size);
 
 VEXA_STATIC_ASSERT(offsetof(XRRScreenResources, nmode) == 48, resources_nmode);
 VEXA_STATIC_ASSERT(offsetof(XRRScreenResources, modes) == 56, resources_modes);
+
+#else
+VEXA_STATIC_ASSERT(sizeof(XRRModeInfo) == 56, modeinfo_size32);
+VEXA_STATIC_ASSERT(offsetof(XRRModeInfo, name) == 44, modeinfo_name32);
+VEXA_STATIC_ASSERT(offsetof(XRRModeInfo, dotClock) == 12, modeinfo_clock32);
+VEXA_STATIC_ASSERT(sizeof(XRRCrtcInfo) == 48, crtcinfo_size32);
+VEXA_STATIC_ASSERT(offsetof(XRRCrtcInfo, outputs) == 32, crtcinfo_outputs32);
+VEXA_STATIC_ASSERT(sizeof(XRROutputInfo) == 56, outputinfo_size32);
+VEXA_STATIC_ASSERT(offsetof(XRROutputInfo, modes) == 52, outputinfo_modes32);
+VEXA_STATIC_ASSERT(sizeof(XRRScreenResources) == 32, resources_size32);
+VEXA_STATIC_ASSERT(offsetof(XRRScreenResources, modes) == 28, resources_modes32);
+#endif
 
 #undef VEXA_STATIC_ASSERT
 
