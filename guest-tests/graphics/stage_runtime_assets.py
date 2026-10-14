@@ -122,17 +122,27 @@ def is_elf(path):
         return False
 
 
+def is_elf64(path):
+    try:
+        with open(path, "rb") as handle:
+            head = handle.read(5)
+        return head[:4] == b"\x7fELF" and head[4] == 2
+    except OSError:
+        return False
+
+
 def find_elf(soname):
     best = None
     best_size = -1
     for dirpath, _, files in os.walk(SYSROOT):
-        if "llvm" in dirpath.lower():
+        low = dirpath.lower()
+        if "llvm" in low or "i386" in low or "i686" in low:
             continue
         for name in files:
             if name != soname and not name.startswith(soname + "."):
                 continue
             path = os.path.join(dirpath, name)
-            if not is_elf(path):
+            if not is_elf64(path):
                 continue
             size = os.path.getsize(path)
             if size > best_size:

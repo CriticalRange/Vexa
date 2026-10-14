@@ -109,6 +109,12 @@ object SteamLink {
         }
     }
 
+    fun cloud(): `in`.dragonbra.javasteam.steam.handlers.steamcloud.SteamCloud? {
+        val client = steamClient ?: return null
+        if (!accountOnline.get() || !client.isConnected) return null
+        return client.getHandler(`in`.dragonbra.javasteam.steam.handlers.steamcloud.SteamCloud::class.java)
+    }
+
     fun restore(context: Context) {
         val app = context.applicationContext
         appContext = app

@@ -46,8 +46,9 @@ import com.critical.vexaemulator.ui.theme.VexaTheme
 
 data class BootStep(val title: String, val detail: String)
 
-fun bootSteps(program: GuestProgram?, surfaceSize: String?): List<BootStep> = listOf(
+fun bootSteps(program: GuestProgram?, surfaceSize: String?, cloudDetail: String? = null): List<BootStep> = listOfNotNull(
     BootStep("Preparing rootfs", "guest files staged in app storage"),
+    cloudDetail?.let { BootStep("Syncing Steam Cloud", it) },
     BootStep("Connecting runtime service", ":runtime process bound over Messenger"),
     BootStep("Waiting for landscape surface", "SurfaceHolder → sensorLandscape"),
     BootStep("Publishing guest window size", surfaceSize?.let { "/tmp/vexa-window-size ← $it" } ?: "/tmp/vexa-window-size"),
@@ -64,11 +65,12 @@ fun GameLoadingOverlay(
     step: Int,
     surfaceSize: String?,
     lastMessage: String?,
+    cloudDetail: String? = null,
     onDebug: () -> Unit,
     onClose: () -> Unit,
 ) {
     val c = VexaTheme.colors
-    val steps = bootSteps(program, surfaceSize)
+    val steps = bootSteps(program, surfaceSize, cloudDetail)
     Box(
         modifier = Modifier
             .fillMaxSize()

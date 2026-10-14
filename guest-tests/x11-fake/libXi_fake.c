@@ -7,7 +7,7 @@ Status XIQueryVersion(Display* dpy, int* major, int* minor) {
     *major = 2;
   }
   if (minor) {
-    *minor = 2;
+    *minor = 0;
   }
   return Success;
 }

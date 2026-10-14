@@ -171,7 +171,7 @@ static void al_current(void) {
 static void al_reclaim(void) {
   int processed = 0;
   unsigned long now = now_ms();
-  if (now - g_last_reclaim_ms < 20) {
+  if (g_nfree > 0 && now - g_last_reclaim_ms < 20) {
     return;
   }
   g_last_reclaim_ms = now;
@@ -282,6 +282,14 @@ int snd_pcm_hw_params_set_channels(void* pcm, void* params, unsigned int channel
   (void)params;
   if (channels != 1 && channels != 2) return -EINVAL;
   g_channels = channels;
+  return 0;
+}
+int snd_pcm_hw_params_set_rate(void* pcm, void* params, unsigned int rate, int dir) {
+  (void)pcm;
+  (void)params;
+  (void)dir;
+  if (rate < 8000) rate = 44100;
+  g_rate = rate;
   return 0;
 }
 int snd_pcm_hw_params_set_rate_near(void* pcm, void* params, unsigned int* rate, int* dir) {

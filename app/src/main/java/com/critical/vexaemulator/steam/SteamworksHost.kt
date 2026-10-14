@@ -82,6 +82,9 @@ object SteamworksHost {
             mapOf("steamId" to session.steamId),
         )
         val extra = mutableListOf<String>()
+        if (session.steamId.isNotEmpty()) extra += "VEXA_STEAM_ID=${session.steamId}"
+        extra += "VEXA_STEAM_PERSONA=${session.accountName}"
+        if (programEnv.none { it.startsWith("VEXA_STEAM_TRACE=") }) extra += "VEXA_STEAM_TRACE=1"
         if (programEnv.none { it.startsWith("SteamUser=") }) {
             extra += "SteamUser=${session.accountName}"
         }
