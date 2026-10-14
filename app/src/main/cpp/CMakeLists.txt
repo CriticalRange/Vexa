@@ -46,6 +46,7 @@ add_library(${CMAKE_PROJECT_NAME} SHARED
     runtime/init/syscalls.cpp
     runtime/init/execute.cpp
     runtime/launch.cpp
+    runtime/loader_main.cpp
     runtime/surface_bridge.cpp
     wrapper/jni.cpp
     main.cpp)
@@ -135,3 +136,14 @@ target_link_libraries(vexareserve log)
 # in the repo; this target only calls the documented SteamAPI exports.
 add_library(vexasteam SHARED steam/steamworks_host.cpp)
 target_link_libraries(vexasteam log dl)
+
+# Re-exec trampoline for guest execve(). Packaged into jniLibs as
+# libvexaloader.so (see POST_BUILD copy below) so it lands in the
+# exec-permitted nativeLibraryDir. It links libvexa.so via $ORIGIN.
+add_executable(vexaloader runtime/vexaloader_trampoline.c)
+target_link_libraries(vexaloader dl log)
+add_custom_command(TARGET vexaloader POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+        ${CMAKE_CURRENT_SOURCE_DIR}/../jniLibs/arm64-v8a
+    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:vexaloader>
+        ${CMAKE_CURRENT_SOURCE_DIR}/../jniLibs/arm64-v8a/libvexaloader.so)

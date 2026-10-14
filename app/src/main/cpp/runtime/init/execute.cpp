@@ -60,10 +60,8 @@ namespace Vexa::Runtime::Init {
             return {Vexa::Common::Code::ExecutePrereqMissing, Vexa::Common::Phase::Init,
                     "Execute prerequisites missing. this can be context, syscall, thread, thunk or signal handling."};
         }
-        if (!env) {
-            return {Vexa::Common::Code::InternalError, Vexa::Common::Phase::Execute,
-                    "Invalid JNI environment"};
-        }
+        // env may be null: the re-exec trampoline child (VexaLoaderMain) has no
+        // JVM. Logging falls back to the liblog path via MarkFexManagedThread.
         if (paths.executable.empty() || paths.rootfs.empty()) {
             return {Vexa::Common::Code::InternalError, Vexa::Common::Phase::Execute,
                     "Invalid runtime paths"};
@@ -149,7 +147,12 @@ namespace Vexa::Runtime::Init {
                     args.emplace_back(arg.c_str());
                 }
             }
-            fextl::vector<fextl::string> parsedArgs = args;
+            // LoaderArgs feeds the guest execve fallback: FEX re-execs the
+            // trampoline binary (VEXA_REEXEC, see Syscalls.cpp) with
+            // [loaderArgv..., newFile, newArgs...]. Keep the loader argv at a
+            // single token so the trampoline can treat argv[1] as the target.
+            fextl::vector<fextl::string> parsedArgs;
+            parsedArgs.emplace_back("vexa-loader");
 
             // Environment Variables
             fextl::vector<fextl::string> envVars;

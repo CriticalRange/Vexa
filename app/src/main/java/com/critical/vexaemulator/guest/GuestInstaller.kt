@@ -46,7 +46,6 @@ object GuestInstaller {
             program.env
         }
         val rootfs = File(root, "rootfs").apply { mkdirs() }
-        val launchEnv = withRuntimeDir(rootfs, baseEnv) + SteamworksHost.launchEnvironment(context, baseEnv)
         val thunkHost = File(root, "thunks/host").apply { mkdirs() }
         val thunkGuest = File(root, "thunks/guest").apply { mkdirs() }
         val artifacts = File(root, "artifacts/${program.id}").apply {
@@ -54,6 +53,19 @@ object GuestInstaller {
             File(this, "guest_stdout.log").delete()
             File(this, "fex_stderr.log").delete()
         }
+        // Guest execve() support: FEX re-executes VEXA_REEXEC (the trampoline in
+        // nativeLibraryDir) instead of /proc/self/exe, and the trampoline reads
+        // these VEXA_* vars from the inherited guest envp to rebuild the launch.
+        val loaderEnv = listOf(
+            "VEXA_REEXEC=${context.applicationInfo.nativeLibraryDir}/libvexaloader.so",
+            "VEXA_ROOTFS=${rootfs.absolutePath}",
+            "VEXA_THUNK_HOST=${thunkHost.absolutePath}",
+            "VEXA_THUNK_GUEST=${thunkGuest.absolutePath}",
+            "VEXA_WORKDIR=${guestDir.absolutePath}",
+            "VEXA_ARTIFACTS=${artifacts.absolutePath}",
+        )
+        val launchEnv = withRuntimeDir(rootfs, baseEnv) +
+            SteamworksHost.launchEnvironment(context, baseEnv) + loaderEnv
 
         return LaunchRequest(
             executablePath = executable.absolutePath,
