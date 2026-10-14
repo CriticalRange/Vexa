@@ -58,9 +58,10 @@ namespace Vexa::Runtime {
 
         // launchEnv feeds the guest envp only, but host-side thunk libraries
         // (libGL-host) inspect VEXA_HEADLESS via getenv to pick a pbuffer over
-        // a SurfaceTexture-backed window. Mirror just the VEXA_HEADLESS* keys
+        // a SurfaceTexture-backed window and select its color space. Mirror only
+        // these explicit host graphics controls
         // into this process's environment.
-        for (const char *key : {"VEXA_HEADLESS", "VEXA_HEADLESS_W", "VEXA_HEADLESS_H"}) {
+        for (const char *key : {"VEXA_HEADLESS", "VEXA_HEADLESS_W", "VEXA_HEADLESS_H", "VEXA_GL_SRGB_SURFACE"}) {
             ::unsetenv(key);
         }
         for (const auto &entry: launchEnv) {
@@ -68,7 +69,8 @@ namespace Vexa::Runtime {
             if (eq == std::string::npos) continue;
             if (entry.compare(0, eq, "VEXA_HEADLESS") == 0 ||
                 entry.compare(0, eq, "VEXA_HEADLESS_W") == 0 ||
-                entry.compare(0, eq, "VEXA_HEADLESS_H") == 0) {
+                entry.compare(0, eq, "VEXA_HEADLESS_H") == 0 ||
+                entry.compare(0, eq, "VEXA_GL_SRGB_SURFACE") == 0) {
                 ::setenv(entry.substr(0, eq).c_str(), entry.c_str() + eq + 1, 1);
             }
         }

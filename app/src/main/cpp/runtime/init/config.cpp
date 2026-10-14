@@ -415,10 +415,14 @@ namespace Vexa::Runtime::Init {
         // /data/local/tmp/perf-<pid>.map so simpleperf can attribute JIT code
         // to guest functions. Enable by creating <files>/fex_jitnames.flag.
         if (::access("/data/data/com.critical.vexaemulator/files/fex_jitnames.flag", F_OK) == 0) {
+            ::setenv("FEX_JIT_SYMBOL_DIR", "/data/data/com.critical.vexaemulator/files", 1);
             FEXCore::Config::Set(FEXCore::Config::CONFIG_BLOCKJITNAMING, "1");
             FEXCore::Config::Set(FEXCore::Config::CONFIG_GLOBALJITNAMING, "1");
-            VEXA_LOGW(env, "FEX", "JIT naming enabled (perf map in /data/local/tmp)", "");
+            VEXA_LOGW(env, "FEX", "JIT naming enabled (perf map in app files)", "");
         }
+
+        ::setenv("VEXA_VK_PROFILE", ::access("/data/data/com.critical.vexaemulator/files/fex_vkprofile.flag", F_OK) == 0 ? "1" : "0", 1);
+        ::setenv("VEXA_VK_MAILBOX", ::access("/data/data/com.critical.vexaemulator/files/fex_vkmailbox.flag", F_OK) == 0 ? "1" : "0", 1);
 
         return {Vexa::Common::Code::Ok, Vexa::Common::Phase::Init,
                 "Config initialized"};

@@ -16,6 +16,8 @@ PAYLOADS = (
     ("aarch64", os.path.join(FEX_BUILD, "HostLibs_64", "libopenal-host.so"), "thunks/host/libopenal-host.so"),
     ("x86_64", os.path.join(FEX_BUILD, "Guest", "libGL-guest.so"), "thunks/guest/libGL-guest.so"),
     ("aarch64", os.path.join(FEX_BUILD, "HostLibs_64", "libGL-host.so"), "thunks/host/libGL-host.so"),
+    ("x86_64", os.path.join(FEX_BUILD, "Guest", "libvulkan-guest.so"), "thunks/guest/libvulkan-guest.so"),
+    ("aarch64", os.path.join(FEX_BUILD, "HostLibs_64", "libvulkan-host.so"), "thunks/host/libvulkan-host.so"),
     ("x86_64", os.path.join(FEX_BUILD, "Guest", "libSDL3-guest.so"), "thunks/guest/libSDL3-guest.so"),
     (
         "x86_64",

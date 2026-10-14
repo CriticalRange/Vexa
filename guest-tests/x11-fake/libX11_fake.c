@@ -299,6 +299,13 @@ static int g_win_y;
 static int g_win_w;
 static int g_win_h;
 static int g_win_valid;
+/* Unity creates a small helper before its game window. Keep their geometry
+   separate so queries on the game window never inherit the helper's size. */
+struct vexa_window_geometry { int x, y, width, height, valid; };
+static struct vexa_window_geometry g_windows[256];
+static struct vexa_window_geometry* vexa_window(Window window) {
+  return window < 256 && g_windows[window].valid ? &g_windows[window] : NULL;
+}
 
 static void vexa_push_configure(Display* dpy, int x, int y, int w, int h) {
   XEvent event;
@@ -711,6 +718,8 @@ static void vexa_init_screen(Display* dpy) {
   g_ready = 1;
 }
 
+#include "unity_native_mode.h"
+
 Display* XOpenDisplay(const char* name) {
   /* Display is a pointer typedef, so sizeof(Display) is 8. Callers that keep
      the handle (Unity reads ScreenOfDisplay(dpy, 0)->width_in_pixels through
@@ -720,6 +729,7 @@ Display* XOpenDisplay(const char* name) {
     return NULL;
   }
   vexa_init_screen(dpy);
+  vexa_unity_native_mode(__builtin_return_address(0));
   dpy->fd = -1;
   {
     int fds[2];
@@ -766,6 +776,7 @@ Window XCreateWindow(Display* dpy, Window parent, int x, int y, unsigned int wid
   (void)attrs;
   vexa_read_window_size();
   win = g_next_window++;
+  if (win < 256) g_windows[win] = (struct vexa_window_geometry){x, y, (int)width, (int)height, 1};
   /* Godot asks for the project size (1920x1080). The published surface is the
      real screen, and a later ConfigureNotify makes Godot adopt it. */
   if (win == 1) {
@@ -1186,10 +1197,11 @@ Status XGetWindowAttributes(Display* dpy, Window window, XWindowAttributes* attr
     return 0;
   }
   memset(attrs, 0, sizeof(*attrs));
-  attrs->x = g_win_valid ? g_win_x : 0;
-  attrs->y = g_win_valid ? g_win_y : 0;
-  attrs->width = g_win_valid && g_win_w > 0 ? g_win_w : g_screen.width;
-  attrs->height = g_win_valid && g_win_h > 0 ? g_win_h : g_screen.height;
+  const struct vexa_window_geometry* geometry = window > 1 ? vexa_window(window) : NULL;
+  attrs->x = geometry ? geometry->x : (g_win_valid ? g_win_x : 0);
+  attrs->y = geometry ? geometry->y : (g_win_valid ? g_win_y : 0);
+  attrs->width = geometry ? geometry->width : (g_win_valid && g_win_w > 0 ? g_win_w : g_screen.width);
+  attrs->height = geometry ? geometry->height : (g_win_valid && g_win_h > 0 ? g_win_h : g_screen.height);
   attrs->depth = 24;
   attrs->visual = &g_visual;
   attrs->class = TrueColor;
@@ -1225,20 +1237,21 @@ Status XGetGeometry(Display* dpy, Drawable drawable, Window* root, int* x, int* 
   (void)dpy;
   (void)drawable;
   vexa_read_window_size();
+  const struct vexa_window_geometry* geometry = drawable > 1 ? vexa_window(drawable) : NULL;
   if (root) {
     *root = 1;
   }
   if (x) {
-    *x = g_win_valid ? g_win_x : 0;
+    *x = geometry ? geometry->x : (g_win_valid ? g_win_x : 0);
   }
   if (y) {
-    *y = g_win_valid ? g_win_y : 0;
+    *y = geometry ? geometry->y : (g_win_valid ? g_win_y : 0);
   }
   if (width) {
-    *width = (unsigned int)(g_win_valid && g_win_w > 0 ? g_win_w : g_screen.width);
+    *width = (unsigned int)(geometry ? geometry->width : (g_win_valid && g_win_w > 0 ? g_win_w : g_screen.width));
   }
   if (height) {
-    *height = (unsigned int)(g_win_valid && g_win_h > 0 ? g_win_h : g_screen.height);
+    *height = (unsigned int)(geometry ? geometry->height : (g_win_valid && g_win_h > 0 ? g_win_h : g_screen.height));
   }
   if (border) {
     *border = 0;
@@ -1250,6 +1263,8 @@ Status XGetGeometry(Display* dpy, Drawable drawable, Window* root, int* x, int* 
 }
 
 int XResizeWindow(Display* dpy, Window window, unsigned int width, unsigned int height) {
+  struct vexa_window_geometry* geometry = vexa_window(window);
+  if (geometry) { geometry->width = (int)width; geometry->height = (int)height; }
   fprintf(stderr, "[VEXA][X11] resize_window w=%lu %ux%u\n", (unsigned long)window, width, height);
   if (window != 1) {
     return 1;
@@ -1263,6 +1278,8 @@ int XResizeWindow(Display* dpy, Window window, unsigned int width, unsigned int 
 }
 
 int XMoveWindow(Display* dpy, Window window, int x, int y) {
+  struct vexa_window_geometry* geometry = vexa_window(window);
+  if (geometry) { geometry->x = x; geometry->y = y; }
   (void)dpy;
   if (window != 1) {
     return 1;
@@ -1537,6 +1554,8 @@ int XGrabPointer(Display* dpy, Window grab_window, Bool owner_events, unsigned i
 }
 
 int XMoveResizeWindow(Display* dpy, Window window, int x, int y, unsigned int width, unsigned int height) {
+  struct vexa_window_geometry* geometry = vexa_window(window);
+  if (geometry) { geometry->x = x; geometry->y = y; geometry->width = (int)width; geometry->height = (int)height; }
   fprintf(stderr, "[VEXA][X11] move_resize_window w=%lu %d,%d %ux%u\n", (unsigned long)window, x, y, width,
           height);
   if (window != 1) {
@@ -1547,6 +1566,13 @@ int XMoveResizeWindow(Display* dpy, Window window, int x, int y, unsigned int wi
 }
 
 int XConfigureWindow(Display* dpy, Window window, unsigned int valuemask, XWindowChanges* values) {
+  struct vexa_window_geometry* geometry = vexa_window(window);
+  if (geometry && values) {
+    if (valuemask & CWX) geometry->x = values->x;
+    if (valuemask & CWY) geometry->y = values->y;
+    if (valuemask & CWWidth) geometry->width = values->width;
+    if (valuemask & CWHeight) geometry->height = values->height;
+  }
   int x = g_win_x;
   int y = g_win_y;
   int w = g_win_w;

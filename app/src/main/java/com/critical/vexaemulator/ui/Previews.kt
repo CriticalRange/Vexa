@@ -30,7 +30,7 @@ private fun ComponentGallery() {
         BrandLogo(size = LogoSize.Medium)
         SectionLabel("Section", trailing = { TinyPill("live", c.success, dot = true) })
         ThemeSegmented(ThemeMode.Dark, { _, _ -> })
-        VexaButton("Run program", {}, Modifier.fillMaxWidth())
+        VexaButton("Start GL Probe", {}, Modifier.fillMaxWidth())
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             SecondaryButton("Configure", {})
             GhostButton("Export", {}, icon = VexaGlyph.Copy)
