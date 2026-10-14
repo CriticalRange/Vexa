@@ -43,7 +43,6 @@ RETURN_ONE = {
     "SteamAPI_ISteamClient_ConnectToGlobalUser", "SteamAPI_ISteamClient_CreateLocalUser",
 }
 STRINGS = {
-    "SteamAPI_ISteamFriends_GetPersonaName": "VEXA",
     "SteamAPI_ISteamApps_GetCurrentGameLanguage": "english",
     "SteamAPI_ISteamApps_GetAvailableGameLanguages": "english",
     "SteamAPI_ISteamUtils_GetIPCountry": "US",
@@ -94,12 +93,15 @@ CUSTOM = {
     "SteamAPI_ManualDispatch_GetNextCallback": (
         "EXPORT int64_t SteamAPI_ManualDispatch_GetNextCallback(int pipe, callback_msg* msg) {"
         " if (!pending_stats) return 0; pending_stats = 0;"
-        " stats_param.game_id = appid(); stats_param.result = 1; stats_param.user = %dULL;"
+        " stats_param.game_id = appid(); stats_param.result = 1; stats_param.user = steam_id();"
         " msg->user = 1; msg->callback = 1101; msg->param = (uint8_t*)&stats_param; msg->size = sizeof(stats_param);"
-        " trace(\"deliver UserStatsReceived_t\"); return 1; }" % FAKE_STEAM_ID
+        " trace(\"deliver UserStatsReceived_t\"); return 1; }"
     ),
     "SteamAPI_ISteamUser_GetSteamID": (
-        "EXPORT uint64_t SteamAPI_ISteamUser_GetSteamID(void* self) { return %dULL; }" % FAKE_STEAM_ID
+        "EXPORT uint64_t SteamAPI_ISteamUser_GetSteamID(void* self) { trace(\"SteamAPI_ISteamUser_GetSteamID\"); return steam_id(); }"
+    ),
+    "SteamAPI_ISteamFriends_GetPersonaName": (
+        "EXPORT const char* SteamAPI_ISteamFriends_GetPersonaName(void* self) { trace(\"SteamAPI_ISteamFriends_GetPersonaName\"); return persona(); }"
     ),
 }
 
@@ -121,14 +123,39 @@ def exports(paths):
     )
 
 
+VTABLES = ["generic", "client", "user", "userstats", "utils", "friends", "apps", "remote",
+           "controller", "matchmaking", "matchservers", "networking", "gameserver", "ugc"]
+WRAP_SLOTS = 128
+
+
+def wrapper_source():
+    out = [f"#define WRAP_SLOTS {WRAP_SLOTS}",
+           f"static void *vt_real[{len(VTABLES)}][WRAP_SLOTS];",
+           "static void trace_slot(const char *iface, int slot) {"
+           " if (!trace_on()) return; char b[96]; int n = snprintf(b, sizeof b, \"[steam-stub] vtable %s[%d]\\n\", iface, slot); write(1, b, n); }"]
+    for k, name in enumerate(VTABLES):
+        for i in range(WRAP_SLOTS):
+            out.append(f"static int64_t w_{name}_{i}(void) {{ trace_slot(\"{name}\", {i}); return ((int64_t (*)(void))vt_real[{k}][{i}])(); }}")
+    out.append("static void wrap_vtables(void) {")
+    for k, name in enumerate(VTABLES):
+        out.append(f" for (int i = 0; i < WRAP_SLOTS; i++) vt_real[{k}][i] = vt_{name}[i];")
+        out.append(" {")
+        for i in range(WRAP_SLOTS):
+            out.append(f"  vt_{name}[{i}] = (void*)w_{name}_{i};")
+        out.append(" }")
+    out.append("}")
+    return out
+
+
 def render(names):
     lines = [
         "#include <stdint.h>",
         "#include <stdlib.h>",
+        "#include <stdio.h>",
         "#include <string.h>",
         "#include <unistd.h>",
         "static int trace_on(void) { static int on = -1; if (on < 0) on = getenv(\"VEXA_STEAM_TRACE\") != 0; return on; }",
-        "static void trace(const char* n) { if (trace_on()) { write(2, \"[steam-stub] \", 13); write(2, n, strlen(n)); write(2, \"\\n\", 1); } }",
+        "static void trace(const char* n) { if (trace_on() && strcmp(n, \"SteamAPI_ManualDispatch_RunFrame\") && strcmp(n, \"SteamAPI_GetHSteamPipe\")) { write(1, \"[steam-stub] \", 13); write(1, n, strlen(n)); write(1, \"\\n\", 1); } }",
         "static char dummy_object[8192] __attribute__((aligned(16)));",
         "typedef struct { int32_t user; int32_t callback; uint8_t* param; int32_t size; } callback_msg;",
         "typedef struct __attribute__((packed, aligned(4))) { uint64_t game_id; int32_t result; uint64_t user; } stats_received;",
@@ -138,10 +165,12 @@ def render(names):
         "static int64_t vret0(void) { return 0; }",
         "static int64_t vret1(void) { return 1; }",
         "static int64_t vret_ff(void) { return 255; }",
-        "static uint64_t vret_steamid(void) { return %dULL; }" % FAKE_STEAM_ID,
+        "static uint64_t steam_id(void) { const char* v = getenv(\"VEXA_STEAM_ID\"); uint64_t id = v ? strtoull(v, 0, 10) : 0; return id ? id : %dULL; }" % FAKE_STEAM_ID,
+        "static const char *persona(void) { const char* v = getenv(\"VEXA_STEAM_PERSONA\"); return v && *v ? v : \"VEXA\"; }",
+        "static uint64_t vret_steamid(void) { return steam_id(); }",
         "static int64_t vret_appid(void) { return appid(); }",
         "static const char *vret_empty(void) { return \"\"; }",
-        "static const char *vret_name(void) { return \"VEXA\"; }",
+        "static const char *vret_name(void) { return persona(); }",
         "static const char *vret_lang(void) { return \"english\"; }",
         "static const char *vret_country(void) { return \"US\"; }",
         "#define VT_COUNT 512",
@@ -174,6 +203,7 @@ def render(names):
         "static void *obj_gameserver[1];",
         "static void *obj_ugc[1];",
         "static int vt_ready;",
+        *wrapper_source(),
         "static void vfill(void **vt) { int i; for (i = 0; i < VT_COUNT; i++) vt[i] = (void*)vret0; }",
         "static void init_vtables(void) {",
         " if (vt_ready) return; vt_ready = 1;",
@@ -195,7 +225,7 @@ def render(names):
         " obj_userstats[0] = vt_userstats; obj_utils[0] = vt_utils; obj_friends[0] = vt_friends;",
         " obj_apps[0] = vt_apps; obj_remote[0] = vt_remote; obj_controller[0] = vt_controller;",
         " obj_matchmaking[0] = vt_matchmaking; obj_matchservers[0] = vt_matchservers;",
-        " obj_networking[0] = vt_networking; obj_gameserver[0] = vt_gameserver; obj_ugc[0] = vt_ugc; }",
+        " obj_networking[0] = vt_networking; obj_gameserver[0] = vt_gameserver; obj_ugc[0] = vt_ugc; wrap_vtables(); }",
         "static void *fake_interface_for_version(const char *v) {",
         " init_vtables(); if (!v) return obj_generic;",
         " if (strstr(v, \"UserStats\") || strstr(v, \"USERSTATS\")) return obj_userstats;",

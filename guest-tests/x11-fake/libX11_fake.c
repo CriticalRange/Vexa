@@ -34,6 +34,13 @@ static int g_pointer_y;
 static unsigned int g_pointer_state;
 static int g_pointer_logs;
 static Window g_input_window = 1;
+static int g_focus_sent_win = 0;
+static int g_input_selected = 0;
+static int g_warp_x = 0;
+static int g_warp_y = 0;
+static int g_last_touch_x = -1;
+static int g_last_touch_y = -1;
+static Time g_last_event_time = 100;
 static off_t g_pointer_off;
 static int g_map[10];
 static int g_map_on;
@@ -43,6 +50,19 @@ static unsigned int g_mod_state;
 static int g_keys_ready;
 static volatile int g_lock;
 
+static Time vexa_next_time(void) {
+  struct timespec ts;
+  Time now = 0;
+  if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0) {
+    now = (Time)(ts.tv_sec * 1000UL + ts.tv_nsec / 1000000UL);
+  }
+  if (now <= g_last_event_time) {
+    now = g_last_event_time + 1;
+  }
+  g_last_event_time = now;
+  return now;
+}
+
 /* X keycodes match the evdev map in libxkbcommon_x11_fake.c. SDL and Godot
    look these up by keycode, so ASCII (W = 119) is not a valid W. */
 static const struct {
@@ -50,6 +70,18 @@ static const struct {
   KeySym sym;
 } k_key_table[] = {
     {9, 0xff1b},   /* Escape */
+    {10, 0x31},    /* 1 */
+    {11, 0x32},    /* 2 */
+    {12, 0x33},    /* 3 */
+    {13, 0x34},    /* 4 */
+    {14, 0x35},    /* 5 */
+    {15, 0x36},    /* 6 */
+    {16, 0x37},    /* 7 */
+    {17, 0x38},    /* 8 */
+    {18, 0x39},    /* 9 */
+    {19, 0x30},    /* 0 */
+    {20, 0x2d},    /* minus */
+    {21, 0x3d},    /* equal */
     {22, 0xff08},  /* BackSpace */
     {23, 0xff09},  /* Tab */
     {24, 0x71},    /* q */
@@ -62,6 +94,8 @@ static const struct {
     {31, 0x69},    /* i */
     {32, 0x6f},    /* o */
     {33, 0x70},    /* p */
+    {34, 0x5b},    /* bracketleft */
+    {35, 0x5d},    /* bracketright */
     {36, 0xff0d},  /* Return */
     {37, 0xffe3},  /* Control_L */
     {38, 0x61},    /* a */
@@ -73,7 +107,11 @@ static const struct {
     {44, 0x6a},    /* j */
     {45, 0x6b},    /* k */
     {46, 0x6c},    /* l */
+    {47, 0x3b},    /* semicolon */
+    {48, 0x27},    /* apostrophe */
+    {49, 0x60},    /* grave */
     {50, 0xffe1},  /* Shift_L */
+    {51, 0x5c},    /* backslash */
     {52, 0x7a},    /* z */
     {53, 0x78},    /* x */
     {54, 0x63},    /* c */
@@ -81,15 +119,37 @@ static const struct {
     {56, 0x62},    /* b */
     {57, 0x6e},    /* n */
     {58, 0x6d},    /* m */
+    {59, 0x2c},    /* comma */
+    {60, 0x2e},    /* period */
+    {61, 0x2f},    /* slash */
     {62, 0xffe2},  /* Shift_R */
     {64, 0xffe9},  /* Alt_L */
     {65, 0x20},    /* space */
+    {66, 0xffe5},  /* Caps_Lock */
+    {67, 0xffbe},  /* F1 */
+    {68, 0xffbf},  /* F2 */
+    {69, 0xffc0},  /* F3 */
+    {70, 0xffc1},  /* F4 */
+    {71, 0xffc2},  /* F5 */
+    {72, 0xffc3},  /* F6 */
+    {73, 0xffc4},  /* F7 */
+    {74, 0xffc5},  /* F8 */
+    {75, 0xffc6},  /* F9 */
+    {76, 0xffc7},  /* F10 */
+    {95, 0xffc8},  /* F11 */
+    {96, 0xffc9},  /* F12 */
     {105, 0xffe4}, /* Control_R */
     {108, 0xffea}, /* Alt_R */
+    {110, 0xff50}, /* Home */
     {111, 0xff52}, /* Up */
+    {112, 0xff55}, /* Prior (Page_Up) */
     {113, 0xff51}, /* Left */
     {114, 0xff53}, /* Right */
+    {115, 0xff57}, /* End */
     {116, 0xff54}, /* Down */
+    {117, 0xff56}, /* Next (Page_Down) */
+    {118, 0xff63}, /* Insert */
+    {119, 0xffff}, /* Delete */
 };
 
 #define VEXA_Q 64
@@ -203,8 +263,19 @@ static int vexa_event_matches(const XEvent* event, long mask, Window window, int
       return (mask & KeyPressMask) != 0;
     case KeyRelease:
       return (mask & KeyReleaseMask) != 0;
+    case EnterNotify:
+      return (mask & EnterWindowMask) != 0;
+    case LeaveNotify:
+      return (mask & LeaveWindowMask) != 0;
+    case FocusIn:
+    case FocusOut:
+      return (mask & FocusChangeMask) != 0;
+    case MapNotify:
+    case UnmapNotify:
     case ConfigureNotify:
-      return (mask & StructureNotifyMask) != 0;
+      return (mask & (StructureNotifyMask | SubstructureNotifyMask)) != 0;
+    case PropertyNotify:
+      return (mask & PropertyChangeMask) != 0;
     case Expose:
       return (mask & ExposureMask) != 0;
     default:
@@ -276,8 +347,8 @@ static void vexa_enqueue_configure(Display* dpy) {
   memset(&event, 0, sizeof(event));
   event.type = ConfigureNotify;
   event.xconfigure.display = dpy;
-  event.xconfigure.window = 1;
-  event.xconfigure.event = 1;
+  event.xconfigure.window = g_input_window;
+  event.xconfigure.event = g_input_window;
   event.xconfigure.x = 0;
   event.xconfigure.y = 0;
   event.xconfigure.width = g_screen.width;
@@ -307,8 +378,11 @@ static struct vexa_window_geometry* vexa_window(Window window) {
   return window < 256 && g_windows[window].valid ? &g_windows[window] : NULL;
 }
 
-static void vexa_push_configure(Display* dpy, int x, int y, int w, int h) {
+static void vexa_push_configure_win(Display* dpy, Window win, int x, int y, int w, int h) {
   XEvent event;
+  if (win == 0) {
+    win = g_input_window;
+  }
   /* SDL only emits SDL_WINDOWEVENT_MOVED (which is what Unity listens to for
      refreshing Screen.resolutions / the native desktop resolution cache) when
      the reported position actually changes from its zero-initialized tracking
@@ -326,8 +400,8 @@ static void vexa_push_configure(Display* dpy, int x, int y, int w, int h) {
   memset(&event, 0, sizeof(event));
   event.type = ConfigureNotify;
   event.xconfigure.display = dpy;
-  event.xconfigure.window = 1;
-  event.xconfigure.event = 1;
+  event.xconfigure.window = win;
+  event.xconfigure.event = win;
   event.xconfigure.x = x;
   event.xconfigure.y = y;
   event.xconfigure.width = w;
@@ -338,21 +412,65 @@ static void vexa_push_configure(Display* dpy, int x, int y, int w, int h) {
   vexa_q_push(&event);
 }
 
-static void vexa_push_map(Display* dpy, int mapped) {
+static void vexa_push_configure(Display* dpy, int x, int y, int w, int h) {
+  vexa_push_configure_win(dpy, g_input_window, x, y, w, h);
+}
+
+static void vexa_push_map_win(Display* dpy, Window win, int mapped) {
   XEvent event;
+  if (win == 0) {
+    win = g_input_window;
+  }
   memset(&event, 0, sizeof(event));
   event.type = mapped ? MapNotify : UnmapNotify;
   if (mapped) {
     event.xmap.display = dpy;
-    event.xmap.window = 1;
-    event.xmap.event = 1;
+    event.xmap.window = win;
+    event.xmap.event = win;
     event.xmap.override_redirect = False;
   } else {
     event.xunmap.display = dpy;
-    event.xunmap.window = 1;
-    event.xunmap.event = 1;
+    event.xunmap.window = win;
+    event.xunmap.event = win;
   }
   vexa_q_push(&event);
+}
+
+static void vexa_push_map(Display* dpy, int mapped) {
+  vexa_push_map_win(dpy, g_input_window, mapped);
+}
+
+static void vexa_push_focus(Display* dpy, Window win) {
+  XEvent event;
+  if (win == 0) {
+    win = g_input_window;
+  }
+  memset(&event, 0, sizeof(event));
+  event.type = EnterNotify;
+  event.xcrossing.display = dpy;
+  event.xcrossing.window = win;
+  event.xcrossing.root = 1;
+  event.xcrossing.subwindow = None;
+  event.xcrossing.time = vexa_next_time();
+  event.xcrossing.x = g_pointer_x;
+  event.xcrossing.y = g_pointer_y;
+  event.xcrossing.x_root = g_pointer_x;
+  event.xcrossing.y_root = g_pointer_y;
+  event.xcrossing.mode = NotifyNormal;
+  event.xcrossing.detail = NotifyNonlinear;
+  event.xcrossing.same_screen = True;
+  event.xcrossing.focus = True;
+  event.xcrossing.state = g_pointer_state | g_mod_state;
+  vexa_q_push(&event);
+
+  memset(&event, 0, sizeof(event));
+  event.type = FocusIn;
+  event.xfocus.display = dpy;
+  event.xfocus.window = win;
+  event.xfocus.mode = NotifyNormal;
+  event.xfocus.detail = NotifyNonlinear;
+  vexa_q_push(&event);
+  g_focus_sent_win = (int)win;
 }
 
 static void vexa_push_property(Display* dpy, Atom atom, int state) {
@@ -360,10 +478,10 @@ static void vexa_push_property(Display* dpy, Atom atom, int state) {
   memset(&event, 0, sizeof(event));
   event.type = PropertyNotify;
   event.xproperty.display = dpy;
-  event.xproperty.window = 1;
+  event.xproperty.window = g_input_window;
   event.xproperty.atom = atom;
   event.xproperty.state = state;
-  event.xproperty.time = 1;
+  event.xproperty.time = vexa_next_time();
   vexa_q_push(&event);
 }
 
@@ -399,7 +517,10 @@ static void vexa_configure(Display* dpy, int x, int y, int w, int h) {
   g_win_h = h;
   g_win_valid = 1;
   fprintf(stderr, "[VEXA][X11] win_configure %d,%d %dx%d\n", x, y, w, h);
-  vexa_push_configure(dpy, x, y, w, h);
+  vexa_push_configure_win(dpy, g_input_window, x, y, w, h);
+  if (g_focus_sent_win != (int)g_input_window) {
+    vexa_push_focus(dpy, g_input_window);
+  }
 }
 
 static void vexa_read_present(void) {
@@ -559,7 +680,12 @@ static void vexa_fill_key(XEvent* event, Display* dpy, int type, KeySym sym, uns
   event->xkey.display = dpy;
   event->xkey.window = g_input_window;
   event->xkey.root = 1;
-  event->xkey.state = state | g_mod_state;
+  event->xkey.time = vexa_next_time();
+  event->xkey.x = g_pointer_x;
+  event->xkey.y = g_pointer_y;
+  event->xkey.x_root = g_pointer_x;
+  event->xkey.y_root = g_pointer_y;
+  event->xkey.state = (state & 0x00ffffffu) | g_mod_state;
   event->xkey.keycode = vexa_code_for_sym(sym);
   event->xkey.same_screen = True;
 }
@@ -580,7 +706,7 @@ static int vexa_lookup_key(XKeyEvent* event, char* buffer, int bytes, KeySym* ke
 }
 
 static unsigned int vexa_pointer_button(int state) {
-  unsigned int button = ((unsigned int)state >> 24) & 0xffu;
+  unsigned int button = ((unsigned int)state >> 24) & 0x3fu;
   if (button < 1 || button > 5) {
     return 1;
   }
@@ -593,6 +719,7 @@ static void vexa_fill_pointer(XEvent* event, Display* dpy, int type, int x, int 
   event->xbutton.display = dpy;
   event->xbutton.window = g_input_window;
   event->xbutton.root = 1;
+  event->xbutton.time = vexa_next_time();
   event->xbutton.x = x;
   event->xbutton.y = y;
   event->xbutton.x_root = x;
@@ -607,6 +734,9 @@ static void vexa_fill_pointer(XEvent* event, Display* dpy, int type, int x, int 
     event->xbutton.same_screen = True;
   }
 }
+
+static int g_warp_mode = 0;
+static int g_warp_centered = 0;
 
 static void vexa_poll_pointer(Display* dpy) {
   unsigned char buf[16];
@@ -647,8 +777,8 @@ static void vexa_poll_pointer(Display* dpy) {
       vexa_note_key(event.xkey.keycode, type == KeyPress);
       if (g_pointer_logs < 8) {
         g_pointer_logs++;
-        fprintf(stderr, "[VEXA][X11] key %s sym=0x%x code=%u\n", type == KeyPress ? "down" : "up", (unsigned)x,
-                event.xkey.keycode);
+        fprintf(stderr, "[VEXA][X11] key %s sym=0x%x code=%u win=%lu\n", type == KeyPress ? "down" : "up", (unsigned)x,
+                event.xkey.keycode, (unsigned long)event.xkey.window);
       }
       vexa_q_push_locked(&event);
       got++;
@@ -658,15 +788,45 @@ static void vexa_poll_pointer(Display* dpy) {
       continue;
     }
     {
-      int raw_x = (int)x;
-      int raw_y = (int)y;
+      int synth = (((uint32_t)state & 0x40000000u) != 0);
+      int raw_x = synth && type == MotionNotify ? (int)(uint16_t)((uint32_t)x & 0xffffu) : (int)x;
+      int raw_y = synth && type == MotionNotify ? (int)(uint16_t)((uint32_t)y & 0xffffu) : (int)y;
+      int rel_dx = synth && type == MotionNotify ? (int)(int16_t)((uint32_t)x >> 16) : 0;
+      int rel_dy = synth && type == MotionNotify ? (int)(int16_t)((uint32_t)y >> 16) : 0;
       int mx = raw_x;
       int my = raw_y;
       vexa_map_pointer(&mx, &my);
+      if (!synth) {
+        if (type == ButtonPress) {
+          g_last_touch_x = mx;
+          g_last_touch_y = my;
+        } else if (type == MotionNotify) {
+          if (g_last_touch_x >= 0 && g_last_touch_y >= 0) {
+            rel_dx = mx - g_last_touch_x;
+            rel_dy = my - g_last_touch_y;
+          }
+          g_last_touch_x = mx;
+          g_last_touch_y = my;
+        } else if (type == ButtonRelease) {
+          g_last_touch_x = -1;
+          g_last_touch_y = -1;
+        }
+      }
+      if (type == MotionNotify && synth && g_warp_mode > 0 && g_warp_centered) {
+        XEvent center_ev;
+        if (rel_dx == 0 && rel_dy == 0) {
+          continue;
+        }
+        g_warp_mode--;
+        vexa_fill_pointer(&center_ev, dpy, MotionNotify, g_warp_x, g_warp_y, (int)state);
+        vexa_q_push_locked(&center_ev);
+        mx = g_warp_x + rel_dx;
+        my = g_warp_y + rel_dy;
+      }
       vexa_fill_pointer(&event, dpy, (int)type, mx, my, (int)state);
       g_pointer_x = mx;
       g_pointer_y = my;
-      g_pointer_state = (unsigned int)state;
+      g_pointer_state = (unsigned int)state & 0x00ffffffu;
       if (type == ButtonPress && g_pointer_logs < 8) {
         g_pointer_logs++;
         fprintf(stderr, "[VEXA][X11] pointer press raw %d,%d -> %d,%d state=%d\n", raw_x, raw_y, mx, my, (int)state);
@@ -728,6 +888,7 @@ Display* XOpenDisplay(const char* name) {
   if (!dpy) {
     return NULL;
   }
+  setenv("SDL_MOUSE_RELATIVE_MODE_WARP", "1", 0);
   vexa_init_screen(dpy);
   vexa_unity_native_mode(__builtin_return_address(0));
   dpy->fd = -1;
@@ -779,7 +940,7 @@ Window XCreateWindow(Display* dpy, Window parent, int x, int y, unsigned int wid
   if (win < 256) g_windows[win] = (struct vexa_window_geometry){x, y, (int)width, (int)height, 1};
   /* Godot asks for the project size (1920x1080). The published surface is the
      real screen, and a later ConfigureNotify makes Godot adopt it. */
-  if (win == 1) {
+  if (win == 1 || (width > 32 && height > 32)) {
     if (!g_published && width > 1 && height > 1) {
       g_screen.width = (int)width;
       g_screen.height = (int)height;
@@ -789,6 +950,9 @@ Window XCreateWindow(Display* dpy, Window parent, int x, int y, unsigned int wid
     g_win_w = (int)width;
     g_win_h = (int)height;
     g_win_valid = 1;
+  }
+  if (!g_input_selected && width > 32 && height > 32) {
+    g_input_window = win;
   }
   fprintf(stderr, "[VEXA][X11] create_window -> %lu at %d,%d %ux%u depth=%d\n", (unsigned long)win, x, y, width, height,
           depth);
@@ -814,12 +978,17 @@ Colormap XCreateColormap(Display* dpy, Window window, Visual* visual, int alloc)
 }
 
 int XMapWindow(Display* dpy, Window window) {
+  struct vexa_window_geometry* geom = vexa_window(window);
+  int cfg_w = (g_published && g_screen.width > 1) ? g_screen.width : (geom && geom->width > 1 ? geom->width : (g_win_w > 1 ? g_win_w : g_screen.width));
+  int cfg_h = (g_published && g_screen.height > 1) ? g_screen.height : (geom && geom->height > 1 ? geom->height : (g_win_h > 1 ? g_win_h : g_screen.height));
   fprintf(stderr, "[VEXA][X11] map_window %lu\n", (unsigned long)window);
-  if (window == 1) {
-    int cfg_w = (g_published && g_screen.width > 1) ? g_screen.width : (g_win_w > 1 ? g_win_w : g_screen.width);
-    int cfg_h = (g_published && g_screen.height > 1) ? g_screen.height : (g_win_h > 1 ? g_win_h : g_screen.height);
-    vexa_push_map(dpy, 1);
-    vexa_push_configure(dpy, g_published ? 0 : g_win_x, g_published ? 0 : g_win_y, cfg_w, cfg_h);
+  if (window >= 1) {
+    if (!g_input_selected && geom && geom->width > 32 && geom->height > 32) {
+      g_input_window = window;
+    }
+    vexa_push_map_win(dpy, window, 1);
+    vexa_push_configure_win(dpy, window, g_published ? 0 : g_win_x, g_published ? 0 : g_win_y, cfg_w, cfg_h);
+    vexa_push_focus(dpy, window);
   }
   return 1;
 }
@@ -887,8 +1056,7 @@ int XWithdrawWindow(Display* dpy, Window window, int screen) {
 }
 
 int XUnmapWindow(Display* dpy, Window window) {
-  (void)window;
-  vexa_push_map(dpy, 0);
+  vexa_push_map_win(dpy, window, 0);
   return 1;
 }
 
@@ -909,7 +1077,7 @@ static void vexa_expose(XEvent* event) {
   }
   memset(event, 0, sizeof(*event));
   event->type = Expose;
-  event->xexpose.window = 1;
+  event->xexpose.window = g_input_window;
   event->xexpose.width = g_screen.width;
   event->xexpose.height = g_screen.height;
   event->xexpose.count = 0;
@@ -991,6 +1159,9 @@ int XPending(Display* dpy) {
       vexa_configure(dpy, 0, 0, g_screen.width, g_screen.height);
     }
   }
+  if (g_focus_sent_win != (int)g_input_window) {
+    vexa_push_focus(dpy, g_input_window);
+  }
   vexa_poll_input(dpy);
   return vexa_q_count_of();
 }
@@ -1024,8 +1195,14 @@ int XChangeProperty(Display* dpy, Window window, Atom property, Atom type, int f
   (void)format;
   (void)mode;
   (void)data;
-  fprintf(stderr, "[VEXA][X11] change_property w=%lu prop=%lu n=%d\n", (unsigned long)window,
-          (unsigned long)property, nelements);
+  {
+    static int logged;
+    if (logged < 16) {
+      logged++;
+      fprintf(stderr, "[VEXA][X11] change_property w=%lu prop=%lu n=%d\n", (unsigned long)window,
+              (unsigned long)property, nelements);
+    }
+  }
   vexa_push_property(dpy, property, PropertyNewValue);
   return 1;
 }
@@ -1207,8 +1384,14 @@ Status XGetWindowAttributes(Display* dpy, Window window, XWindowAttributes* attr
   attrs->class = TrueColor;
   attrs->map_state = IsViewable;
   attrs->screen = &g_screen;
-  fprintf(stderr, "[VEXA][X11] get_window_attributes w=%lu -> %dx%d (screen %dx%d)\n", (unsigned long)window,
-          attrs->width, attrs->height, g_screen.width, g_screen.height);
+  {
+    static int logged;
+    if (logged < 16) {
+      logged++;
+      fprintf(stderr, "[VEXA][X11] get_window_attributes w=%lu -> %dx%d (screen %dx%d)\n", (unsigned long)window,
+              attrs->width, attrs->height, g_screen.width, g_screen.height);
+    }
+  }
   return 1;
 }
 
@@ -1225,8 +1408,10 @@ int XGetInputFocus(Display* dpy, Window* focus, int* revert_to) {
 }
 
 int XSetInputFocus(Display* dpy, Window window, int revert_to, Time time) {
-  (void)dpy;
-  if (window > PointerRoot) g_input_window = window;
+  if (window > PointerRoot) {
+    g_input_window = window;
+    vexa_push_focus(dpy, window);
+  }
   (void)revert_to;
   (void)time;
   return 0;
@@ -1266,7 +1451,7 @@ int XResizeWindow(Display* dpy, Window window, unsigned int width, unsigned int 
   struct vexa_window_geometry* geometry = vexa_window(window);
   if (geometry) { geometry->width = (int)width; geometry->height = (int)height; }
   fprintf(stderr, "[VEXA][X11] resize_window w=%lu %ux%u\n", (unsigned long)window, width, height);
-  if (window != 1) {
+  if (window != 1 && window != g_input_window) {
     return 1;
   }
   if (!g_published && width > 1 && height > 1) {
@@ -1281,7 +1466,7 @@ int XMoveWindow(Display* dpy, Window window, int x, int y) {
   struct vexa_window_geometry* geometry = vexa_window(window);
   if (geometry) { geometry->x = x; geometry->y = y; }
   (void)dpy;
-  if (window != 1) {
+  if (window != 1 && window != g_input_window) {
     return 1;
   }
   if (!g_published) {
@@ -1292,10 +1477,11 @@ int XMoveWindow(Display* dpy, Window window, int x, int y) {
 }
 
 int XSelectInput(Display* dpy, Window window, long mask) {
-  (void)dpy;
-  if (mask & (KeyPressMask | KeyReleaseMask | ButtonPressMask | ButtonReleaseMask | PointerMotionMask)) {
+  if (mask & (KeyPressMask | KeyReleaseMask | ButtonPressMask | ButtonReleaseMask | PointerMotionMask | FocusChangeMask)) {
     g_input_window = window;
+    g_input_selected = 1;
     fprintf(stderr, "[VEXA][X11] input_window=%lu mask=0x%lx\n", window, mask);
+    vexa_push_focus(dpy, window);
   }
   return 1;
 }
@@ -1303,7 +1489,7 @@ int XSelectInput(Display* dpy, Window window, long mask) {
 static int g_clear_configured = 0;
 
 int XClearWindow(Display* dpy, Window window) {
-  if (window == 1 && !g_clear_configured && g_published && g_screen.width > 1 && g_screen.height > 1) {
+  if ((window == 1 || window == g_input_window) && !g_clear_configured && g_published && g_screen.width > 1 && g_screen.height > 1) {
     g_clear_configured = 1;
     vexa_configure(dpy, 0, 0, g_screen.width, g_screen.height);
   }
@@ -1558,7 +1744,7 @@ int XMoveResizeWindow(Display* dpy, Window window, int x, int y, unsigned int wi
   if (geometry) { geometry->x = x; geometry->y = y; geometry->width = (int)width; geometry->height = (int)height; }
   fprintf(stderr, "[VEXA][X11] move_resize_window w=%lu %d,%d %ux%u\n", (unsigned long)window, x, y, width,
           height);
-  if (window != 1) {
+  if (window != 1 && window != g_input_window) {
     return 1;
   }
   vexa_configure(dpy, x, y, (int)width, (int)height);
@@ -1592,14 +1778,29 @@ int XConfigureWindow(Display* dpy, Window window, unsigned int valuemask, XWindo
     }
   }
   fprintf(stderr, "[VEXA][X11] configure_window w=%lu %d,%d %dx%d\n", (unsigned long)window, x, y, w, h);
-  if (window != 1) {
+  if (window != 1 && window != g_input_window) {
     return 1;
   }
   vexa_configure(dpy, x, y, w, h);
   return 1;
 }
 
+/* Unity embeds SDL2. With XI2 present SDL waits for XI_RawMotion generic events
+   in relative-mouse mode, which this fake never produces, so camera look is dead.
+   Hiding XI2 from UnityPlayer.so makes SDL fall back to warp-based relative mode,
+   which the MotionNotify/XWarpPointer path above feeds. */
+static int vexa_caller_is_unity(void* caller) {
+  Dl_info module;
+  const char* name;
+  if (!dladdr(caller, &module) || !module.dli_fname) {
+    return 0;
+  }
+  name = strrchr(module.dli_fname, '/');
+  return strcmp(name ? name + 1 : module.dli_fname, "UnityPlayer.so") == 0;
+}
+
 Bool XQueryExtension(Display* dpy, const char* name, int* major, int* event, int* error) {
+  int unity = vexa_caller_is_unity(__builtin_return_address(0));
   (void)dpy;
   if (major) {
     *major = 0;
@@ -1614,7 +1815,7 @@ Bool XQueryExtension(Display* dpy, const char* name, int* major, int* event, int
   // stay absent so their reply structs are never read. RANDR and XINERAMA are
   // backed by the fake client libs, so report them present for clients that
   // gate display enumeration on XQueryExtension.
-  if (name && strcmp(name, "XInputExtension") == 0) {
+  if (name && !unity && strcmp(name, "XInputExtension") == 0) {
     if (major) {
       *major = 131;
     }
@@ -1733,6 +1934,7 @@ int XUndefineCursor(Display* dpy, Window window) {
 int XUngrabPointer(Display* dpy, Time time) {
   (void)dpy;
   (void)time;
+  g_warp_mode = 0;
   return 1;
 }
 
@@ -1745,15 +1947,37 @@ int XUnionRectWithRegion(XRectangle* rectangle, Region src, Region dest) {
 
 int XWarpPointer(Display* dpy, Window src, Window dest, int src_x, int src_y, unsigned int src_width, unsigned int src_height, int dest_x,
                  int dest_y) {
-  (void)dpy;
+  XEvent event;
+  Window target = dest ? dest : g_input_window;
+  const struct vexa_window_geometry* geom = dest > 1 ? vexa_window(dest) : NULL;
+  int wx = dest_x;
+  int wy = dest_y;
   (void)src;
-  (void)dest;
   (void)src_x;
   (void)src_y;
   (void)src_width;
   (void)src_height;
-  (void)dest_x;
-  (void)dest_y;
+  if (geom && geom->width <= 2 && geom->height <= 2 && dest_x == 0 && dest_y == 0) {
+    wx = g_screen.width > 1 ? g_screen.width / 2 : 0;
+    wy = g_screen.height > 1 ? g_screen.height / 2 : 0;
+  }
+  {
+    static int logged;
+    if (logged < 4) {
+      logged++;
+      fprintf(stderr, "[VEXA][X11] warp_pointer -> %d,%d (eff %d,%d)\n", dest_x, dest_y, wx, wy);
+    }
+  }
+  g_warp_x = wx;
+  g_warp_y = wy;
+  /* Only a warp to the window centre is SDL's relative-look emulation. */
+  g_warp_centered = abs(wx - g_screen.width / 2) <= 2 && abs(wy - g_screen.height / 2) <= 2;
+  g_warp_mode = g_warp_centered ? 4 : 0;
+  g_pointer_x = wx;
+  g_pointer_y = wy;
+  vexa_fill_pointer(&event, dpy, MotionNotify, wx, wy, (int)g_pointer_state);
+  event.xmotion.window = target;
+  vexa_q_push(&event);
   return 1;
 }
 

@@ -1,0 +1,119 @@
+[VEXA][CRASH] crash.log format=1 pid=11624
+[VEXA][CRASH] note=awaiting-fault
+[VEXA][CRASH] handled_fixup count=1 signal=7
+[VEXA][CRASH] signal_name=SIGBUS
+[VEXA][CRASH] crash_seq=1
+[VEXA][CRASH] === crash dump begin ===
+[VEXA][CRASH] origin=early-thunk
+[VEXA][CRASH] pid=11624 tid=11827
+[VEXA][CRASH] signal=11 si_code=1 fault_addr=0x0000000000000000
+[VEXA][CRASH] signal_name=SIGSEGV
+[VEXA][CRASH] probable reason=null_deref_or_null_fnptr
+[VEXA][CRASH] host_pc=0x000000730b0b9bd8
+[VEXA][CRASH] host_lr=0x000000730b0b9918
+[VEXA][CRASH] host_sp=0x0000007321669fe0
+[VEXA][CRASH] host_x0=0x000000730b0b9bc0
+[VEXA][CRASH] host_x1=0x000000730b0b9bc4
+[VEXA][CRASH] host_x2=0xb4000074a2b24b70
+[VEXA][CRASH] host_x3=0xb4000074a2b24b90
+[VEXA][CRASH] host_x4=0x00000073758a0190
+[VEXA][CRASH] host_x5=0x000000730a9660d4
+[VEXA][CRASH] host_x6=0x000000730a9667a0
+[VEXA][CRASH] host_x7=0x000000730a9660d4
+[VEXA][CRASH] host_x8=0x000000730a966068
+[VEXA][CRASH] alt_sp=0x0000007704775008
+[VEXA][CRASH] alt_size=0x000000000003fff8
+[VEXA][CRASH] host_pc_insn=0x0000000038bfc164
+[VEXA][CRASH] host_lr_insn=0x000000009400006c
+[VEXA][CRASH] === crash dump end ===
+[VEXA][CRASH] === crash dump begin ===
+[VEXA][CRASH] origin=fex-host-handler
+[VEXA][CRASH] crash_seq=1
+[VEXA][CRASH] pid=11624 tid=11827
+[VEXA][CRASH] signal=11 si_code=1 fault_addr=0x0000000000000000
+[VEXA][CRASH] signal_name=SIGSEGV
+[VEXA][CRASH] probable reason=null_deref_or_null_fnptr
+[VEXA][CRASH] host_pc=0x000000730b0b9bd8
+[VEXA][CRASH] host_lr=0x000000730b0b9918
+[VEXA][CRASH] host_sp=0x0000007321669fe0
+[VEXA][CRASH] host_x0=0x000000730b0b9bc0
+[VEXA][CRASH] host_x1=0x000000730b0b9bc4
+[VEXA][CRASH] host_x2=0xb4000074a2b24b70
+[VEXA][CRASH] host_x3=0xb4000074a2b24b90
+[VEXA][CRASH] host_x4=0x00000073758a0190
+[VEXA][CRASH] host_x5=0x000000730a9660d4
+[VEXA][CRASH] host_x6=0x000000730a9667a0
+[VEXA][CRASH] host_x7=0x000000730a9660d4
+[VEXA][CRASH] host_x8=0x000000730a966068
+[VEXA][CRASH] alt_sp=0x0000007704775008
+[VEXA][CRASH] alt_size=0x000000000003fff8
+[VEXA][CRASH] host_pc_insn=0x0000000038bfc164
+[VEXA][CRASH] host_lr_insn=0x000000009400006c
+[VEXA][CRASH] guest_rip=0x00000076f5b7d000
+[VEXA][CRASH] guest_rsp=0x000000730a9660e8
+[VEXA][CRASH] guest_rbp=0x000000730a966110
+[VEXA][CRASH] guest_rax=0x0000000000000000
+[VEXA][CRASH] guest_rcx=0x0000000000001f01
+[VEXA][CRASH] guest_rdx=0x0000000000001f02
+[VEXA][CRASH] guest_rsi=0x0000007322653ce8
+[VEXA][CRASH] guest_rdi=0x0000000000000000
+[VEXA][CRASH] in_syscall_info=0x0000000000000000
+[VEXA][CRASH] === crash dump end ===
+[VEXA][CRASH] crash_seq=2
+[VEXA][CRASH] === crash dump begin ===
+[VEXA][CRASH] origin=early-thunk
+[VEXA][CRASH] pid=11624 tid=11827
+[VEXA][CRASH] signal=11 si_code=-6 fault_addr=0x000028a100002d68
+[VEXA][CRASH] signal_name=SIGSEGV
+[VEXA][CRASH] probable reason=segv_other
+[VEXA][CRASH] host_pc=0x0000007323c6d8e8
+[VEXA][CRASH] host_lr=0x000000730b3a21c4
+[VEXA][CRASH] host_sp=0x00000073216695a0
+[VEXA][CRASH] host_x0=0x0000000000000000
+[VEXA][CRASH] host_x1=0x0000000000002e33
+[VEXA][CRASH] host_x2=0x000000000000000b
+[VEXA][CRASH] host_x3=0x000000000000000b
+[VEXA][CRASH] host_x4=0x0000007323c6d8d4
+[VEXA][CRASH] host_x5=0x000000000000000b
+[VEXA][CRASH] host_x6=0x0000000000002e33
+[VEXA][CRASH] host_x7=0x0000007301eccb1c
+[VEXA][CRASH] host_x8=0x0000000000000083
+[VEXA][CRASH] alt_sp=0x0000007704775008
+[VEXA][CRASH] alt_size=0x000000000003fff8
+[VEXA][CRASH] host_pc_insn=0x00000000d65f03c0
+[VEXA][CRASH] host_lr_insn=0x00000000d63f0060
+[VEXA][CRASH] === crash dump end ===
+[VEXA][CRASH] === crash dump begin ===
+[VEXA][CRASH] origin=fex-host-handler
+[VEXA][CRASH] crash_seq=2
+[VEXA][CRASH] pid=11624 tid=11827
+[VEXA][CRASH] signal=11 si_code=-6 fault_addr=0x000028a100002d68
+[VEXA][CRASH] signal_name=SIGSEGV
+[VEXA][CRASH] probable reason=segv_other
+[VEXA][CRASH] host_pc=0x0000007323c6d8e8
+[VEXA][CRASH] host_lr=0x000000730b3a21c4
+[VEXA][CRASH] host_sp=0x00000073216695a0
+[VEXA][CRASH] host_x0=0x0000000000000000
+[VEXA][CRASH] host_x1=0x0000000000002e33
+[VEXA][CRASH] host_x2=0x000000000000000b
+[VEXA][CRASH] host_x3=0x000000000000000b
+[VEXA][CRASH] host_x4=0x0000007323c6d8d4
+[VEXA][CRASH] host_x5=0x000000000000000b
+[VEXA][CRASH] host_x6=0x0000000000002e33
+[VEXA][CRASH] host_x7=0x0000007301eccb1c
+[VEXA][CRASH] host_x8=0x0000000000000083
+[VEXA][CRASH] alt_sp=0x0000007704775008
+[VEXA][CRASH] alt_size=0x000000000003fff8
+[VEXA][CRASH] host_pc_insn=0x00000000d65f03c0
+[VEXA][CRASH] host_lr_insn=0x00000000d63f0060
+[VEXA][CRASH] guest_rip=0x0000007301eccb1a
+[VEXA][CRASH] guest_rsp=0x000000730a965a08
+[VEXA][CRASH] guest_rbp=0x000000730a965a48
+[VEXA][CRASH] guest_rax=0x00000000000000ea
+[VEXA][CRASH] guest_rcx=0x0000007301eccb1c
+[VEXA][CRASH] guest_rdx=0x000000000000000b
+[VEXA][CRASH] guest_rsi=0x0000000000002e33
+[VEXA][CRASH] guest_rdi=0x0000000000002d68
+[VEXA][CRASH] in_syscall_info=0x000000000000ffff
+[VEXA][CRASH] fatal=host-code-fault
+[VEXA][CRASH] === crash dump end ===

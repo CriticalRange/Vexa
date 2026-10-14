@@ -675,7 +675,6 @@ int snd_pcm_hw_params_set_periods_last(void){return 0;}
 int snd_pcm_hw_params_set_periods_max(void){return 0;}
 int snd_pcm_hw_params_set_periods_min(void){return 0;}
 int snd_pcm_hw_params_set_periods_minmax(void){return 0;}
-int snd_pcm_hw_params_set_rate(void){return 0;}
 int snd_pcm_hw_params_set_rate_first(void){return 0;}
 int snd_pcm_hw_params_set_rate_last(void){return 0;}
 int snd_pcm_hw_params_set_rate_max(void){return 0;}

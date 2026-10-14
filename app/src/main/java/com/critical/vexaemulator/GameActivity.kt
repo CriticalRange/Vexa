@@ -66,7 +66,9 @@ import androidx.lifecycle.lifecycleScope
 import com.critical.vexaemulator.input.GuestKeyboard
 import com.critical.vexaemulator.input.GuestPadOverlay
 import com.critical.vexaemulator.input.GuestPadState
+import com.critical.vexaemulator.input.PadCtl
 import com.critical.vexaemulator.input.PadSink
+import java.io.File as JFile
 import com.critical.vexaemulator.logging.LogCategory
 import com.critical.vexaemulator.logging.LogLevel
 import com.critical.vexaemulator.logging.LogStore
@@ -78,6 +80,7 @@ import com.critical.vexaemulator.steam.SteamLink
 import com.critical.vexaemulator.guest.GuestProgram
 import com.critical.vexaemulator.ui.EdgeHandle
 import com.critical.vexaemulator.ui.GameDebugPanel
+import com.critical.vexaemulator.ui.CloudConflictDialog
 import com.critical.vexaemulator.ui.GameLoadingOverlay
 import com.critical.vexaemulator.ui.QuickPanel
 import com.critical.vexaemulator.ui.VexaPrefs
@@ -213,9 +216,16 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
     private var bootLandscape by mutableStateOf(false)
     private var bootPublished by mutableStateOf(false)
     private var bootStarted by mutableStateOf(false)
+    private var bootCloudDone by mutableStateOf(false)
+    private var cloudDetail by mutableStateOf<String?>(null)
+    private var cloudConflict by mutableStateOf<List<com.critical.vexaemulator.steam.CloudConflict>?>(null)
+    private var cloudChoice = kotlinx.coroutines.CompletableDeferred<com.critical.vexaemulator.steam.CloudChoice>()
     private val bootStep: Int
-        get() = listOf(bootInstalled, bootConnected, bootLandscape, bootPublished, bootStarted)
-            .takeWhile { it }.size
+        get() = listOfNotNull(
+            bootInstalled,
+            bootCloudDone.takeIf { cloudDetail != null },
+            bootConnected, bootLandscape, bootPublished, bootStarted,
+        ).takeWhile { it }.size
     private var surfaceSizeLabel by mutableStateOf<String?>(null)
     private val sessionStartMs = System.currentTimeMillis()
     private var runtimeConnectedAtMs: Long = 0L
@@ -622,6 +632,9 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         VexaPrefs.init(this)
+        startForegroundService(Intent(this, RuntimeService::class.java).apply {
+            action = "com.critical.vexaemulator.HEADLESS_START"
+        })
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
@@ -644,16 +657,11 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
             )
         )
 
-        pad.onFaceKey = { down, keysym -> writePointer(if (down) 2 else 3, keysym, 0, 0) }
+        pad.onFaceKey = { down, keysym -> writePointer(if (down) 2 else 3, keysym, 0, PadCtl.SYNTH_FLAG) }
         pad.onPadButton = { down, control -> writePointer(7, control, if (down) 1 else 0, 0) }
         lifecycleScope.launch {
-            val sink = object : PadSink {
-                override fun pointer(type: Int, x: Int, y: Int, state: Int) = writePointer(type, x, y, state)
-                override fun key(down: Boolean, keysym: Int) = writePointer(if (down) 2 else 3, keysym, 0, 0)
-                override fun pad(control: Int, value: Int) = writePointer(7, control, value, 0)
-            }
             while (true) {
-                pad.pump(surfaceWidth, surfaceHeight, sink)
+                pad.pump(surfaceWidth, surfaceHeight, padSink)
                 delay(32)
             }
         }
@@ -703,6 +711,12 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
                     runtimePid = lastRuntimePid,
                     sessionStartMs = sessionStartMs,
                     bootStep = bootStep,
+                    cloudDetail = cloudDetail,
+                    cloudConflict = cloudConflict,
+                    onCloudChoice = { picked ->
+                        cloudChoice.complete(picked)
+                        cloudConflict = null
+                    },
                     surfaceSize = surfaceSizeLabel,
                     showLoading = showLoading,
                     showDebugMenu = showDebugMenu,
@@ -727,9 +741,12 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
     }
 
     private val padSink = object : PadSink {
-        override fun pointer(type: Int, x: Int, y: Int, state: Int) = writePointer(type, x, y, state)
-        override fun key(down: Boolean, keysym: Int) = writePointer(if (down) 2 else 3, keysym, 0, 0)
-        override fun pad(control: Int, value: Int) = writePointer(7, control, value, 0)
+        override fun pointer(type: Int, x: Int, y: Int, state: Int) =
+            writePointer(type, x, y, state or PadCtl.SYNTH_FLAG)
+        override fun key(down: Boolean, keysym: Int) =
+            writePointer(if (down) 2 else 3, keysym, 0, PadCtl.SYNTH_FLAG)
+        override fun pad(control: Int, value: Int) =
+            writePointer(7, control, value, 0)
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
@@ -747,7 +764,7 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
         if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount > 0) return true
         val keysym = GuestKeyboard.keysym(event.keyCode)
         if (keysym == 0) return false
-        padSink.key(event.action == KeyEvent.ACTION_DOWN, keysym)
+        writePointer(if (event.action == KeyEvent.ACTION_DOWN) 2 else 3, keysym, 0, 0)
         return true
     }
 
@@ -772,8 +789,10 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
 
     override fun onStart() {
         super.onStart()
-        val intent = Intent(this, RuntimeService::class.java)
-        bindService(intent, runtimeConnection, Context.BIND_AUTO_CREATE)
+        if (!runtimeBound) {
+            val intent = Intent(this, RuntimeService::class.java)
+            bindService(intent, runtimeConnection, Context.BIND_AUTO_CREATE)
+        }
     }
 
     override fun onResume() {
@@ -788,6 +807,12 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
             category = LogCategory.SURFACE,
             message = "Game Surface is being created..."
         )
+        // Rotation (landscape <-> reverse landscape) and returning from background
+        // recreate the Surface; hand the new one to the running guest.
+        if (runtimeStarted) {
+            sendSurfaceCreated(holder.surface)
+            return
+        }
         val program = com.critical.vexaemulator.guest.GuestCatalog.find(
             intent.getStringExtra(EXTRA_PROGRAM_ID).orEmpty()
         )
@@ -806,6 +831,7 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
                 ?.substringAfter("=")
                 .orEmpty()
             if (steamAppId.isNotEmpty()) {
+                cloudDetail = "signing in to Steam"
                 VexaLogger.log(LogLevel.INFO, LogCategory.BOOT, "Reading Steam session")
                 val session = withContext(Dispatchers.IO) { SteamLink.ensureOnline(this@GameActivity) }
                 if (session == null) {
@@ -829,6 +855,27 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
                 return@launch
             }
             bootInstalled = true
+            val cloudAppId = steamAppId.toIntOrNull()
+            if (cloudAppId != null) {
+                val home = request.launchEnv.firstOrNull { it.startsWith("HOME=") }
+                    ?.substringAfter("=")?.let(::JFile)
+                    ?: JFile(request.workingDirectory)
+                val result = com.critical.vexaemulator.steam.SteamCloudSync.pull(
+                    this@GameActivity, cloudAppId, home, JFile(request.workingDirectory),
+                    onProgress = { cloudDetail = it },
+                    onConflict = { conflicts ->
+                        cloudDetail = "save conflict, waiting for choice"
+                        cloudConflict = conflicts
+                        val picked = cloudChoice.await()
+                        cloudConflict = null
+                        cloudDetail = if (picked == com.critical.vexaemulator.steam.CloudChoice.Remote)
+                            "using the cloud save" else "keeping the device save"
+                        picked
+                    },
+                )
+                cloudDetail = result.summary()
+            }
+            bootCloudDone = true
             VexaLogger.log(
                 level = LogLevel.INFO,
                 category = LogCategory.BOOT,
@@ -928,14 +975,9 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
         )
     }
 
+    // Stay bound while backgrounded: dropping the last binding destroys the runtime
+    // service and kills the guest. The foreground service keeps the process alive.
     override fun onStop() {
-        if (runtimeBound) {
-            sendUnregister()
-            runCatching {
-                unbindService(runtimeConnection)
-            }
-            runtimeBound = false
-        }
         super.onStop()
     }
 
@@ -1010,6 +1052,9 @@ private fun GameScreen(
     runtimePid: Int?,
     sessionStartMs: Long,
     bootStep: Int,
+    cloudDetail: String?,
+    cloudConflict: List<com.critical.vexaemulator.steam.CloudConflict>?,
+    onCloudChoice: (com.critical.vexaemulator.steam.CloudChoice) -> Unit,
     surfaceSize: String?,
     showLoading: Boolean,
     showDebugMenu: Boolean,
@@ -1111,9 +1156,14 @@ private fun GameScreen(
                 step = bootStep,
                 surfaceSize = surfaceSize,
                 lastMessage = entries.lastOrNull()?.message,
+                cloudDetail = cloudDetail,
                 onDebug = { openDebug(emptySet()) },
                 onClose = onBack,
             )
+        }
+
+        cloudConflict?.let { conflicts ->
+            CloudConflictDialog(conflicts, onChoice = onCloudChoice)
         }
 
         AnimatedVisibility(
