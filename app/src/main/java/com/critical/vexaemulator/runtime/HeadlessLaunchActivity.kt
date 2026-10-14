@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
 import android.os.Bundle
+import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.IBinder
@@ -12,6 +13,7 @@ import android.os.Looper
 import android.os.Message
 import android.os.Messenger
 import android.util.Log
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import com.critical.vexaemulator.guest.GuestCatalog
 import com.critical.vexaemulator.guest.GuestInstaller
@@ -39,6 +41,11 @@ import java.util.concurrent.TimeUnit
 class HeadlessLaunchActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (intent?.getStringExtra("stop") != "1") {
+            startForegroundService(Intent(this, RuntimeService::class.java).apply {
+                action = "com.critical.vexaemulator.HEADLESS_START"
+            })
+        }
         HeadlessLaunch.onIntent(applicationContext, intent)
         finish()
     }
@@ -56,6 +63,7 @@ private object HeadlessLaunch {
     private var bindLatch = CountDownLatch(1)
     @Volatile private var binding = false
     private var expiry: Runnable? = null
+    private var renderSurfaceRequested = false
 
     private val replyHandler = object : Handler(Looper.getMainLooper()) {
         override fun handleMessage(msg: Message) {
@@ -151,6 +159,10 @@ private object HeadlessLaunch {
     }
 
     private fun unbind() {
+        if (renderSurfaceRequested) {
+            send(RuntimeIpc.MSG_SURFACE_DESTROYED)
+            renderSurfaceRequested = false
+        }
         expiry?.let { handler.removeCallbacks(it) }
         expiry = null
         if (binding) runCatching { appContext.unbindService(runtimeConnection) }
@@ -218,8 +230,16 @@ private object HeadlessLaunch {
             Log.e(TAG, "null intent")
             return
         }
-        val width = safeIntent.getIntExtra("width", 1280).coerceIn(1, 8192)
-        val height = safeIntent.getIntExtra("height", 720).coerceIn(1, 8192)
+        val nativeMegabonk = safeIntent.getStringExtra("programId") == "megabonk"
+        val bounds = if (nativeMegabonk && Build.VERSION.SDK_INT >= 30)
+            context.getSystemService(WindowManager::class.java).maximumWindowMetrics.bounds else null
+        val metrics = context.resources.displayMetrics
+        val screenWidth = bounds?.width() ?: metrics.widthPixels
+        val screenHeight = bounds?.height() ?: metrics.heightPixels
+        val defaultWidth = if (nativeMegabonk) maxOf(screenWidth, screenHeight) else 1280
+        val defaultHeight = if (nativeMegabonk) minOf(screenWidth, screenHeight) else 720
+        val width = safeIntent.getIntExtra("width", defaultWidth).coerceIn(1, 8192)
+        val height = safeIntent.getIntExtra("height", defaultHeight).coerceIn(1, 8192)
         val ttlMinutes = safeIntent.getIntExtra("ttlMinutes", 10).coerceIn(1, 1440)
 
         handler.post {
@@ -228,7 +248,15 @@ private object HeadlessLaunch {
                     Log.w(TAG, "a headless session is already active; stop it before launching another")
                     return@post
                 }
-                val request = buildRequest(context, safeIntent)
+                val backend = safeIntent.getStringExtra("graphicsBackend")
+                val useVulkan = backend == "vulkan"
+                val useRenderSurface = useVulkan || backend == "gles-surface"
+                val originalRequest = buildRequest(context, safeIntent)
+                val request = if (useVulkan) originalRequest.copy(
+                    launchArgs = originalRequest.launchArgs.filterNot {
+                        it.startsWith("-force-glcore") || it == "-force-vulkan"
+                    } + "-force-vulkan",
+                ) else originalRequest
                 publishGuestWindowSize(request.rootfsPath, width, height)
 
                 if (!bind()) {
@@ -237,10 +265,19 @@ private object HeadlessLaunch {
                 }
 
                 send(RuntimeIpc.MSG_REGISTER_CLIENT)
+                if (useRenderSurface) {
+                    check(send(RuntimeIpc.MSG_HEADLESS_RENDER_SURFACE) {
+                        putInt(RuntimeIpc.KEY_SURFACE_WIDTH, width)
+                        putInt(RuntimeIpc.KEY_SURFACE_HEIGHT, height)
+                    }) { "offscreen surface request failed" }
+                    renderSurfaceRequested = true
+                }
                 val env = ArrayList(request.launchEnv.filterNot {
                     it.substringBefore('=') in setOf("VEXA_HEADLESS", "VEXA_HEADLESS_W", "VEXA_HEADLESS_H")
                 }).apply {
-                    add("VEXA_HEADLESS=1")
+                    // GLES surface tests use the real ANativeWindow path; Vulkan
+                    // always uses that path. Both keep the activity invisible.
+                    add("VEXA_HEADLESS=${if (backend == "gles-surface") 0 else 1}")
                     add("VEXA_HEADLESS_W=$width")
                     add("VEXA_HEADLESS_H=$height")
                 }

@@ -33,6 +33,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -63,8 +64,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -78,11 +81,8 @@ import com.critical.vexaemulator.logging.LogStore
 import com.critical.vexaemulator.logging.VexaLogEntry
 import com.critical.vexaemulator.logging.VexaLogger
 import com.critical.vexaemulator.runtime.RootLogCollector
-import com.critical.vexaemulator.ui.AccentEdge
-import com.critical.vexaemulator.ui.AmbientOrb
 import com.critical.vexaemulator.ui.BrandLogo
 import com.critical.vexaemulator.ui.DangerButton
-import com.critical.vexaemulator.ui.DotGrid
 import com.critical.vexaemulator.ui.LogList
 import com.critical.vexaemulator.ui.LogoSize
 import com.critical.vexaemulator.ui.MetaItem
@@ -108,7 +108,6 @@ import com.critical.vexaemulator.ui.rememberHaptics
 import com.critical.vexaemulator.ui.staggerIn
 import com.critical.vexaemulator.ui.tagline
 import com.critical.vexaemulator.ui.theme.MonospaceTypography
-import com.critical.vexaemulator.ui.theme.OverlineStyle
 import com.critical.vexaemulator.ui.theme.PillShape
 import com.critical.vexaemulator.ui.theme.ThemeMode
 import com.critical.vexaemulator.ui.theme.TileShape
@@ -118,7 +117,6 @@ import com.critical.vexaemulator.ui.theme.VexaTheme
 import com.critical.vexaemulator.ui.theme.resolveDark
 import com.critical.vexaemulator.ui.toPlainLine
 import com.critical.vexaemulator.ui.typeBadge
-import com.critical.vexaemulator.ui.vexaGlow
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -205,15 +203,15 @@ private fun LauncherScreen(
     }
 
     // Run → brand circle floods the screen from the button, then the game activity fades in.
+    val density = LocalDensity.current
+    var launchBarHeight by remember { mutableStateOf(112.dp) }
     val scope = rememberCoroutineScope()
     val launchFlood = remember { Animatable(0f) }
     var floodOrigin by remember { mutableStateOf(Offset.Zero) }
     var runCenter by remember { mutableStateOf(Offset.Zero) }
     LaunchedEffect(resumeGeneration) { launchFlood.snapTo(0f) }
 
-    Box(Modifier.fillMaxSize().background(c.bgBase)) {
-        DotGrid(Modifier.fillMaxWidth().height(280.dp))
-        AmbientOrb(Modifier.fillMaxWidth().height(320.dp), center = null, radiusFraction = 0.75f)
+    Box(Modifier.fillMaxSize().background(c.bgBase).imePadding()) {
 
         Column(
             modifier = Modifier
@@ -221,7 +219,8 @@ private fun LauncherScreen(
                 .verticalScroll(rememberScrollState())
                 .statusBarsPadding()
                 .navigationBarsPadding()
-                .padding(horizontal = 18.dp),
+                .padding(horizontal = 20.dp)
+                .padding(bottom = launchBarHeight),
         ) {
             Spacer(Modifier.height(14.dp))
             Header(
@@ -231,12 +230,12 @@ private fun LauncherScreen(
             )
             Spacer(Modifier.height(24.dp))
             SectionLabel(
-                text = "Program",
+                text = "Your programs",
                 modifier = Modifier.staggerIn(1),
                 trailing = {
                     Text(
-                        "${programs.size} BINARIES",
-                        style = OverlineStyle.copy(color = c.textTertiary),
+                        "${programs.size} available",
+                        style = MaterialTheme.typography.bodySmall.copy(color = c.textSecondary),
                     )
                 },
             )
@@ -251,27 +250,9 @@ private fun LauncherScreen(
             ProgramDetailCard(program = selected, modifier = Modifier.staggerIn(3))
             Spacer(Modifier.height(22.dp))
             SteamCard(modifier = Modifier.fillMaxWidth().staggerIn(4))
-            Spacer(Modifier.height(16.dp))
-            VexaButton(
-                text = if (selected.preinstalled) "Launch game" else "Run program",
-                icon = if (selected.preinstalled) VexaGlyph.Gamepad else VexaGlyph.Play,
-                onClick = {
-                    if (launchFlood.isRunning) return@VexaButton
-                    floodOrigin = runCenter
-                    scope.launch {
-                        launchFlood.animateTo(1f, tween(VexaMotion.LARGE, easing = VexaMotion.Emphasized))
-                        onRun(selected.id)
-                    }
-                },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .staggerIn(4)
-                    .onGloballyPositioned {
-                        runCenter = it.positionInRoot() + Offset(it.size.width / 2f, it.size.height / 2f)
-                    },
-            )
-
-            Spacer(Modifier.height(30.dp))
+            Spacer(Modifier.height(28.dp))
+            SectionLabel(text = "Preferences", modifier = Modifier.staggerIn(5))
+            Spacer(Modifier.height(12.dp))
             SectionCard(modifier = Modifier.fillMaxWidth().staggerIn(5)) {
                 Column {
                     SwitchRow(
@@ -350,6 +331,35 @@ private fun LauncherScreen(
             Spacer(Modifier.height(20.dp))
         }
 
+        // The selected target stays within reach, independent of the settings scroll.
+        Column(
+            Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+                .onSizeChanged { launchBarHeight = with(density) { it.height.toDp() } }
+                .background(c.bgBase).navigationBarsPadding(),
+        ) {
+            RowDivider()
+            Box(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp)) {
+                VexaButton(
+                    text = "Start ${selected.title}",
+                    icon = VexaGlyph.Play,
+                    enabled = !launchFlood.isRunning && launchFlood.value == 0f,
+                    onClick = {
+                        if (launchFlood.isRunning) return@VexaButton
+                        floodOrigin = runCenter
+                        scope.launch {
+                            launchFlood.animateTo(1f, tween(VexaMotion.LARGE, easing = VexaMotion.Emphasized))
+                            onRun(selected.id)
+                        }
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .onGloballyPositioned {
+                            runCenter = it.positionInRoot() + Offset(it.size.width / 2f, it.size.height / 2f)
+                        },
+                )
+            }
+        }
+
         if (launchFlood.value > 0f) {
             val brand = c.brandStops
             val bg = c.bgBase
@@ -393,10 +403,10 @@ private fun Header(
     val c = VexaTheme.colors
     Row(modifier = modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Column(modifier = Modifier.weight(1f)) {
-            BrandLogo(size = LogoSize.Large)
+            BrandLogo(size = LogoSize.Medium)
             Text(
-                text = "LINUX X86_64 RUNTIME",
-                style = OverlineStyle.copy(color = c.textSecondary),
+                text = "Linux programs, on Android",
+                style = MaterialTheme.typography.bodySmall.copy(color = c.textSecondary),
             )
         }
         ThemeSegmented(mode = themeMode, onSelect = onThemeChange)
@@ -443,10 +453,9 @@ private fun ProgramTile(
     val titleColor by animateColorAsState(if (selected) c.plasma else c.textPrimary, label = "tileTitle")
     Box(
         modifier
-            .width(148.dp)
-            .height(122.dp)
+            .width(184.dp)
+            .height(112.dp)
             .pressScale(source, 0.95f)
-            .then(if (selected) Modifier.vexaGlow(radius = 16.dp, shape = TileShape) else Modifier)
             .clip(TileShape)
             .background(if (selected) c.surface2 else c.surface1)
             .border(if (selected) 1.5.dp else 1.dp, border, TileShape)
@@ -461,7 +470,7 @@ private fun ProgramTile(
             exit = fadeOut(),
             modifier = Modifier.align(Alignment.TopCenter),
         ) {
-            Box(Modifier.fillMaxWidth().height(3.dp).background(c.brand()))
+            Box(Modifier.fillMaxWidth().height(2.dp).background(c.plasma))
         }
         Column(Modifier.fillMaxSize().padding(12.dp)) {
             Row(verticalAlignment = Alignment.Top) {
@@ -492,8 +501,8 @@ private fun ProgramTile(
                         }
                     } else {
                         Text(
-                            typeLabel.uppercase(),
-                            style = MonospaceTypography.labelSmall.copy(color = typeColor, fontWeight = FontWeight.SemiBold),
+                            typeLabel,
+                            style = MaterialTheme.typography.labelSmall.copy(color = c.textSecondary),
                         )
                     }
                 }
@@ -506,8 +515,8 @@ private fun ProgramTile(
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                if (selected) "active target" else program.tagline(),
-                style = MonospaceTypography.labelSmall.copy(color = if (selected) c.plasma.copy(alpha = 0.8f) else c.textTertiary),
+                if (selected) "Selected" else program.tagline(),
+                style = MaterialTheme.typography.bodySmall.copy(color = c.textSecondary),
                 maxLines = 1,
             )
         }
@@ -519,7 +528,9 @@ private fun ProgramDetailCard(program: GuestProgram, modifier: Modifier = Modifi
     val c = VexaTheme.colors
     PanelSurface(
         modifier = modifier.fillMaxWidth(),
-        accentEdge = AccentEdge.Top,
+        color = c.bgBase,
+        borderColor = Color.Transparent,
+        elevated = false,
     ) {
         AnimatedContent(
             targetState = program,
@@ -530,15 +541,14 @@ private fun ProgramDetailCard(program: GuestProgram, modifier: Modifier = Modifi
             label = "detail",
         ) { p ->
             val (typeLabel, typeColor) = p.typeBadge()
-            Column(modifier = Modifier.padding(18.dp)) {
+            Column(modifier = Modifier.padding(vertical = 14.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    StatusDot(c.plasma, size = 7.dp, pulse = true)
                     Text(
                         text = p.title,
-                        style = MaterialTheme.typography.headlineMedium.copy(color = c.textPrimary),
-                        maxLines = 1,
+                        style = MaterialTheme.typography.headlineLarge.copy(color = c.textPrimary),
+                        maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.weight(1f).padding(end = 12.dp),
                     )
                     TinyPill(typeLabel, typeColor)
                 }

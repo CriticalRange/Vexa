@@ -29,7 +29,7 @@ val Inter = variableFamily(R.font.inter, 400, 500, 600, 700)
 val JetBrainsMono = variableFamily(R.font.jetbrains_mono, 400, 500, 600, 700, 800)
 
 private fun display(size: Int, line: Int, weight: FontWeight, tracking: Double) = TextStyle(
-    fontFamily = SpaceGrotesk,
+    fontFamily = Inter,
     fontWeight = weight,
     fontSize = size.sp,
     lineHeight = line.sp,
@@ -44,7 +44,7 @@ private fun body(size: Int, line: Int, weight: FontWeight = FontWeight.Normal) =
     letterSpacing = 0.sp,
 )
 
-// UI scale: Space Grotesk for display/headlines/titles, Inter for body and labels.
+// Inter keeps interface headings and controls cohesive; Space Grotesk stays in the wordmark.
 val Typography = Typography(
     displayLarge = display(44, 50, FontWeight.Bold, -0.03),
     displayMedium = display(34, 40, FontWeight.Bold, -0.03),

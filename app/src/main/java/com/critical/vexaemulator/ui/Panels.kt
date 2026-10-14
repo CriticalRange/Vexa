@@ -26,7 +26,7 @@ fun PanelSurface(
     color: Color = VexaTheme.colors.surface1,
     borderColor: Color = VexaTheme.colors.hairline,
     accentEdge: AccentEdge = AccentEdge.None,
-    elevated: Boolean = true,
+    elevated: Boolean = false,
     content: @Composable () -> Unit,
 ) {
     val c = VexaTheme.colors

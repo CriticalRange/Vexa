@@ -1,12 +1,19 @@
 package com.critical.vexaemulator.runtime
 
 import android.app.Service
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.pm.ServiceInfo
+import com.critical.vexaemulator.R
 import android.content.ComponentName
 import android.content.Intent
 import android.content.ServiceConnection
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
+import android.os.HandlerThread
 import android.os.IBinder
 import android.os.Looper
 import android.os.Message
@@ -20,12 +27,59 @@ import com.critical.vexaemulator.logging.VexaLogger
 private const val MAX_PENDING_LOGS = 128
 
 class RuntimeService : Service() {
+    private var headlessForeground = false
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == "com.critical.vexaemulator.HEADLESS_STOP") {
+            sendStopToWorker()
+            endHeadlessForeground()
+            return START_NOT_STICKY
+        }
+        if (intent?.action == "com.critical.vexaemulator.HEADLESS_START") {
+            val manager = getSystemService(NotificationManager::class.java)
+            manager.createNotificationChannel(NotificationChannel("headless", "VEXA arka plan oturumu", NotificationManager.IMPORTANCE_LOW))
+            val stop = PendingIntent.getService(this, 1, Intent(this, RuntimeService::class.java).apply {
+                action = "com.critical.vexaemulator.HEADLESS_STOP"
+            }, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+            val notification = Notification.Builder(this, "headless")
+                .setSmallIcon(R.mipmap.ic_launcher)
+                .setContentTitle("VEXA arka planda çalışıyor")
+                .setContentText("Oyun oturumu ekran açılmadan sürüyor.")
+                .setOngoing(true)
+                .addAction(Notification.Action.Builder(null, "Durdur", stop).build())
+                .build()
+            if (Build.VERSION.SDK_INT >= 34) {
+                startForeground(41, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+            } else {
+                startForeground(41, notification)
+            }
+            headlessForeground = true
+        }
+        return START_NOT_STICKY
+    }
+
+    private fun endHeadlessForeground() {
+        if (!headlessForeground) return
+        headlessForeground = false
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
+    }
+
     private var clientMessenger: Messenger? = null
     private var workerMessenger: Messenger? = null
     private var workerBound = false
     private var workerBinding = false
     private var pendingWorkerStart: LaunchRequest? = null
     private var pendingSurface: Surface? = null
+    private var headlessRenderSurface: HeadlessRenderSurface? = null
+    private var presentThread: HandlerThread? = null
+
+    private fun closeHeadlessRenderSurface() {
+        headlessRenderSurface?.close()
+        headlessRenderSurface = null
+        presentThread?.quitSafely()
+        presentThread = null
+    }
 
     private fun getSurfaceCompat(bundle: Bundle): Surface? {
         bundle.classLoader = Surface::class.java.classLoader
@@ -59,6 +113,7 @@ class RuntimeService : Service() {
                     sendStartResult(code)
                     // FEX state is single-use; release the worker so the next launch gets a fresh process.
                     unbindWorkerSafe()
+                    endHeadlessForeground()
                 }
 
                 RuntimeIpc.MSG_LOG_EVENT -> {
@@ -239,7 +294,28 @@ class RuntimeService : Service() {
                     sendStartToWorker(request)
                 }
 
+                RuntimeIpc.MSG_HEADLESS_RENDER_SURFACE -> {
+                    val width = msg.data.getInt(RuntimeIpc.KEY_SURFACE_WIDTH, 1280).coerceIn(1, 8192)
+                    val height = msg.data.getInt(RuntimeIpc.KEY_SURFACE_HEIGHT, 720).coerceIn(1, 8192)
+                    pendingSurface?.release()
+                    pendingSurface = null
+                    closeHeadlessRenderSurface()
+                    try {
+                        val thread = HandlerThread("headless-present").apply { start() }
+                        presentThread = thread
+                        val target = HeadlessRenderSurface(this@RuntimeService, width, height, Handler(thread.looper))
+                        headlessRenderSurface = target
+                        pendingSurface = target.surface
+                        sendSurfaceToWorker(pendingSurface)
+                        emitLog("INFO", "SURFACE", "Offscreen runtime surface created", """{"width":$width,"height":$height}""")
+                    } catch (e: Exception) {
+                        closeHeadlessRenderSurface()
+                        emitLog("ERROR", "SURFACE", "Offscreen surface creation failed: ${e.message}")
+                    }
+                }
+
                 RuntimeIpc.MSG_SURFACE_CREATED -> {
+                    closeHeadlessRenderSurface()
                     val surface = getSurfaceCompat(msg.data)
                     pendingSurface?.release()
                     pendingSurface = surface
@@ -275,11 +351,13 @@ class RuntimeService : Service() {
                     sendSurfaceToWorker(null)
                     pendingSurface?.release()
                     pendingSurface = null
+                    closeHeadlessRenderSurface()
                 }
 
                 RuntimeIpc.MSG_STOP_RUNTIME -> {
                     sendStopToWorker()
                     emitLog("INFO", "BOOT", "Runtime stop requested")
+                    endHeadlessForeground()
                 }
 
                 else -> super.handleMessage(msg)
@@ -362,6 +440,7 @@ class RuntimeService : Service() {
         unbindWorkerSafe()
         pendingSurface?.release()
         pendingSurface = null
+        closeHeadlessRenderSurface()
         super.onDestroy()
     }
 }

@@ -142,8 +142,8 @@ object GuestCatalog {
             summary = "Unity game. Native Linux build. The Linux files are already in the app files directory.",
             assetPath = "",
             fileName = "Megabonk.x86_64",
-            // Preserve the tested windowed launch preset. Display initialization
-            // is handled by the X11/RandR and empty libudev backends.
+            // Native landscape size of the test device. Headless launches use
+            // the display size by default too; saved in-game settings can override this.
             args = listOf(
                 "-screen-fullscreen", "0",
                 "-screen-width", "2712",
@@ -153,7 +153,8 @@ object GuestCatalog {
                 // submission onto the single emulated render thread. Re-test it before
                 // adding it back - it was needed when the display list was broken.
             ),
-            env = listOf("DISPLAY=:0", "SDL_VIDEODRIVER=x11", "SteamAppId=3405340"),
+            // Its final sRGB framebuffer must blit into an sRGB EGL surface.
+            env = listOf("DISPLAY=:0", "SDL_VIDEODRIVER=x11", "SteamAppId=3405340", "VEXA_GL_SRGB_SURFACE=1", "VEXA_UNITY_NATIVE_MODE=1"),
             preinstalled = true,
         ),
         GuestProgram(

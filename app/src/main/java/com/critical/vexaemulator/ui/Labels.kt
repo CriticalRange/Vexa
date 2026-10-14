@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -51,13 +52,9 @@ fun SectionLabel(
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                text = text.uppercase(),
-                style = OverlineStyle.copy(color = if (accent) c.plasma else c.textTertiary),
+                text = text,
+                style = MaterialTheme.typography.titleMedium.copy(color = c.textPrimary, fontWeight = FontWeight.SemiBold),
             )
-            if (accent) {
-                Spacer(Modifier.width(6.dp))
-                Box(Modifier.size(5.dp).clip(CircleShape).background(c.plasma))
-            }
         }
         trailing?.invoke()
     }
@@ -107,9 +104,9 @@ fun TinyPill(
             Spacer(Modifier.width(1.dp))
         }
         Text(
-            text = text.uppercase(),
+            text = text,
             color = color,
-            style = MonospaceTypography.labelSmall.copy(fontWeight = FontWeight.SemiBold, letterSpacing = 0.08.em),
+            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Medium),
         )
     }
 }
