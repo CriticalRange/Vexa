@@ -60,8 +60,11 @@ namespace Vexa::Runtime {
         // (libGL-host) inspect VEXA_HEADLESS via getenv to pick a pbuffer over
         // a SurfaceTexture-backed window and select its color space. Mirror only
         // these explicit host graphics controls
-        // into this process's environment.
-        for (const char *key : {"VEXA_HEADLESS", "VEXA_HEADLESS_W", "VEXA_HEADLESS_H", "VEXA_GL_SRGB_SURFACE"}) {
+        // into this process's environment. VEXA_REEXEC is also mirrored: the
+        // guest execve fallback in FEX reads it with host getenv() to find the
+        // trampoline binary, and it must survive into re-exec'd children for
+        // grandchild execs.
+        for (const char *key : {"VEXA_HEADLESS", "VEXA_HEADLESS_W", "VEXA_HEADLESS_H", "VEXA_GL_SRGB_SURFACE", "VEXA_REEXEC"}) {
             ::unsetenv(key);
         }
         for (const auto &entry: launchEnv) {
@@ -70,7 +73,8 @@ namespace Vexa::Runtime {
             if (entry.compare(0, eq, "VEXA_HEADLESS") == 0 ||
                 entry.compare(0, eq, "VEXA_HEADLESS_W") == 0 ||
                 entry.compare(0, eq, "VEXA_HEADLESS_H") == 0 ||
-                entry.compare(0, eq, "VEXA_GL_SRGB_SURFACE") == 0) {
+                entry.compare(0, eq, "VEXA_GL_SRGB_SURFACE") == 0 ||
+                entry.compare(0, eq, "VEXA_REEXEC") == 0) {
                 ::setenv(entry.substr(0, eq).c_str(), entry.c_str() + eq + 1, 1);
             }
         }

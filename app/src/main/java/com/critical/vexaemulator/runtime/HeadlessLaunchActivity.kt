@@ -202,14 +202,26 @@ private object HeadlessLaunch {
             val thunkGuest = File(root, "thunks/guest").apply { mkdirs() }
             val exeFile = File(exe)
             val artifacts = File(root, "artifacts/headless").apply { mkdirs() }
+            val workDir = exeFile.parentFile?.absolutePath ?: rootfs.absolutePath
+            // Same guest-execve trampoline wiring as GuestInstaller.install.
+            val loaderEnv = listOf(
+                "VEXA_REEXEC=${context.applicationInfo.nativeLibraryDir}/libvexaloader.so",
+                "VEXA_ROOTFS=${rootfs.absolutePath}",
+                "VEXA_THUNK_HOST=${thunkHost.absolutePath}",
+                "VEXA_THUNK_GUEST=${thunkGuest.absolutePath}",
+                "VEXA_WORKDIR=$workDir",
+                "VEXA_ARTIFACTS=${artifacts.absolutePath}",
+            )
+            val env = intent.getStringArrayExtra("env")?.toList().orEmpty()
+            val envKeys = env.map { it.substringBefore('=') }.toSet()
             return LaunchRequest(
                 executablePath = exeFile.absolutePath,
                 rootfsPath = rootfs.absolutePath,
                 thunkHostPath = thunkHost.absolutePath,
                 thunkGuestPath = thunkGuest.absolutePath,
-                workingDirectory = exeFile.parentFile?.absolutePath ?: rootfs.absolutePath,
+                workingDirectory = workDir,
                 artifactDirectory = artifacts.absolutePath,
-                launchEnv = intent.getStringArrayExtra("env")?.toList().orEmpty(),
+                launchEnv = env + loaderEnv.filterNot { it.substringBefore('=') in envKeys },
                 launchArgs = intent.getStringArrayExtra("args")?.toList().orEmpty(),
             )
         }
