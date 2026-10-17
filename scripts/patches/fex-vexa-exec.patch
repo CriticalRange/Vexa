@@ -1,0 +1,198 @@
+diff --git a/Source/Tools/LinuxEmulation/LinuxSyscalls/Syscalls.cpp b/Source/Tools/LinuxEmulation/LinuxSyscalls/Syscalls.cpp
+index 2acc62d01..bc0985556 100644
+--- a/Source/Tools/LinuxEmulation/LinuxSyscalls/Syscalls.cpp
++++ b/Source/Tools/LinuxEmulation/LinuxSyscalls/Syscalls.cpp
+@@ -62,6 +62,9 @@ $end_info$
+ #include <sys/utsname.h>
+ #include <unistd.h>
+ 
++// Optional VEXA host hook: validates PE content; absent in ordinary FEX builds.
++extern "C" int Vexa_IsPortableExecutable(const char* path) __attribute__((weak));
++
+ namespace FEX::HLE {
+ class SignalDelegator;
+ SyscallHandler* _SyscallHandler {};
+@@ -257,6 +260,22 @@ uint64_t ExecveHandler(FEXCore::Core::CpuStateFrame* Frame, const char* pathname
+     InterpreterType = ELFLoader::ELFContainer::GetELFType(ShebangInterpreter);
+   }
+ 
++  bool IsVexaPE = false;
++  if (!IsShebang && Type == ELFLoader::ELFContainer::ELFType::TYPE_NONE && Vexa_IsPortableExecutable) {
++    if (IsFDExec) {
++      // The VEXA Proton launch contract needs a stable pathname, not an exec FD.
++      char FDPath[64];
++      snprintf(FDPath, sizeof(FDPath), "/proc/self/fd/%d", Args.dirfd);
++      if (Vexa_IsPortableExecutable(FDPath)) {
++        return -ENOTSUP;
++      }
++    } else if (Vexa_IsPortableExecutable(Filename.c_str())) {
++      // Use the existing loader fallback, never kernel binfmt_misc, for PE.
++      IsVexaPE = true;
++      Type = ELFLoader::ELFContainer::ELFType::TYPE_X86_64;
++    }
++  }
++
+   if (!IsShebang && Type == ELFLoader::ELFContainer::ELFType::TYPE_NONE) {
+     // If our interpeter doesn't support this file format AND ELF format is NONE then ENOEXEC
+     // binfmt_misc could end up handling this case but we can't know that without parsing binfmt_misc ourselves
+@@ -292,7 +311,7 @@ uint64_t ExecveHandler(FEXCore::Core::CpuStateFrame* Frame, const char* pathname
+ 
+   // If the FEX interpreter is installed then just execve the ELF file
+   // This will stay inside of our emulated environment since binfmt_misc will capture it
+-  const bool IsBinfmtCompatible = SyscallHandler->IsInterpreterInstalled() && (Type == ELFLoader::ELFContainer::ELFType::TYPE_X86_32 ||
++  const bool IsBinfmtCompatible = !IsVexaPE && SyscallHandler->IsInterpreterInstalled() && (Type == ELFLoader::ELFContainer::ELFType::TYPE_X86_32 ||
+                                                                                Type == ELFLoader::ELFContainer::ELFType::TYPE_X86_64);
+ 
+   // We are trying to execute an ELF of a different architecture
+@@ -422,8 +441,64 @@ uint64_t ExecveHandler(FEXCore::Core::CpuStateFrame* Frame, const char* pathname
+   // re-executing it cannot recreate the emulated environment. Allow the host
+   // to name a trampoline binary that re-enters the runtime instead.
+   const char* ReexecTarget = "/proc/self/exe";
++  fextl::vector<fextl::string> VexaNativeEnv;
++  fextl::vector<char*> VexaNativeEnvp;
+   if (const char* EnvTarget = getenv("VEXA_REEXEC"); EnvTarget && *EnvTarget) {
+     ReexecTarget = EnvTarget;
++    // The trampoline is an Android/Bionic executable. Guest glibc preload and
++    // search paths must not be interpreted by its native linker. Transfer their
++    // exact values (including empty) for the VEXA loader to restore to guest env.
++    fextl::string GuestPreload;
++    fextl::string GuestLibraryPath;
++    bool HasGuestPreload = false;
++    bool HasGuestLibraryPath = false;
++    if (EnvpPtr) {
++      for (auto Entry = EnvpPtr; *Entry; ++Entry) {
++        const std::string_view Value {*Entry};
++        if (Value.starts_with("VEXA_GUEST_LD_PRELOAD=") || Value.starts_with("VEXA_GUEST_LD_LIBRARY_PATH=")) {
++          // Never accept stale or guest-injected transfer values.
++          continue;
++        }
++        if (Value.starts_with("LD_PRELOAD=")) {
++          GuestPreload = *Entry + sizeof("LD_PRELOAD=") - 1;
++          HasGuestPreload = true;
++        } else if (Value.starts_with("LD_LIBRARY_PATH=")) {
++          GuestLibraryPath = *Entry + sizeof("LD_LIBRARY_PATH=") - 1;
++          HasGuestLibraryPath = true;
++        } else {
++          VexaNativeEnv.emplace_back(*Entry);
++        }
++      }
++    }
++    if (HasGuestPreload) {
++      VexaNativeEnv.emplace_back("VEXA_GUEST_LD_PRELOAD=" + GuestPreload);
++    }
++    if (HasGuestLibraryPath) {
++      VexaNativeEnv.emplace_back("VEXA_GUEST_LD_LIBRARY_PATH=" + GuestLibraryPath);
++    }
++    // Wine/Python may intentionally supply a minimal child environment. Keep
++    // only routing essentials from the host when absent; do not restore user
++    // variables or overwrite explicitly supplied (even empty) control values.
++    for (const char* Key : {"VEXA_REEXEC", "VEXA_ROOTFS", "VEXA_THUNK_HOST", "VEXA_THUNK_GUEST", "VEXA_WORKDIR", "VEXA_ARTIFACTS",
++                            "VEXA_COMPAT_SESSION", "VEXA_PROTON_PATH", "VEXA_STEAM_CLIENT_PATH", "VEXA_COMPAT_DATA_ROOT",
++                            "VEXA_PROTON_PYTHON", "VEXA_PROTON_SESSION_SCRIPT", "VEXA_PROTON_DISPLAY_BACKEND", "VEXA_PROTON_ROOTFS"}) {
++      const auto Prefix = fextl::string(Key) + "=";
++      const bool Present = std::any_of(VexaNativeEnv.begin(), VexaNativeEnv.end(), [&](const auto& Entry) {
++        return std::string_view(Entry.data(), Entry.size()).starts_with(std::string_view(Prefix.data(), Prefix.size()));
++      });
++      if (!Present) {
++        if (const char* Value = getenv(Key)) {
++          VexaNativeEnv.emplace_back(Prefix + Value);
++        }
++      }
++    }
++    // Build pointers only after all string storage is stable.
++    VexaNativeEnvp.reserve(VexaNativeEnv.size() + 1);
++    for (auto& Entry : VexaNativeEnv) {
++      VexaNativeEnvp.emplace_back(Entry.data());
++    }
++    VexaNativeEnvp.emplace_back(nullptr);
++    EnvpPtr = VexaNativeEnvp.data();
+   }
+   Result = ::syscall(SYS_execveat, Args.dirfd, ReexecTarget, const_cast<char* const*>(ExecveArgs.data()), EnvpPtr, Args.flags);
+   CloseSeccompFD();
+diff --git a/Source/Tools/LinuxEmulation/LinuxSyscalls/Syscalls/Thread.cpp b/Source/Tools/LinuxEmulation/LinuxSyscalls/Syscalls/Thread.cpp
+index c999cc678..fde3b610a 100644
+--- a/Source/Tools/LinuxEmulation/LinuxSyscalls/Syscalls/Thread.cpp
++++ b/Source/Tools/LinuxEmulation/LinuxSyscalls/Syscalls/Thread.cpp
+@@ -45,6 +45,11 @@ $end_info$
+ 
+ ARG_TO_STR(idtype_t, "%u")
+ 
++// The embedded Android worker must survive guest exit; a standalone VEXA
++// trampoline is a real guest process and must report its actual exit status.
++extern "C" bool Vexa_IsStandaloneLoader() __attribute__((weak));
++extern "C" void Vexa_ReportGuestExit(int status) __attribute__((weak));
++
+ namespace FEX::HLE {
+ 
+ struct ExecutionThreadHandler {
+@@ -461,6 +466,7 @@ void RegisterThread(FEX::HLE::SyscallHandler* Handler) {
+     }
+ 
+     ThreadObject->StatusCode = status;
++    ThreadObject->VexaGuestExit = true;
+ 
+     FEX::HLE::_SyscallHandler->UninstallTLSState(ThreadObject);
+ 
+@@ -566,6 +572,15 @@ void RegisterThread(FEX::HLE::SyscallHandler* Handler) {
+   });
+ 
+   REGISTER_SYSCALL_IMPL(exit_group, [](FEXCore::Core::CpuStateFrame* Frame, int status) -> uint64_t {
++#if defined(__ANDROID__)
++    if (Vexa_ReportGuestExit) {
++      Vexa_ReportGuestExit(status);
++    }
++    if (Vexa_IsStandaloneLoader && Vexa_IsStandaloneLoader()) {
++      ::syscall(SYS_exit_group, status);
++      std::terminate();
++    }
++#endif
+     Frame->Thread->CTX->FlushAndCloseCodeMap();
+ 
+     // Save telemetry if we're exiting.
+diff --git a/Source/Tools/LinuxEmulation/LinuxSyscalls/ThreadManager.cpp b/Source/Tools/LinuxEmulation/LinuxSyscalls/ThreadManager.cpp
+index 6c55abe04..c8852451e 100644
+--- a/Source/Tools/LinuxEmulation/LinuxSyscalls/ThreadManager.cpp
++++ b/Source/Tools/LinuxEmulation/LinuxSyscalls/ThreadManager.cpp
+@@ -22,6 +22,10 @@
+   #include <sys/syscall.h>
+ #endif
+ 
++// Optional VEXA host hook, absent in ordinary FEX builds.
++extern "C" bool Vexa_IsStandaloneLoader() __attribute__((weak));
++extern "C" void Vexa_ReportGuestExit(int status) __attribute__((weak));
++
+ namespace FEX::HLE {
+ 
+ ThreadManager::StatAlloc::StatAlloc() {
+@@ -289,6 +293,18 @@ void ThreadManager::DestroyThread(FEX::HLE::ThreadStateObject* Thread, bool Need
+     LOGMAN_THROW_A_FMT(It != Threads.end(), "Thread wasn't in Threads");
+     Threads.erase(It);
+     if (Threads.empty()) {
++#if defined(__ANDROID__)
++      // Guest exit (rather than exit_group) may leave native helper threads.
++      // Decide under ThreadCreationMutex so concurrent guest thread exits cannot
++      // both miss the final thread. Embedded Android workers retain old behavior.
++      if (Thread->VexaGuestExit && Vexa_ReportGuestExit) {
++        Vexa_ReportGuestExit(Thread->StatusCode);
++      }
++      if (Thread->VexaGuestExit && Vexa_IsStandaloneLoader && Vexa_IsStandaloneLoader()) {
++        ::syscall(SYS_exit_group, Thread->StatusCode);
++        std::terminate();
++      }
++#endif
+       Thread->Thread->CTX->FlushAndCloseCodeMap();
+     }
+   }
+diff --git a/Source/Tools/LinuxEmulation/LinuxSyscalls/ThreadManager.h b/Source/Tools/LinuxEmulation/LinuxSyscalls/ThreadManager.h
+index 4aac2fdf3..6339f6e83 100644
+--- a/Source/Tools/LinuxEmulation/LinuxSyscalls/ThreadManager.h
++++ b/Source/Tools/LinuxEmulation/LinuxSyscalls/ThreadManager.h
+@@ -111,6 +111,8 @@ struct ThreadStateObject : public FEXCore::Allocator::FEXAllocOperators {
+   std::optional<GdbInfoStruct> GdbInfo;
+ 
+   int StatusCode {};
++  // VEXA: distinguish a guest exit syscall from launcher error-path cleanup.
++  bool VexaGuestExit {};
+ 
+   struct CallRetStackInfo {
+     uint64_t AllocationBase;

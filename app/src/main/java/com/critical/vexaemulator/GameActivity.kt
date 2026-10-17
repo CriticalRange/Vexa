@@ -16,6 +16,7 @@ import android.os.Message
 import android.os.Messenger
 import android.os.Process
 import android.os.SystemClock
+import android.util.Log
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.Surface
@@ -68,6 +69,7 @@ import com.critical.vexaemulator.input.GuestPadOverlay
 import com.critical.vexaemulator.input.GuestPadState
 import com.critical.vexaemulator.input.PadCtl
 import com.critical.vexaemulator.input.PadSink
+import com.critical.vexaemulator.input.XKeys
 import java.io.File as JFile
 import com.critical.vexaemulator.logging.LogCategory
 import com.critical.vexaemulator.logging.LogLevel
@@ -101,6 +103,19 @@ private const val LOGCAT_TAG_RUNTIME_EXIT = "Vexa-RuntimeExit"
 class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
     companion object {
         const val EXTRA_PROGRAM_ID = "programId"
+        /** Optional UI override, forwarded as VEXA_GRAPHICS_BACKEND for Megabonk. */
+        const val EXTRA_GRAPHICS_BACKEND = "graphicsBackend"
+        const val EXTRA_DIRECT_LAUNCH = "directLaunch"
+        const val EXTRA_DIRECT_EXECUTABLE = "directExecutable"
+        const val EXTRA_DIRECT_ROOTFS = "directRootfs"
+        const val EXTRA_DIRECT_THUNK_HOST = "directThunkHost"
+        const val EXTRA_DIRECT_THUNK_GUEST = "directThunkGuest"
+        const val EXTRA_DIRECT_WORKDIR = "directWorkdir"
+        const val EXTRA_DIRECT_ARTIFACTS = "directArtifacts"
+        const val EXTRA_DIRECT_ENV = "directEnv"
+        /** Debug: extra "K=V" strings appended to the program launch env. */
+        const val EXTRA_EXTRA_ENV = "extraEnv"
+        const val EXTRA_DIRECT_ARGS = "directArgs"
     }
     private lateinit var gameSurfaceView: SurfaceView
     private var isExiting = false
@@ -110,6 +125,20 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
     private var runtimeBound = false
     private var pendingLaunchRequest: LaunchRequest? = null
     private var guestLaunchStarted = false
+    private fun directLaunchRequest(): LaunchRequest? {
+        if (!intent.getBooleanExtra(EXTRA_DIRECT_LAUNCH, false)) return null
+        fun required(key: String) = requireNotNull(intent.getStringExtra(key)) { "Missing Steam launch field: $key" }
+        return LaunchRequest(
+            executablePath = required(EXTRA_DIRECT_EXECUTABLE),
+            rootfsPath = required(EXTRA_DIRECT_ROOTFS),
+            thunkHostPath = required(EXTRA_DIRECT_THUNK_HOST),
+            thunkGuestPath = required(EXTRA_DIRECT_THUNK_GUEST),
+            workingDirectory = required(EXTRA_DIRECT_WORKDIR),
+            artifactDirectory = required(EXTRA_DIRECT_ARTIFACTS),
+            launchEnv = intent.getStringArrayExtra(EXTRA_DIRECT_ENV)?.toList().orEmpty(),
+            launchArgs = intent.getStringArrayExtra(EXTRA_DIRECT_ARGS)?.toList().orEmpty(),
+        )
+    }
     private val pad = GuestPadState()
     private var lastReportedRuntimeExitKey: String? = null
     private var runtimeStarted = false
@@ -638,13 +667,17 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
+                // Back never closes the game. A KEYCODE_BACK already sent Escape
+                // through dispatchKeyEvent; only gesture-style backs land here.
+                if (SystemClock.uptimeMillis() - lastBackKeyTime < 1000) return
+                pad.onDirectKey(true, XKeys.ESCAPE)
+                pad.onDirectKey(false, XKeys.ESCAPE)
                 VexaLogger.log(
                     LogLevel.INFO,
                     LogCategory.ACTIVITY,
-                    "User initiated back press",
-                    mapOf("source" to "onBackPressedDispatcher")
+                    "Back press forwarded to guest as Escape",
+                    mapOf("source" to "onBackPressedDispatcher"),
                 )
-                closeGameActivity()
             }
         })
         VexaLogger.log(
@@ -658,7 +691,10 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
         )
 
         pad.onFaceKey = { down, keysym -> writePointer(if (down) 2 else 3, keysym, 0, PadCtl.SYNTH_FLAG) }
+        pad.onDirectKey = { down, keysym -> writePointer(if (down) 2 else 3, keysym, 0, 0) }
         pad.onPadButton = { down, control -> writePointer(7, control, if (down) 1 else 0, 0) }
+        pad.bAsEscape = intent.getStringExtra(EXTRA_PROGRAM_ID) == "megabonk"
+        pad.overlay = VexaPrefs.padOverlay
         lifecycleScope.launch {
             while (true) {
                 pad.pump(surfaceWidth, surfaceHeight, padSink)
@@ -745,11 +781,30 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
             writePointer(type, x, y, state or PadCtl.SYNTH_FLAG)
         override fun key(down: Boolean, keysym: Int) =
             writePointer(if (down) 2 else 3, keysym, 0, PadCtl.SYNTH_FLAG)
+        override fun directKey(down: Boolean, keysym: Int) =
+            writePointer(if (down) 2 else 3, keysym, 0, 0)
         override fun pad(control: Int, value: Int) =
             writePointer(7, control, value, 0)
     }
 
+    @Volatile private var lastBackKeyTime = 0L
+
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        Log.i(
+            "VEXA-PAD",
+            "key code=${event.keyCode} action=${event.action} " +
+                "src=0x${Integer.toHexString(event.source)} " +
+                "dev=0x${event.device?.sources?.let { Integer.toHexString(it) }}"
+        )
+        if (event.keyCode == KeyEvent.KEYCODE_BACK) {
+            if (event.action == KeyEvent.ACTION_DOWN) {
+                lastBackKeyTime = event.eventTime
+            }
+            if (!pad.onKey(event, padSink) && !forwardKeyboardEvent(event)) {
+                pad.onDirectKey(event.action == KeyEvent.ACTION_DOWN, XKeys.ESCAPE)
+            }
+            return true
+        }
         if (pad.onKey(event, padSink)) {
             return true
         }
@@ -816,6 +871,18 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
         val program = com.critical.vexaemulator.guest.GuestCatalog.find(
             intent.getStringExtra(EXTRA_PROGRAM_ID).orEmpty()
         )
+        if (program == null && intent.getBooleanExtra(EXTRA_DIRECT_LAUNCH, false)) {
+            if (guestLaunchStarted) return
+            guestLaunchStarted = true
+            val direct = runCatching { directLaunchRequest() }.getOrElse {
+                VexaLogger.log(LogLevel.ERROR, LogCategory.FAILURE, "Invalid Steam launch: ${it.message}")
+                finish()
+                return
+            } ?: return
+            if (!runtimeBound || serviceMessenger == null || !tryLaunchWithSurface(direct))
+                pendingLaunchRequest = direct
+            return
+        }
         if (program == null) {
             VexaLogger.log(
                 LogLevel.ERROR,
@@ -843,7 +910,17 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
                 }
             }
             val request = try {
-                com.critical.vexaemulator.guest.GuestInstaller.install(this@GameActivity, program)
+                val installed = com.critical.vexaemulator.guest.GuestInstaller.install(this@GameActivity, program)
+                if (program.id == "megabonk") {
+                    val selected = intent.getStringExtra(EXTRA_GRAPHICS_BACKEND)
+                        ?: if (VexaPrefs.vulkan) "vulkan" else null
+                    val env = if (selected == null) installed.launchEnv else
+                        installed.launchEnv.filterNot {
+                            it.startsWith("${com.critical.vexaemulator.guest.MegabonkGraphics.ENV}=")
+                        } + "${com.critical.vexaemulator.guest.MegabonkGraphics.ENV}=$selected"
+                    com.critical.vexaemulator.guest.MegabonkGraphics.apply(installed.copy(launchEnv = env))
+                }
+                else installed
             } catch (t: Throwable) {
                 VexaLogger.log(
                     level = LogLevel.ERROR,
@@ -851,6 +928,25 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
                     message = "Guest install failed: ${t.message}",
                     fields = mapOf("id" to program.id)
                 )
+                finish()
+                return@launch
+            }.let { request ->
+                val extra = intent.getStringArrayExtra(EXTRA_EXTRA_ENV)?.toList().orEmpty()
+                val prefEnv =
+                    if (VexaPrefs.uncappedFps) listOf("VEXA_GLX_SWAP_INTERVAL=0") else emptyList()
+                val merged = request.launchEnv + prefEnv + extra
+                request.copy(launchEnv = merged)
+            }
+            // Windows titles need the separate Proton process and real X11
+            // frontend. Keep ELF titles on the direct Android Surface path.
+            try {
+                if (com.critical.vexaemulator.steam.SteamworksHost.routeWindowsGame(this@GameActivity, request)) {
+                    finish()
+                    return@launch
+                }
+            } catch (t: Throwable) {
+                VexaLogger.log(LogLevel.ERROR, LogCategory.FAILURE,
+                    "Windows launch failed: ${t.message}", mapOf("id" to program.id))
                 finish()
                 return@launch
             }
@@ -1131,7 +1227,10 @@ private fun GameScreen(
                         onOpenLogs = openDebug,
                         onExit = onBack,
                         padOn = pad.overlay,
-                        onTogglePad = { pad.overlay = !pad.overlay },
+                        onTogglePad = {
+                            pad.overlay = !pad.overlay
+                            VexaPrefs.updatePadOverlay(pad.overlay)
+                        },
                     )
                 }
             }

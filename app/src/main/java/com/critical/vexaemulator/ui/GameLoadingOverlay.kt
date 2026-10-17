@@ -97,14 +97,10 @@ fun GameLoadingOverlay(
                 Spacer(Modifier.height(22.dp))
                 SegmentRing(sizeDp = 56.dp)
                 Spacer(Modifier.height(16.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        "Starting the program",
-                        style = MaterialTheme.typography.titleLarge.copy(color = c.textPrimary),
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    PulsingDots()
-                }
+                Text(
+                    "Starting the program",
+                    style = MaterialTheme.typography.titleLarge.copy(color = c.textPrimary),
+                )
                 Spacer(Modifier.height(6.dp))
                 AnimatedContent(
                     targetState = lastMessage.orEmpty(),
@@ -167,7 +163,7 @@ fun GameLoadingOverlay(
                 style = MonospaceTypography.labelSmall.copy(color = c.textTertiary),
                 modifier = Modifier.weight(1f),
             )
-            TinyPill("initializing runtime", c.plasma, dot = true, pulse = true)
+            TinyPill("initializing runtime", c.plasma, dot = true)
             Text(
                 "STEP ${(step + 1).coerceAtMost(steps.size)} / ${steps.size}",
                 style = MonospaceTypography.labelSmall.copy(color = c.textTertiary),
@@ -184,11 +180,7 @@ private fun BootChecklist(steps: List<BootStep>, done: Int, modifier: Modifier =
     Column(modifier) {
         Text("BOOT SEQUENCE", style = OverlineStyle.copy(color = c.textTertiary))
         Spacer(Modifier.height(4.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Runtime initializing", style = MaterialTheme.typography.headlineSmall.copy(color = c.textPrimary))
-            Spacer(Modifier.width(10.dp))
-            Badge("step ${(done + 1).coerceAtMost(steps.size)}/${steps.size}", c.plasma)
-        }
+        Text("Runtime initializing", style = MaterialTheme.typography.headlineSmall.copy(color = c.textPrimary))
         Spacer(Modifier.height(16.dp))
         steps.forEachIndexed { i, s ->
             val state = when {
@@ -235,10 +227,10 @@ private fun StepRow(step: BootStep, state: Int, isLast: Boolean, index: Int) {
                             Modifier.size(20.dp).clip(CircleShape).background(c.soft(c.success)).border(1.dp, c.success, CircleShape),
                             contentAlignment = Alignment.Center,
                         ) { VexaIcon(VexaGlyph.Check, c.success, size = 12.dp, strokeWidth = 3f) }
-                        1 -> Box(contentAlignment = Alignment.Center) {
-                            BootSpinner(color = c.plasma, sizeDp = 20.dp)
-                            Box(Modifier.size(6.dp).clip(CircleShape).background(c.plasma))
-                        }
+                        1 -> Box(
+                            Modifier.size(20.dp).clip(CircleShape).border(2.dp, c.plasma, CircleShape),
+                            contentAlignment = Alignment.Center,
+                        ) { Box(Modifier.size(6.dp).clip(CircleShape).background(c.plasma)) }
                         else -> Box(Modifier.size(14.dp).clip(CircleShape).border(1.dp, c.borderStrong, CircleShape))
                     }
                 }

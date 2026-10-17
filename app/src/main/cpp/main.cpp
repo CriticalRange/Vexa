@@ -19,6 +19,7 @@
 #include "logging/native_log.h"
 #include "runtime/init/preflight.h"
 #include "runtime/launch.h"
+#include "runtime/compat_launch.h"
 #include "utils/jni_scoped.h"
 #include "runtime/surface_bridge.h"
 
@@ -82,19 +83,10 @@ namespace {
             pthread_attr_destroy(&selfAttr);
         }
 
-        auto preflight = Vexa::Runtime::RunPreflight(payload->paths);
-        if (!preflight.Ok()) {
-            VEXA_LOGE(env, "BOOT", "Runtime preflight failed", Vexa::Log::AddFields({
-                                                                                            Vexa::Log::F(
-                                                                                                    "reason",
-                                                                                                    preflight.reason),
-                                                                                            Vexa::Log::F(
-                                                                                                    "detail",
-                                                                                                    preflight.detail)
-                                                                                    }).c_str());
-            payload->result = static_cast<jint>(preflight.code);
-        } else {
-            auto launch = Vexa::Runtime::StartRuntime(env, payload->paths, payload->launchEnv,
+        // Format routing and path resolution happen inside LaunchGuest, before
+        // the FEX ELF-only configuration boundary.
+        {
+            auto launch = Vexa::Runtime::LaunchGuest(env, payload->paths, payload->launchEnv,
                                                       payload->launchArgs);
             if (!launch.Ok()) {
                 VEXA_LOGE(env, "FEX", "FEX Launch failed", Vexa::Log::AddFields({
@@ -107,7 +99,7 @@ namespace {
                                                                                 }).c_str());
                 payload->result = static_cast<jint>(launch.code);
             } else {
-                payload->result = 0;
+                payload->result = Vexa::Runtime::GetGuestExitCode();
             }
         }
 
@@ -225,7 +217,7 @@ Java_com_critical_vexaemulator_RuntimeBridge_nativeStartRuntime(JNIEnv *env, job
     if (!payload->returned) {
         VEXA_LOGI(env, "FEX", "Guest exit terminated the runtime thread", "{}");
         Vexa::Runtime::ReleaseAfterGuestExit();
-        payload->result = 0;
+        payload->result = Vexa::Runtime::GetGuestExitCode();
     }
     const jint result = payload->result;
     payload.reset();
@@ -237,6 +229,7 @@ JNIEXPORT void JNICALL
 Java_com_critical_vexaemulator_RuntimeBridge_nativeStopRuntime(JNIEnv *env, jobject thiz) {
     VEXA_LOGI(env, "BOOT", "native stopRuntime is called", "{}");
     // Vexa::Log::UninstallSignalHandlers();
+    Vexa::Runtime::StopCompatibilitySession();
     Vexa::Runtime::SurfaceBridge::Clear();
     Vexa::Runtime::StopRuntime();
 }

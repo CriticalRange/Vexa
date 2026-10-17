@@ -1,0 +1,23 @@
+diff --git a/Source/Tools/LinuxEmulation/LinuxSyscalls/Syscalls/Passthrough.cpp b/Source/Tools/LinuxEmulation/LinuxSyscalls/Syscalls/Passthrough.cpp
+--- a/Source/Tools/LinuxEmulation/LinuxSyscalls/Syscalls/Passthrough.cpp
++++ b/Source/Tools/LinuxEmulation/LinuxSyscalls/Syscalls/Passthrough.cpp
+@@ -480,7 +480,19 @@
+   REGISTER_SYSCALL_IMPL(memfd_secret, SyscallPassthrough1<SYSCALL_DEF(memfd_secret)>);
+   REGISTER_SYSCALL_IMPL(process_mrelease, SyscallPassthrough2<SYSCALL_DEF(process_mrelease)>);
+   if (Handler->IsHostKernelVersionAtLeast(5, 16, 0)) {
++#if defined(__ANDROID__)
++    REGISTER_SYSCALL_IMPL(futex_waitv, [](FEXCore::Core::CpuStateFrame* Frame, uint64_t waiters, uint64_t count,
++                                       uint64_t flags, uint64_t timeout, uint64_t clockid) -> uint64_t {
++      // Android app seccomp can SIGSYS this syscall even on a new kernel.
++      // Wine probes it before checking WINEFSYNC; ENOSYS selects its supported
++      // synchronization fallback without entering the forbidden host syscall.
++      const char* session = getenv("VEXA_COMPAT_SESSION");
++      if (session && *session) return -ENOSYS;
++      return SyscallPassthrough5<SYSCALL_DEF(futex_waitv)>(Frame, waiters, count, flags, timeout, clockid);
++    });
++#else
+     REGISTER_SYSCALL_IMPL(futex_waitv, SyscallPassthrough5<SYSCALL_DEF(futex_waitv)>);
++#endif
+   } else {
+     REGISTER_SYSCALL_IMPL(futex_waitv, UnimplementedSyscallSafe);
+   }

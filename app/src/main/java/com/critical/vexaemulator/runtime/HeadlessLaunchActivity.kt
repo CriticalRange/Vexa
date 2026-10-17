@@ -17,6 +17,7 @@ import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import com.critical.vexaemulator.guest.GuestCatalog
 import com.critical.vexaemulator.guest.GuestInstaller
+import com.critical.vexaemulator.x11.HeadlessX11Client
 import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -64,6 +65,7 @@ private object HeadlessLaunch {
     @Volatile private var binding = false
     private var expiry: Runnable? = null
     private var renderSurfaceRequested = false
+    private var realX11: HeadlessX11Client? = null
 
     private val replyHandler = object : Handler(Looper.getMainLooper()) {
         override fun handleMessage(msg: Message) {
@@ -101,6 +103,7 @@ private object HeadlessLaunch {
             if (binding) runCatching { appContext.unbindService(runtimeConnection) }
             binding = false
             Log.w(TAG, "runtime service disconnected")
+            handler.post { unbind() }
         }
 
         override fun onBindingDied(name: ComponentName?) {
@@ -109,6 +112,7 @@ private object HeadlessLaunch {
             if (binding) runCatching { appContext.unbindService(runtimeConnection) }
             binding = false
             Log.w(TAG, "runtime service binding died")
+            handler.post { unbind() }
         }
 
         override fun onNullBinding(name: ComponentName?) {
@@ -159,6 +163,8 @@ private object HeadlessLaunch {
     }
 
     private fun unbind() {
+        realX11?.close()
+        realX11 = null
         if (renderSurfaceRequested) {
             send(RuntimeIpc.MSG_SURFACE_DESTROYED)
             renderSurfaceRequested = false
@@ -197,12 +203,14 @@ private object HeadlessLaunch {
         if (exe.isNotEmpty()) {
             GuestInstaller.ensureRuntime(context)
             val root = context.filesDir
-            val rootfs = File(root, "rootfs").apply { mkdirs() }
+            val rootfs = intent.getStringExtra("rootfs")?.let { privateDirectory(context, it) }
+                ?: File(root, "rootfs").apply { mkdirs() }
             val thunkHost = File(root, "thunks/host").apply { mkdirs() }
             val thunkGuest = File(root, "thunks/guest").apply { mkdirs() }
             val exeFile = File(exe)
             val artifacts = File(root, "artifacts/headless").apply { mkdirs() }
-            val workDir = exeFile.parentFile?.absolutePath ?: rootfs.absolutePath
+            val workDir = intent.getStringExtra("cwd")?.let { privateDirectory(context, it).path }
+                ?: exeFile.parentFile?.absolutePath ?: rootfs.absolutePath
             // Same guest-execve trampoline wiring as GuestInstaller.install.
             val loaderEnv = listOf(
                 "VEXA_REEXEC=${context.applicationInfo.nativeLibraryDir}/libvexaloader.so",
@@ -232,9 +240,19 @@ private object HeadlessLaunch {
         val overrides = intent.getStringArrayExtra("env")?.toList().orEmpty()
         val keys = overrides.map { it.substringBefore('=') }.toSet()
         return request.copy(
+            rootfsPath = intent.getStringExtra("rootfs")?.let { privateDirectory(context, it).path } ?: request.rootfsPath,
+            workingDirectory = intent.getStringExtra("cwd")?.let { privateDirectory(context, it).path } ?: request.workingDirectory,
             launchEnv = request.launchEnv.filterNot { it.substringBefore('=') in keys } + overrides,
             launchArgs = intent.getStringArrayExtra("args")?.toList() ?: request.launchArgs,
         )
+    }
+
+    private fun privateDirectory(context: Context, path: String): File {
+        val directory = File(path).canonicalFile
+        require(directory.path.startsWith(context.filesDir.canonicalPath + File.separator) && directory.isDirectory) {
+            "Headless rootfs/cwd must be an existing app-private directory"
+        }
+        return directory
     }
 
     private fun launch(context: Context, intent: Intent?) {
@@ -260,19 +278,48 @@ private object HeadlessLaunch {
                     Log.w(TAG, "a headless session is already active; stop it before launching another")
                     return@post
                 }
-                val backend = safeIntent.getStringExtra("graphicsBackend")
+                val originalRequest = buildRequest(context, safeIntent)
+                val selectedBackend = (safeIntent.getStringExtra("graphicsBackend")
+                    ?: originalRequest.launchEnv.lastOrNull {
+                        it.startsWith("${com.critical.vexaemulator.guest.MegabonkGraphics.ENV}=")
+                    }?.substringAfter('=')?.takeIf { safeIntent.getStringExtra("programId") == "megabonk" })
+                        ?.lowercase()
+                val backend = selectedBackend
+                    ?: if (GuestExecutableFormats.detect(File(originalRequest.executablePath)) == GuestExecutableFormat.PE)
+                        "real-x11" else null
+                val useRealX11 = backend == "real-x11"
                 val useVulkan = backend == "vulkan"
                 val useRenderSurface = useVulkan || backend == "gles-surface"
-                val originalRequest = buildRequest(context, safeIntent)
-                val request = if (useVulkan) originalRequest.copy(
-                    launchArgs = originalRequest.launchArgs.filterNot {
+                val configured = CompatibilitySettings.environment(context)
+                val protonRootfs = (configured + originalRequest.launchEnv)
+                    .lastOrNull { it.startsWith("VEXA_PROTON_ROOTFS=") }
+                    ?.substringAfter('=')?.takeIf { it.isNotBlank() }
+                val x11Request = if (useRealX11 && protonRootfs != null)
+                    originalRequest.copy(rootfsPath = protonRootfs) else originalRequest
+                val request = if (safeIntent.getStringExtra("programId") == "megabonk") {
+                    val graphicsChoice = if (backend == "gles-surface") "gl" else backend
+                    val env = if (graphicsChoice == "vulkan" || graphicsChoice == "gl")
+                        x11Request.launchEnv.filterNot {
+                            it.startsWith("${com.critical.vexaemulator.guest.MegabonkGraphics.ENV}=")
+                        } + "${com.critical.vexaemulator.guest.MegabonkGraphics.ENV}=$graphicsChoice"
+                    else x11Request.launchEnv
+                    com.critical.vexaemulator.guest.MegabonkGraphics.apply(x11Request.copy(launchEnv = env))
+                } else if (useVulkan) x11Request.copy(
+                    launchArgs = x11Request.launchArgs.filterNot {
                         it.startsWith("-force-glcore") || it == "-force-vulkan"
                     } + "-force-vulkan",
-                ) else originalRequest
+                ) else x11Request
                 publishGuestWindowSize(request.rootfsPath, width, height)
+
+                if (useRealX11) {
+                    val client = HeadlessX11Client(appContext)
+                    realX11 = client
+                    client.start(request.rootfsPath, width, height, safeIntent.getBooleanExtra("captureFrames", false))
+                }
 
                 if (!bind()) {
                     Log.e(TAG, "runtime service bind timed out")
+                    unbind()
                     return@post
                 }
 
@@ -285,13 +332,23 @@ private object HeadlessLaunch {
                     renderSurfaceRequested = true
                 }
                 val env = ArrayList(request.launchEnv.filterNot {
-                    it.substringBefore('=') in setOf("VEXA_HEADLESS", "VEXA_HEADLESS_W", "VEXA_HEADLESS_H")
+                    it.substringBefore('=') in setOf("VEXA_HEADLESS", "VEXA_HEADLESS_W", "VEXA_HEADLESS_H") ||
+                        (useRealX11 && it.substringBefore('=') in setOf("DISPLAY", "VEXA_REAL_X11", "VEXA_X11_SOCKET", "VEXA_PROTON_DISPLAY_BACKEND", "VEXA_PROTON_ROOTFS", "VEXA_ROOTFS", "VEXA_WORKDIR"))
                 }).apply {
                     // GLES surface tests use the real ANativeWindow path; Vulkan
                     // always uses that path. Both keep the activity invisible.
                     add("VEXA_HEADLESS=${if (backend == "gles-surface") 0 else 1}")
                     add("VEXA_HEADLESS_W=$width")
                     add("VEXA_HEADLESS_H=$height")
+                    if (useRealX11) {
+                        add("DISPLAY=:0")
+                        add("VEXA_REAL_X11=1")
+                        add("VEXA_X11_SOCKET=${File(request.rootfsPath, "tmp/.X11-unix/X0").path}")
+                        add("VEXA_PROTON_DISPLAY_BACKEND=external-x11")
+                        add("VEXA_PROTON_ROOTFS=${request.rootfsPath}")
+                        add("VEXA_ROOTFS=${request.rootfsPath}")
+                        add("VEXA_WORKDIR=${request.workingDirectory}")
+                    }
                 }
                 val sent = send(RuntimeIpc.MSG_START_RUNTIME) {
                     putString(RuntimeIpc.KEY_EXECUTABLE, request.executablePath)

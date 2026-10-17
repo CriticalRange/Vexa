@@ -4,6 +4,7 @@
 
 #include "../../common/path_checks.h"
 #include "preflight.h"
+#include "../executable_format.h"
 
 namespace Vexa::Runtime {
     Vexa::Common::Result RunPreflight(const Vexa::Common::Paths &p) {
@@ -31,7 +32,9 @@ namespace Vexa::Runtime {
                     Vexa::Common::Phase::Preflight,
                     "Guest Thunk Directory unavailable"
             );
-        if (!Vexa::Common::IsExecutable(p.executable))
+        const auto format = DetectExecutableFormat(p.executable);
+        const bool pe = format == ExecutableFormat::Pe32 || format == ExecutableFormat::Pe64;
+        if (!(pe ? Vexa::Common::IsReadableFile(p.executable) : Vexa::Common::IsExecutable(p.executable)))
             return Vexa::Common::Result::Failure(
                     Vexa::Common::Code::BadExecutable,
                     Vexa::Common::Phase::Preflight,

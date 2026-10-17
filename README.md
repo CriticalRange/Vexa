@@ -37,6 +37,8 @@ The real native/runtime path is still under active bring-up.
 
 ## Documents
 
+- [Proton process integration, installation and current limits](docs/proton-integration.md)
+
 Project documents live under [docs](/home/critical/vexa/docs):
 
 - [Project Overview](/home/critical/vexa/docs/PROJECT_OVERVIEW.md)

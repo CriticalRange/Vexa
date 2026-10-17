@@ -1,0 +1,14 @@
+{
+  "project": "Termux:X11",
+  "source_commit": "fa3a8b430e2896a19f44c99a9cb056254615ae06",
+  "release_asset_id": 616219007,
+  "download_url": "https://github.com/termux/termux-x11/releases/download/nightly/termux-x11-universal-debug.apk",
+  "apk_sha256": "64995746d1887a0e70bc8977d4a9c5ea56e3e00eadd4a6eeab32ae6048ba733a",
+  "artifact_sha256": "8ad76408710c21b9a61d3db07900e5bb4e3f88efb1670ac0ff3a2166f403567d",
+  "artifact_size": 3552072,
+  "elf_machine": 183,
+  "artifact": "app/src/main/jniLibs/arm64-v8a/libXlorie.so",
+  "commit_evidence": "unique 40-hex APK DEX string matches pinned source",
+  "license": "GPL-3.0; component notices apply",
+  "validation": "hash, source commit evidence and ELF architecture; device loading separate"
+}

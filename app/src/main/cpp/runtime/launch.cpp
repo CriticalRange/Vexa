@@ -3,6 +3,8 @@
 //
 #include <vector>
 #include <string>
+#include <algorithm>
+#include <atomic>
 
 #include "../logging/native_log.h"
 #include "../logging/crash_signals.h"
@@ -20,6 +22,15 @@
 namespace Vexa::Runtime {
 
     static Resources g_state{};
+    static std::atomic<int> g_guestExitCode{Vexa::Common::ToInt(Vexa::Common::Code::InternalError)};
+
+    int GetGuestExitCode() {
+        return g_guestExitCode.load(std::memory_order_relaxed);
+    }
+
+    extern "C" __attribute__((visibility("default"))) void Vexa_ReportGuestExit(int status) {
+        g_guestExitCode.store(status & 0xff, std::memory_order_relaxed);
+    }
 
     static void CleanupAll() {
         if (g_state.parentThread) {
@@ -53,6 +64,7 @@ namespace Vexa::Runtime {
             return {Vexa::Common::Code::AlreadyStarted, Vexa::Common::Phase::Init,
                     "Runtime already started"};
         }
+        g_guestExitCode.store(Vexa::Common::ToInt(Vexa::Common::Code::InternalError), std::memory_order_relaxed);
         g_state.fexStarted = true;
         VEXA_LOGI(env, "FEX", "FEXCore initialized", "{}");
 
@@ -64,17 +76,24 @@ namespace Vexa::Runtime {
         // guest execve fallback in FEX reads it with host getenv() to find the
         // trampoline binary, and it must survive into re-exec'd children for
         // grandchild execs.
-        for (const char *key : {"VEXA_HEADLESS", "VEXA_HEADLESS_W", "VEXA_HEADLESS_H", "VEXA_GL_SRGB_SURFACE", "VEXA_REEXEC"}) {
-            ::unsetenv(key);
+        const std::vector<std::string> hostControls{
+            "VEXA_HEADLESS", "VEXA_HEADLESS_W", "VEXA_HEADLESS_H", "VEXA_GL_SRGB_SURFACE",
+            "VEXA_REEXEC", "VEXA_ROOTFS", "VEXA_THUNK_HOST", "VEXA_THUNK_GUEST",
+            "VEXA_WORKDIR", "VEXA_ARTIFACTS", "VEXA_COMPAT_SESSION",
+            "VEXA_PROTON_PATH", "VEXA_STEAM_CLIENT_PATH", "VEXA_COMPAT_DATA_ROOT",
+            "VEXA_PROTON_PYTHON", "VEXA_PROTON_SESSION_SCRIPT", "VEXA_PROTON_DISPLAY_BACKEND",
+            "VEXA_PROTON_ROOTFS",
+            "VEXA_REAL_X11", "VEXA_X11_SOCKET",
+            "VEXA_GRAPHICS_BACKEND", "VEXA_GLX_SWAP_INTERVAL", "VEXA_GL_SHADOW",
+            "VEXA_VK_PROFILE", "VEXA_VK_MAILBOX", "VEXA_VK_OPTIMIZE_LOOPS",
+        };
+        for (const auto &key : hostControls) {
+            ::unsetenv(key.c_str());
         }
         for (const auto &entry: launchEnv) {
             const auto eq = entry.find('=');
             if (eq == std::string::npos) continue;
-            if (entry.compare(0, eq, "VEXA_HEADLESS") == 0 ||
-                entry.compare(0, eq, "VEXA_HEADLESS_W") == 0 ||
-                entry.compare(0, eq, "VEXA_HEADLESS_H") == 0 ||
-                entry.compare(0, eq, "VEXA_GL_SRGB_SURFACE") == 0 ||
-                entry.compare(0, eq, "VEXA_REEXEC") == 0) {
+            if (std::find(hostControls.begin(), hostControls.end(), entry.substr(0, eq)) != hostControls.end()) {
                 ::setenv(entry.substr(0, eq).c_str(), entry.c_str() + eq + 1, 1);
             }
         }
@@ -120,6 +139,13 @@ namespace Vexa::Runtime {
             return r;
         }
         VEXA_LOGI(env, "FEX", "SetupAllocator OK", "{}");
+        // Hand signal ownership to FEX before its thread/core setup installs
+        // the delegator thunks. Restoring the early handlers afterwards would
+        // overwrite FEX's SIGBUS recovery (and other required signal handlers)
+        // with the pre-runtime actions, which are SIG_DFL in standalone loaders.
+        // The early alt-stack teardown already preserves a foreign JNI thread's
+        // stack; FEX registers its own guest-thread stack during SetupThreads.
+        Vexa::Log::UninstallSignalHandlers();
         r = Init::SetupThreadHandlers(g_state);
         if (!r.Ok()) {
             const std::string fields = Vexa::Log::AddFields({
@@ -170,7 +196,6 @@ namespace Vexa::Runtime {
 
         Vexa::Log::InstallFexCrashHandler(g_state.signalDelegator.get());
         VEXA_LOGI(env, "FEX", "FEX crash handler installed", "{}");
-        Vexa::Log::UninstallSignalHandlers();
 
         r = Init::SetupThreads(g_state);
         if (!r.Ok()) {

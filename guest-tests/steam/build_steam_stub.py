@@ -41,6 +41,7 @@ RETURN_ONE = {
     "SteamAPI_ISteamUtils_IsOverlayEnabled_", "SteamAPI_ISteamRemoteStorage_IsCloudEnabledForApp_",
     "SteamAPI_ISteamApps_BIsAppInstalled", "SteamAPI_ISteamClient_CreateSteamPipe",
     "SteamAPI_ISteamClient_ConnectToGlobalUser", "SteamAPI_ISteamClient_CreateLocalUser",
+    "SteamAPI_ISteamFriends_GetFriendPersonaState", "SteamAPI_ISteamFriends_GetPersonaState",
 }
 STRINGS = {
     "SteamAPI_ISteamApps_GetCurrentGameLanguage": "english",
@@ -63,9 +64,43 @@ CUSTOM = {
     "SteamAPI_ISteamRemoteStorage_FileExists":
         "EXPORT bool SteamAPI_ISteamRemoteStorage_FileExists(void* self, const char* name) { char path[PATH_MAX]; struct stat st; return storage_path(name, path) && !stat(path, &st) && S_ISREG(st.st_mode); }",
     "SteamAPI_ISteamUtils_IsAPICallCompleted":
-        "EXPORT bool SteamAPI_ISteamUtils_IsAPICallCompleted(void* self, uint64_t call, bool* failed) { return storage_completed(call, failed); }",
+        "EXPORT bool SteamAPI_ISteamUtils_IsAPICallCompleted(void* self, uint64_t call, bool* failed) { return apicall_completed(call, failed); }",
+    "SteamAPI_ManualDispatch_GetAPICallResult":
+        "EXPORT bool SteamAPI_ManualDispatch_GetAPICallResult(int pipe, uint64_t call, void* data, int size, int callback, bool* failed) { return apicall_result(call, data, size, callback, failed); }",
     "SteamAPI_ISteamUtils_GetAPICallResult":
-        "EXPORT bool SteamAPI_ISteamUtils_GetAPICallResult(void* self, uint64_t call, void* data, int size, int callback, bool* failed) { return storage_result(call, data, size, callback, failed); }",
+        "EXPORT bool SteamAPI_ISteamUtils_GetAPICallResult(void* self, uint64_t call, void* data, int size, int callback, bool* failed) { return apicall_result(call, data, size, callback, failed); }",
+    "SteamAPI_ISteamUserStats_FindLeaderboard":
+        "EXPORT uint64_t SteamAPI_ISteamUserStats_FindLeaderboard(void* self, const char* name) { trace(\"SteamAPI_ISteamUserStats_FindLeaderboard\"); return lb_find_call(name, 0, 0, 0); }",
+    "SteamAPI_ISteamUserStats_FindOrCreateLeaderboard":
+        "EXPORT uint64_t SteamAPI_ISteamUserStats_FindOrCreateLeaderboard(void* self, const char* name, int sort, int display) { trace(\"SteamAPI_ISteamUserStats_FindOrCreateLeaderboard\"); return lb_find_call(name, 1, sort, display); }",
+    "SteamAPI_ISteamUserStats_GetLeaderboardName":
+        "EXPORT const char* SteamAPI_ISteamUserStats_GetLeaderboardName(void* self, uint64_t lb) { return lb_name(lb); }",
+    "SteamAPI_ISteamUserStats_GetLeaderboardEntryCount":
+        "EXPORT int SteamAPI_ISteamUserStats_GetLeaderboardEntryCount(void* self, uint64_t lb) { return (int)lb_entry_count(lb); }",
+    "SteamAPI_ISteamUserStats_GetLeaderboardSortMethod":
+        "EXPORT int SteamAPI_ISteamUserStats_GetLeaderboardSortMethod(void* self, uint64_t lb) { return (int)lb_sort_method(lb); }",
+    "SteamAPI_ISteamUserStats_GetLeaderboardDisplayType":
+        "EXPORT int SteamAPI_ISteamUserStats_GetLeaderboardDisplayType(void* self, uint64_t lb) { return (int)lb_display_type(lb); }",
+    "SteamAPI_ISteamUserStats_DownloadLeaderboardEntries":
+        "EXPORT uint64_t SteamAPI_ISteamUserStats_DownloadLeaderboardEntries(void* self, uint64_t lb, int request, int start, int end) { trace(\"SteamAPI_ISteamUserStats_DownloadLeaderboardEntries\"); return lb_download_call(lb, request, start, end, 0, 0); }",
+    "SteamAPI_ISteamUserStats_DownloadLeaderboardEntriesForUsers":
+        "EXPORT uint64_t SteamAPI_ISteamUserStats_DownloadLeaderboardEntriesForUsers(void* self, uint64_t lb, const uint64_t* users, int count) { return lb_download_call(lb, 3, 0, 0, users, count); }",
+    "SteamAPI_ISteamUserStats_GetDownloadedLeaderboardEntry":
+        "EXPORT bool SteamAPI_ISteamUserStats_GetDownloadedLeaderboardEntry(void* self, uint64_t entries, int index, void* entry, int32_t* details, int max) { return lb_get_entry(entries, index, entry, details, max) != 0; }",
+    "SteamAPI_ISteamUserStats_UploadLeaderboardScore":
+        "EXPORT uint64_t SteamAPI_ISteamUserStats_UploadLeaderboardScore(void* self, uint64_t lb, int method, int32_t score, const int32_t* details, int count) { return lb_upload_call(lb, method, score); }",
+    "SteamAPI_ISteamUserStats_AttachLeaderboardUGC":
+        "EXPORT uint64_t SteamAPI_ISteamUserStats_AttachLeaderboardUGC(void* self, uint64_t lb, uint64_t ugc) { return lb_ugc_call(lb); }",
+    "SteamAPI_ISteamUserStats_GetNumberOfCurrentPlayers":
+        "EXPORT uint64_t SteamAPI_ISteamUserStats_GetNumberOfCurrentPlayers(void* self) { return lb_players_call(); }",
+    "SteamAPI_ISteamFriends_GetFriendCount":
+        "EXPORT int SteamAPI_ISteamFriends_GetFriendCount(void* self, int flags) { return (int)lb_friend_count(flags); }",
+    "SteamAPI_ISteamFriends_GetFriendByIndex":
+        "EXPORT uint64_t SteamAPI_ISteamFriends_GetFriendByIndex(void* self, int index, int flags) { return lb_friend_index(index, flags); }",
+    "SteamAPI_ISteamFriends_GetFriendRelationship":
+        "EXPORT int SteamAPI_ISteamFriends_GetFriendRelationship(void* self, uint64_t id) { return (int)lb_relationship(id); }",
+    "SteamAPI_ISteamFriends_GetFriendPersonaName":
+        "EXPORT const char* SteamAPI_ISteamFriends_GetFriendPersonaName(void* self, uint64_t id) { return lb_persona(id); }",
     "SteamInternal_ContextInit": (
         "EXPORT void* SteamInternal_ContextInit(void** ctx) {"
         " trace(\"SteamInternal_ContextInit\");"
@@ -246,8 +281,9 @@ def render(names):
         "static void *fake_interface_for_export(const char *n) { return fake_interface_for_version(n); }",
         "#define EXPORT __attribute__((visibility(\"default\")))",
     ]
-    with open(os.path.join(ROOT, "remote_storage.c"), encoding="utf-8") as helper:
-        lines.append(helper.read())
+    for helper_name in ("remote_storage.c", "leaderboards.c"):
+        with open(os.path.join(ROOT, helper_name), encoding="utf-8") as helper:
+            lines.append(helper.read())
     for n in names:
         if n in CUSTOM:
             lines.append(CUSTOM[n])

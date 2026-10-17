@@ -24,6 +24,8 @@ namespace Vexa::Common {
         BadThunkGuest = 104,
         BadExecutable = 105,
         BadArtifactDir = 106,
+        BadCompatibilityConfig = 107,
+        CompatibilityDisplayUnavailable = 108,
         InternalError = 199,
 
         // Init (200+)
@@ -43,6 +45,8 @@ namespace Vexa::Common {
         ExecutePrereqMissing = 320,
         ElfLoaderFailed = 321,
         MapMemoryFailed = 322,
+        CompatibilitySpawnFailed = 323,
+        CompatibilityGuestFailed = 324,
     };
 
     struct Result {

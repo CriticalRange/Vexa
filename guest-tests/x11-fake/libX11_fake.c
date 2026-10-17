@@ -7,6 +7,7 @@
 #include <X11/Xutil.h>
 #include <X11/Xlibint.h>
 #include <X11/XKBlib.h>
+#include <X11/Xresource.h>
 #include <X11/Xregion.h>
 
 #include <errno.h>
@@ -2003,7 +2004,12 @@ XIM XOpenIM(Display* dpy, struct _XrmHashBucketRec* rdb, char* res_name, char* r
   (void)rdb;
   (void)res_name;
   (void)res_class;
-  return NULL;
+  // Non-NULL dummy: ETS2 treats a NULL IM as fatal and tears down the display.
+  // Opt-in only (VEXA_FAKE_IM=1): Unity/SDL games cope with NULL and crash
+  // (strlen(NULL) in the Unity main thread) when handed a dummy handle.
+  static int g_fake_im;
+  const char* fake_im = getenv("VEXA_FAKE_IM");
+  return (fake_im && fake_im[0] == '1') ? (XIM)&g_fake_im : NULL;
 }
 
 Status XCloseIM(XIM im) {
@@ -2023,7 +2029,9 @@ char* XSetIMValues(XIM im, ...) {
 
 XIC XCreateIC(XIM im, ...) {
   (void)im;
-  return NULL;
+  static int g_fake_ic;
+  const char* fake_im = getenv("VEXA_FAKE_IM");
+  return (fake_im && fake_im[0] == '1') ? (XIC)&g_fake_ic : NULL;
 }
 
 void XDestroyIC(XIC ic) {
@@ -2041,6 +2049,79 @@ void XUnsetICFocus(XIC ic) {
 char* XGetICValues(XIC ic, ...) {
   (void)ic;
   return k_im_unsupported;
+}
+
+/* ---- ETS2 extras ---- */
+
+// XrmUniqueQuark: each call must return a new quark; fake atoms start at 1, so
+// quarks live in a disjoint high range to avoid colliding with XInternAtom.
+XrmQuark XrmUniqueQuark(void) {
+  static XrmQuark next = 0x10000;
+  return next++;
+}
+
+Status XQueryColors(Display* dpy, Colormap cmap, XColor* defs, int ncolors) {
+  (void)dpy;
+  (void)cmap;
+  for (int i = 0; i < ncolors; ++i) {
+    unsigned long p = defs[i].pixel;
+    defs[i].red = (unsigned short)(((p >> 16) & 0xff) * 257);
+    defs[i].green = (unsigned short)(((p >> 8) & 0xff) * 257);
+    defs[i].blue = (unsigned short)((p & 0xff) * 257);
+    defs[i].flags = DoRed | DoGreen | DoBlue;
+  }
+  return 1;
+}
+
+// XSaveContext/XDeleteContext back a (window,context)->data map. ETS2 saves a
+// context on its window; keep a tiny real map so behavior stays sane.
+typedef struct FakeXContextEntry {
+  XID rid;
+  XContext ctx;
+  void* data;
+} FakeXContextEntry;
+static FakeXContextEntry g_xcontexts[64];
+static int g_xcontext_count;
+
+int XSaveContext(Display* dpy, XID rid, XContext context, _Xconst char* data) {
+  (void)dpy;
+  for (int i = 0; i < g_xcontext_count; ++i) {
+    if (g_xcontexts[i].rid == rid && g_xcontexts[i].ctx == context) {
+      g_xcontexts[i].data = (void*)data;
+      return 0;
+    }
+  }
+  if (g_xcontext_count >= 64) return XCNOMEM;
+  g_xcontexts[g_xcontext_count++] = (FakeXContextEntry){rid, context, (void*)data};
+  return 0;
+}
+
+int XFindContext(Display* dpy, XID rid, XContext context, char** data) {
+  (void)dpy;
+  for (int i = 0; i < g_xcontext_count; ++i) {
+    if (g_xcontexts[i].rid == rid && g_xcontexts[i].ctx == context) {
+      *data = (char*)g_xcontexts[i].data;
+      return 0;
+    }
+  }
+  return XCNOENT;
+}
+
+int XDeleteContext(Display* dpy, XID rid, XContext context) {
+  (void)dpy;
+  for (int i = 0; i < g_xcontext_count; ++i) {
+    if (g_xcontexts[i].rid == rid && g_xcontexts[i].ctx == context) {
+      g_xcontexts[i] = g_xcontexts[--g_xcontext_count];
+      return 0;
+    }
+  }
+  return XCNOENT;
+}
+
+void XkbFreeNames(XkbDescPtr xkb, unsigned int which, Bool free_map) {
+  (void)xkb;
+  (void)which;
+  (void)free_map;
 }
 
 char* XSetICValues(XIC ic, ...) {

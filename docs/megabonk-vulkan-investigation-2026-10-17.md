@@ -1,0 +1,23 @@
+# Megabonk Vulkan performance, 2026-10-17
+
+Device: Xiaomi 2407FPN8EG, Mali-G720 Immortalis MC12, native game surface 2712x1220, display requested at 144 Hz. Measurements are menu samples on the same device and graphics settings, not a controlled gameplay benchmark. Display size and Megabonk's saved resolution index were restored after a diagnostic 1080p run; the performance fix does not alter resolution.
+
+## Proven defect and fix
+
+With `Vulkan Renderer` enabled, Megabonk launches with `-force-vulkan` and the Mali Vulkan driver identifies the process as `Megabonk`. GLX opens only a shadow pbuffer for Unity's startup probe; it does not own the game window. The original Vulkan path returned `VK_SUBOPTIMAL_KHR` from almost every `vkQueuePresentKHR`. Unity interpreted each result as a surface change and rebuilt an Android Vulkan surface and swapchain on virtually every frame. In the sampled log, 256 presents included hundreds of successful swapchain creations. The menu displayed 13–18 FPS.
+
+FEX now converts that specific present result to `VK_SUCCESS` only while the runtime surface serial and the live `ANativeWindow` dimensions still match the swapchain's creation values. A replaced or resized surface continues to signal a real rebuild. After the change, a run showed three surface creations over more than 1000 presents, and the menu displayed about 68–70 FPS. The normal path uses a cached retained-window accessor and has no profiling flag enabled. The native Vulkan thunk is staged in the APK and its runtime content stamp was refreshed.
+
+## Further profiling
+
+Opt-in per-pass GPU timestamps at native resolution showed about 28 render/compute operations in a main command buffer. A half-resolution fragment pass using shader `93d389af8308d139` averaged about 2.36 ms, the 42-bind scene pass about 1.57 ms, and final/composite passes around 1 ms each. Main command-buffer GPU work was commonly 8–10 ms. Native API wall time averaged roughly 1.0–1.2 ms for image acquire and 3–4 ms for present. These wall times include waits and cannot be added to GPU time as if all work were serial. Android's CPU/GPU frame analysis guide makes this distinction explicit.
+
+`simpleperf` sampled ten seconds of a steady menu: approximately 66% of CPU-clock samples mapped to translated UnityPlayer code, 5.4% to GameAssembly, 2.4% to the guest Vulkan thunk, 0.36% to the host Vulkan thunk and about 9.7% to the Mali user-mode driver. The profile is a CPU attribution, not GPU utilization. No single translated block dominated enough to justify a speculative FEX/JIT rewrite.
+
+Two guarded experiments did not improve the menu: the exact-hash 43-tap shader loop-unroll hint displayed 67 FPS versus 68 FPS before it, and supported MAILBOX presentation displayed 63 FPS in a later sequential sample. Thermal and scene drift prevent treating these small differences as precise deltas. Both options remain off by default. The Vulkan profiler, JIT-name profiler and MAILBOX flags were removed from the device after measurement.
+
+Verification: the debug APK assembled and Android unit tests passed. Its staged `libvulkan-host.so` SHA-256 is `5257a577fefa7f2b5fce8ed4b9f4b05592c242cfb549f68574b7f96613fe3bdb`, matching the installed app-private thunk. A final visible launch at 2712x1220 with `-force-vulkan` and no profiling flags displayed 69 FPS. This is a menu observation; sustained gameplay and other devices need separate checks.
+
+Google's Android Vulkan guide recommends reducing render-pass boundaries and avoiding unnecessary attachment loads/stores. Arm's Mali guidance recommends checking pipeline bubbles, shader cost, overdraw and external bandwidth with GPU counters. The Unity game owns this render graph; changing attachment semantics or merging its passes inside a Vulkan thunk without dependency analysis would risk incorrect frames. The next useful optimization step is a Mali/AGI capture with render-pass names and bandwidth/fragment counters, then a verified change to the dominant game pass or its shader. Vulkan alone does not imply higher FPS than GL.
+
+References: [Android Vulkan design guidelines](https://developer.android.com/ndk/guides/graphics/design-notes), [Android CPU/GPU frame analysis](https://developer.android.com/android-performance-analyzer/analyze/frame-times), [Arm Mali GPU analysis](https://developer.arm.com/community/arm-community-blogs/b/mobile-graphics-and-gaming-blog/posts/accelerating-mali-gpu-analysis-using-arm-mobile-studio), [Vulkan presentation modes](https://docs.vulkan.org/tutorial/latest/03_Drawing_a_triangle/01_Presentation/01_Swap_chain.html).

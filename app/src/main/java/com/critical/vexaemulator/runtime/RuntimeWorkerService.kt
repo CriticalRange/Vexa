@@ -64,7 +64,12 @@ class RuntimeWorkerService : Service() {
                 )
             }
 
-            val code = RuntimeBridge.startRuntime(request)
+            val code = try {
+                RuntimeBridge.startRuntime(CompatibilitySettings.apply(applicationContext, request))
+            } catch (error: Exception) {
+                sendWorkerLog("ERROR", "BOOT", "Launch configuration failed: ${error.message}")
+                107
+            }
             runCatching { rootSession?.stop("exit") }
             rootSession = null
             sendToSupervisor(RuntimeIpc.MSG_WORKER_START_RESULT) {
@@ -223,6 +228,9 @@ class RuntimeWorkerService : Service() {
     }
 
     private fun ensureUsableSurface(request: LaunchRequest): Boolean {
+        // The real X server owns rendering in a different process; the FEX
+        // worker must not wait for or acquire the native-game Android Surface.
+        if (envValue(request.launchEnv, "VEXA_REAL_X11") == "1") return true
         if (currentSurface?.isValid == true) return true
         if (!isTruthy(envValue(request.launchEnv, "VEXA_HEADLESS"))) return false
 

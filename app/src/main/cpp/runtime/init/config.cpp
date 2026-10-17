@@ -14,6 +14,7 @@
 #include <fstream>
 #include <sstream>
 #include <vector>
+#include <string_view>
 
 #include "../../logging/native_log.h"
 #include "../../logging/crash_signals.h"
@@ -234,7 +235,14 @@ namespace Vexa::Runtime::Init {
             return std::filesystem::is_regular_file(host, ec) ? 1 : 0;
         }
 
-        std::string BuildAppTHunkConfigJson(const Vexa::Common::Paths &paths, bool is64) {
+        std::string BuildAppTHunkConfigJson(const Vexa::Common::Paths &paths, bool is64, bool externalDisplay, bool x11Vulkan) {
+            if (externalDisplay) {
+                // The Android thunks consume the current process's Surface.
+                // A separate real-X11 session must use its guest display/ICD
+                // libraries instead of being redirected back to that Surface.
+                const auto vulkan = x11Vulkan ? ThunkGuestPresent(paths, "libvulkan-guest.so", is64) : 0;
+                return "{\"ThunksDB\":{\"SDL3\":0,\"SDL3_image\":0,\"SDL2\":0,\"openal\":0,\"GL\":0,\"EGL\":0,\"GLESv2\":0,\"Vulkan\":" + std::to_string(vulkan) + "}}\n";
+            }
             std::ostringstream json;
             json << "{\n"
                  << "  \"ThunksDB\": {\n"
@@ -328,7 +336,16 @@ namespace Vexa::Runtime::Init {
                                          }).c_str()
             );
         }
-        if (!WriteTextFile(appCfgPath, BuildAppTHunkConfigJson(paths, is64))) {
+        bool compatibilitySession = false;
+        bool externalDisplay = false;
+        bool x11Vulkan = false;
+        for (const auto &entry : launchEnv) {
+            if (entry == "VEXA_REAL_X11=1") compatibilitySession = true;
+            if (std::string_view(entry).starts_with("VEXA_COMPAT_SESSION=")) compatibilitySession = true;
+            if (entry == "VEXA_PROTON_DISPLAY_BACKEND=external-x11") externalDisplay = true;
+            if (entry == "VEXA_X11_VULKAN=1") x11Vulkan = true;
+        }
+        if (!WriteTextFile(appCfgPath, BuildAppTHunkConfigJson(paths, is64, compatibilitySession && externalDisplay, x11Vulkan))) {
             VEXA_LOGW(
                     env,
                     "FEX",

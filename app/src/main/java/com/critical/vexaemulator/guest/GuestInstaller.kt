@@ -29,7 +29,13 @@ object GuestInstaller {
                 executable.outputStream().use { output -> input.copyTo(output) }
             }
         }
-        val steamStubCount = installSteamStub(context, root, guestDir)
+        // Keep the existing native-game stub policy out of Windows installs:
+        // Proton must retain its own real Steam files and prefix contents.
+        val nativeElf = executable.inputStream().use { input ->
+            val ident = ByteArray(4)
+            input.read(ident) == 4 && ident.contentEquals(byteArrayOf(0x7f, 69, 76, 70))
+        }
+        val steamStubCount = if (nativeElf) installSteamStub(context, root, guestDir) else 0
         if (steamStubCount > 0) {
             VexaLogger.log(
                 LogLevel.INFO,
@@ -125,7 +131,25 @@ object GuestInstaller {
     }
 
     @Synchronized
+    fun ensureCompatibilityHelper(context: Context, rootfs: File) {
+        val selected = rootfs.canonicalFile
+        require(selected.path.startsWith(context.filesDir.canonicalPath + File.separator)) {
+            "Compatibility helper rootfs must be app-private"
+        }
+        // Install launch support independently of the graphics content stamp.
+        // Prefixes and user-supplied Proton distributions are never restaged here.
+        val session = File(selected, "opt/vexa/proton_session.py")
+        val sessionBytes = context.assets.open("compat/proton_session.py").use { it.readBytes() }
+        if (!session.isFile || !session.readBytes().contentEquals(sessionBytes)) {
+            session.parentFile?.mkdirs()
+            session.writeBytes(sessionBytes)
+            session.setReadable(true, false)
+        }
+    }
+
+    @Synchronized
     fun ensureRuntime(context: Context, root: File = context.filesDir) {
+        ensureCompatibilityHelper(context, File(root, "rootfs"))
         val stamp = File(root, "runtime.stamp")
         // runtime/STAMP carries a content hash, so updated thunks/rootfs replace the old copy.
         val expected = runCatching {

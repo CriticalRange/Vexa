@@ -140,7 +140,7 @@ fun SettingRow(
         Column(modifier = Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 dot?.let {
-                    StatusDot(it, size = 6.dp, pulse = true)
+                    StatusDot(it, size = 6.dp)
                     Spacer(Modifier.width(2.dp))
                 }
                 Text(label, style = MaterialTheme.typography.titleLarge.copy(color = c.textPrimary))
