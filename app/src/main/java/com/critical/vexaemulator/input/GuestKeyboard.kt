@@ -88,3 +88,35 @@ object GuestKeyboard {
         }
     }
 }
+
+/** One X11 key, optionally with Shift held around the press. */
+data class GuestKeyPlan(val keysym: Int, val shift: Boolean)
+
+/**
+ * Characters from the on-screen keyboard. Letters and digits use the evdev
+ * keysyms the guest already maps. Other letters go out as Unicode keysyms
+ * (0x01000000 + code point) so Xutf8LookupString can return them.
+ */
+fun guestKeyPlan(ch: Char): GuestKeyPlan? {
+    if (ch in 'a'..'z') return GuestKeyPlan(XKeys.A + (ch - 'a'), false)
+    if (ch in 'A'..'Z') return GuestKeyPlan(XKeys.A + (ch - 'A'), true)
+    if (ch in '0'..'9') return GuestKeyPlan(0x30 + (ch - '0'), false)
+    val shiftedFrom = when (ch) {
+        '!' -> '1'; '@' -> '2'; '#' -> '3'; '$' -> '4'; '%' -> '5'
+        '^' -> '6'; '&' -> '7'; '*' -> '8'; '(' -> '9'; ')' -> '0'
+        '_' -> '-'; '+' -> '='; '{' -> '['; '}' -> ']'; '|' -> '\\'
+        ':' -> ';'; '"' -> '\''; '<' -> ','; '>' -> '.'; '?' -> '/'
+        '~' -> '`'
+        else -> null
+    }
+    if (shiftedFrom != null) return GuestKeyPlan(shiftedFrom.code, true)
+    val plain = when (ch) {
+        ' ' -> XKeys.SPACE
+        '-' -> 0x2d; '=' -> 0x3d; '[' -> 0x5b; ']' -> 0x5d; '\\' -> 0x5c
+        ';' -> 0x3b; '\'' -> 0x27; '`' -> 0x60; ',' -> 0x2c; '.' -> 0x2e; '/' -> 0x2f
+        else -> 0
+    }
+    if (plain != 0) return GuestKeyPlan(plain, false)
+    if (ch.code in 0xa0..0x10ffff) return GuestKeyPlan(0x01000000 or ch.code, false)
+    return null
+}

@@ -64,7 +64,9 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.lifecycleScope
+import com.critical.vexaemulator.input.FloatingKeyboard
 import com.critical.vexaemulator.input.GuestKeyboard
+import com.critical.vexaemulator.input.guestKeyPlan
 import com.critical.vexaemulator.input.GuestPadOverlay
 import com.critical.vexaemulator.input.GuestPadState
 import com.critical.vexaemulator.input.PadCtl
@@ -763,6 +765,8 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
                     onHideFilters = { hideFilters = !hideFilters },
                     onBack = { closeGameActivity() },
                     pad = pad,
+                    onTypeChar = ::typeGuestChar,
+                    onTypeKey = ::tapGuestKey,
                 )
             }
         }
@@ -865,6 +869,18 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
         if (keysym == 0) return false
         writePointer(if (event.action == KeyEvent.ACTION_DOWN) 2 else 3, keysym, 0, 0)
         return true
+    }
+
+    private fun tapGuestKey(keysym: Int) {
+        writePointer(2, keysym, 0, 0)
+        writePointer(3, keysym, 0, 0)
+    }
+
+    private fun typeGuestChar(ch: Char) {
+        val plan = guestKeyPlan(ch) ?: return
+        if (plan.shift) writePointer(2, XKeys.SHIFT_L, 0, 0)
+        tapGuestKey(plan.keysym)
+        if (plan.shift) writePointer(3, XKeys.SHIFT_L, 0, 0)
     }
 
     // Guests present through eglSwapBuffers, so the display rate caps their frame rate.
@@ -1203,6 +1219,8 @@ private fun GameScreen(
     onHideFilters: () -> Unit,
     onBack: () -> Unit,
     pad: GuestPadState,
+    onTypeChar: (Char) -> Unit,
+    onTypeKey: (Int) -> Unit,
 ) {
     val c = VexaTheme.colors
     val entries by LogStore.entries.collectAsState()
@@ -1214,6 +1232,7 @@ private fun GameScreen(
     val panelWidthPx = with(density) { 320.dp.toPx() }
     val drawer = remember { Animatable(0f) }
     var debugLevels by remember { mutableStateOf(setOf<LogLevel>()) }
+    var keyboardOpen by remember { mutableStateOf(false) }
     val openDebug: (Set<LogLevel>) -> Unit = { levels ->
         scope.launch { drawer.snapTo(0f) }
         debugLevels = levels
@@ -1275,8 +1294,20 @@ private fun GameScreen(
                             pad.overlay = !pad.overlay
                             VexaPrefs.updatePadOverlay(pad.overlay)
                         },
+                        onOpenKeyboard = {
+                            settle(false)
+                            keyboardOpen = true
+                        },
                     )
                 }
+            }
+            if (keyboardOpen) {
+                FloatingKeyboard(
+                    onChar = onTypeChar,
+                    onKeysym = onTypeKey,
+                    onClose = { keyboardOpen = false },
+                    modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 12.dp),
+                )
             }
             EdgeHandle(
                 open = open,

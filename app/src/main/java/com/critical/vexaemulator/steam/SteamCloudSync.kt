@@ -119,7 +119,7 @@ object SteamCloudSync {
         val conflicts = mutableListOf<CloudConflict>()
         val pending = mutableListOf<Triple<AppFileInfo, String, File>>()
         files.forEachIndexed { index, info ->
-            val name = effectiveName(info, list.pathPrefixes)
+            val name = placeTruckProfiles(appId, effectiveName(info, list.pathPrefixes))
             val target = roots.resolve(name)
             if (target == null) {
                 unmapped += 1
@@ -241,6 +241,19 @@ object SteamCloudSync {
             }
         }
         throw last ?: IllegalStateException(stage)
+    }
+
+    // ETS2 and ATS publish Documents-relative "profiles/..." with no root token.
+    // The game reads those from its XDG directory, not from the RemoteStorage stub.
+    internal fun placeTruckProfiles(appId: Int, name: String): String {
+        if (name.startsWith("%")) return name
+        val folder = when (appId) {
+            227300 -> "Euro Truck Simulator 2"
+            270880 -> "American Truck Simulator"
+            else -> return name
+        }
+        if (!name.startsWith("profiles/") && !name.startsWith("steam_profiles/")) return name
+        return "%LinuxXdgDataHome%/$folder/$name"
     }
 
     private fun effectiveName(info: AppFileInfo, prefixes: List<String>): String {

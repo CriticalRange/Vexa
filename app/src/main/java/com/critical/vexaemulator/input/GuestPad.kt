@@ -367,7 +367,6 @@ class GuestPadState {
         val mask = if (button == 3) 1024 else 256
         val encoded = (button shl 24) or mask
         if (want) {
-            sink.pointer(6, aimX and 0xffff, aimY and 0xffff, clickMask(button))
             sink.pointer(4, aimX, aimY, encoded)
         } else {
             sink.pointer(5, aimX, aimY, encoded)
@@ -436,21 +435,6 @@ fun GuestPadOverlay(pad: GuestPadState) {
     if (!pad.overlay) return
     val c = VexaTheme.colors
     Box(modifier = Modifier.fillMaxSize()) {
-        if (pad.aimX >= 0 && pad.aimY >= 0) {
-            Box(
-                modifier = Modifier
-                    .offset {
-                        IntOffset(
-                            pad.aimX - 7.dp.roundToPx(),
-                            pad.aimY - 7.dp.roundToPx(),
-                        )
-                    }
-                    .size(14.dp)
-                    .clip(CircleShape)
-                    .background(Color.White.copy(alpha = 0.9f))
-                    .border(2.dp, c.borderStrong, CircleShape),
-            )
-        }
         Row(
             Modifier.align(Alignment.TopStart).padding(start = 20.dp, top = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),

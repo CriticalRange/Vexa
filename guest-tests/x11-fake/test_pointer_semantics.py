@@ -23,7 +23,8 @@ typedef int Bool;
 struct vexa_window_geometry { int width, height; };
 static struct { int width,height; } g_screen = {1280,720};
 typedef struct { struct { Window window; } xmotion; } XEvent;
-static int g_pointer_x=100,g_pointer_y=200,g_warp_x,g_warp_y,g_warp_centered,g_warp_mode;
+static int g_pointer_x=100,g_pointer_y=200,g_warp_x,g_warp_y,g_warp_centered,g_warp_mode,g_warp_serial;
+static int g_cursor_x,g_cursor_y,g_cursor_moved;
 static int g_pointer_grabbed;
 static unsigned g_pointer_state;
 static Window g_input_window=1;
@@ -47,7 +48,7 @@ int main(void) {
     g_pointer_x=mx;g_pointer_y=my;
     assert(mx==650+i*10 && my==360);
   }
-  assert(events==2); /* Moving must not fabricate center events. */
+  assert(events==1); /* A center warp is an anchor, not a motion. */
   XWarpPointer(NULL,0,1,0,0,0,0,640,360);
   int mx,my;vexa_relative_pointer(-10,10,&mx,&my);
   assert(mx==630 && my==370);
@@ -59,11 +60,17 @@ int main(void) {
   int before=events;
   g_pointer_x=1100;g_pointer_y=650;
   XWarpPointer(NULL,0,1,0,0,0,0,640,360);
-  assert(events==before && g_pointer_x==1100 && g_pointer_y==650);
+  assert(events==before && g_pointer_x==640 && g_pointer_y==360);
+  g_cursor_moved=1;
+  g_pointer_x=400;g_pointer_y=300;
+  XWarpPointer(NULL,0,1,0,0,0,0,640,360);
+  assert(events==before && g_pointer_x==400 && g_pointer_y==300);
+  XWarpPointer(NULL,0,1,0,0,0,0,0,0);
+  assert(events==before && g_pointer_x==0 && g_pointer_y==0 && g_cursor_moved==0);
   unsetenv("VEXA_X11_ABSOLUTE_POINTER");
   g_pointer_grabbed=0;
   XWarpPointer(NULL,0,1,0,0,0,0,640,360);
-  assert(events==before+1);
+  assert(events==before);
   puts("PASS relative zero, relative delta, absolute center, fresh pointer query");
 }
 '''
