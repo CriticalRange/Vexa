@@ -184,7 +184,14 @@ object GuestCatalog {
             assetPath = "",
             fileName = "Hollow Knight",
             args = listOf("-screen-fullscreen", "0", "-screen-width", "2712", "-screen-height", "1220", "-force-glcore"),
-            env = listOf("DISPLAY=:0", "SDL_VIDEODRIVER=x11", "SteamAppId=367520", "VEXA_STEAM_TRACE=1", "VEXA_MONO_COMPAT=1"),
+            env = listOf(
+                "DISPLAY=:0",
+                "SDL_VIDEODRIVER=x11",
+                "SteamAppId=367520",
+                "VEXA_STEAM_TRACE=1",
+                "VEXA_MONO_COMPAT=1",
+                "LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libvexa_memcpy214.so",
+            ),
             preinstalled = true,
         ),
         GuestProgram(
@@ -194,7 +201,21 @@ object GuestCatalog {
                 "Heavy GL streaming title; base game files only (no dlc_*.scs).",
             assetPath = "",
             fileName = "bin/linux_x64/eurotrucks2",
-            env = listOf("DISPLAY=:0", "SDL_VIDEODRIVER=x11", "LD_LIBRARY_PATH=bin/linux_x64", "SteamAppId=227300", "VEXA_STEAM_TRACE=1", "LD_BIND_NOW=1", "VEXA_FAKE_IM=1", "LD_PRELOAD=libvexa_glmap.so"),
+            env = listOf(
+                "DISPLAY=:0",
+                "SDL_VIDEODRIVER=x11",
+                "LD_LIBRARY_PATH=bin/linux_x64",
+                "SteamAppId=227300",
+                "VEXA_GL_SRGB_SURFACE=1",
+                "VEXA_X11_ABSOLUTE_POINTER=1",
+                "VEXA_STEAM_TRACE=1",
+                "LD_BIND_NOW=1",
+                "VEXA_FAKE_IM=1",
+                // glmap stays a bare name so it is found next to the other guest libs.
+                // memcpy214 must be preloaded too: eurotrucks2 calls memcpy@GLIBC_2.14,
+                // and the libc IFUNC slot is NULL.
+                "LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libvexa_memcpy214.so:libvexa_glmap.so",
+            ),
             preinstalled = true,
         ),
         GuestProgram(

@@ -418,6 +418,22 @@ namespace {
         return true;
     }
 
+    // True when the faulting instruction is translated guest code. Celeste's
+    // Mono heap commits by touching pages that are not mapped yet; each touch
+    // is a SIGSEGV inside the JIT. Those are guest faults, not host crashes.
+    static bool GuestJitFault(const ucontext_t *uc) {
+#if defined(__aarch64__)
+        if (!uc) return false;
+        const uintptr_t pc = static_cast<uintptr_t>(uc->uc_mcontext.pc);
+        if (PcInJitRegion(pc)) return true;
+        ScanJitRanges();
+        return PcInJitRegion(pc);
+#else
+        (void) uc;
+        return false;
+#endif
+    }
+
     // FEX raises SEGV_ACCERR on its own guard page and interrupt page while JIT is healthy.
     static bool ShouldCaptureEarly(int sig, const siginfo_t *si, const ucontext_t *uc) {
         if (!AltStackUsable(uc)) return true;
@@ -425,6 +441,9 @@ namespace {
             return true;
         }
         if (sig != SIGSEGV) return false;
+        // Copying the process map on every guest page fault made Celeste's
+        // content load look frozen. FEX still delivers the signal.
+        if (GuestJitFault(uc)) return false;
         if (!si || si->si_code != SEGV_ACCERR) return true;
         const uintptr_t fault = reinterpret_cast<uintptr_t>(si->si_addr);
         uintptr_t pc = 0;
@@ -875,6 +894,12 @@ namespace {
         // IsAddressInCodeBuffer doesn't cover them, so without this check a
         // plain guest SIGSEGV is misclassified as a fatal host-code fault.
         // Let FEX's delegator (HandleGuestSignal) handle them instead.
+        if (Signal == SIGSEGV && GuestJitFault(reinterpret_cast<const ucontext_t *>(uctx))) {
+            // Same guest page faults as the early hook. Do not dump or copy
+            // maps; the guest handler commits the page and resumes.
+            return false;
+        }
+
         if (uctx && Thread && Thread->CurrentFrame) {
             const uintptr_t pc = static_cast<uintptr_t>(
                 reinterpret_cast<const ucontext_t *>(uctx)->uc_mcontext.pc);

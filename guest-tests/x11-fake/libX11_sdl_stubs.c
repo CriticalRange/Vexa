@@ -85,8 +85,6 @@ void *XVisualIDFromVisual(void) { return 0; }
 
 
 
-void *XkbGetMap(void) { return 0; }
-
 void *XkbGetUpdatedMap(void) { return 0; }
 
 void *XkbQueryExtension(void) { return 0; }

@@ -37,6 +37,7 @@ TARGETS=(
   "libudev_stub.c:libudev.so.1"
   "libpulse_stub.c:libpulse-simple.so.0"
   "libvexa_glmap.c:libvexa_glmap.so"
+  "libvexa_memcpy214.c:libvexa_memcpy214.so"
 )
 
 want=("$@")
@@ -58,8 +59,18 @@ for t in "${TARGETS[@]}"; do
     "$CLANG" --target="$GUEST_ARCH-linux-gnu" -c /dev/null -o /dev/null 2>/dev/null || \
       CLANG="$NDK/toolchains/llvm/prebuilt/windows-x86_64/bin/x86_64-linux-android-clang"
   fi
+  # The 2.14 memcpy symbol is an x86_64 UnityPlayer requirement. The i386
+  # sysroot has no memcpy@GLIBC_2.2.5 to forward to.
+  if [ "$so" = "libvexa_memcpy214.so" ] && [ "$GUEST_ARCH" != "x86_64" ]; then
+    continue
+  fi
+  extra=()
+  if [ "$so" = "libvexa_memcpy214.so" ]; then
+    extra+=(-Wl,--version-script,"$SRC/libvexa_memcpy214.map")
+  fi
   "$CLANG" --target="$GUEST_ARCH-linux-gnu" --sysroot="$SYSROOT" -O1 -fPIC -shared \
            -fno-stack-protector -Wl,-soname,"$so" -I"$SRC" \
+           "${extra[@]}" \
            -o "$out" "${srcs[@]}"
   printf 'built %-22s %8d bytes\n' "$so" "$(stat -c %s "$out")"
 done

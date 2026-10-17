@@ -349,6 +349,7 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
     }
 
     private fun handleGameTouch(event: MotionEvent) {
+        if (handlePhysicalMouse(event)) return
         if (pad.overlay) return
         val maxX = (surfaceWidth - 1).coerceAtLeast(0)
         val maxY = (surfaceHeight - 1).coerceAtLeast(0)
@@ -694,6 +695,7 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
         pad.onDirectKey = { down, keysym -> writePointer(if (down) 2 else 3, keysym, 0, 0) }
         pad.onPadButton = { down, control -> writePointer(7, control, if (down) 1 else 0, 0) }
         pad.bAsEscape = intent.getStringExtra(EXTRA_PROGRAM_ID) == "megabonk"
+        pad.keyboardNavigationFallback = intent.getStringExtra(EXTRA_PROGRAM_ID) == "ets2"
         pad.overlay = VexaPrefs.padOverlay
         lifecycleScope.launch {
             while (true) {
@@ -772,8 +774,50 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
     }
 
     override fun dispatchGenericMotionEvent(event: MotionEvent): Boolean {
+        if (handlePhysicalMouse(event)) return true
         if (pad.onMotion(event)) return true
         return super.dispatchGenericMotionEvent(event)
+    }
+
+    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        // Compose's controller overlay otherwise consumes mouse drag events
+        // before the SurfaceView's touch listener can forward them.
+        if (!showDebugMenu && handlePhysicalMouse(event)) return true
+        return super.dispatchTouchEvent(event)
+    }
+
+    private var mouseButtons = 0
+
+    private fun handlePhysicalMouse(event: MotionEvent): Boolean {
+        if (!event.isFromSource(android.view.InputDevice.SOURCE_MOUSE)) return false
+        if (!::gameSurfaceView.isInitialized || surfaceWidth <= 0 || surfaceHeight <= 0) return false
+        val location = IntArray(2)
+        gameSurfaceView.getLocationOnScreen(location)
+        val x = (event.rawX - location[0]).toInt().coerceIn(0, surfaceWidth - 1)
+        val y = (event.rawY - location[1]).toInt().coerceIn(0, surfaceHeight - 1)
+        gameSurfaceView.requestFocus()
+        pad.aimX = x
+        pad.aimY = y
+        fun xMask(buttons: Int): Int =
+            (if (buttons and MotionEvent.BUTTON_PRIMARY != 0) 256 else 0) or
+            (if (buttons and MotionEvent.BUTTON_TERTIARY != 0) 512 else 0) or
+            (if (buttons and MotionEvent.BUTTON_SECONDARY != 0) 1024 else 0)
+        val buttons = when (event.actionMasked) {
+            MotionEvent.ACTION_CANCEL, MotionEvent.ACTION_UP -> 0
+            MotionEvent.ACTION_DOWN -> event.buttonState.takeIf { it != 0 } ?: MotionEvent.BUTTON_PRIMARY
+            else -> event.buttonState
+        }
+        writePointer(6, x, y, xMask(mouseButtons))
+        for ((androidButton, xButton) in listOf(
+            MotionEvent.BUTTON_PRIMARY to 1, MotionEvent.BUTTON_TERTIARY to 2,
+            MotionEvent.BUTTON_SECONDARY to 3,
+        )) {
+            if ((mouseButtons xor buttons) and androidButton == 0) continue
+            val down = buttons and androidButton != 0
+            writePointer(if (down) 4 else 5, x, y, (xButton shl 24) or xMask(mouseButtons))
+        }
+        mouseButtons = buttons
+        return true
     }
 
     private val padSink = object : PadSink {

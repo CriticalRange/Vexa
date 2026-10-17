@@ -736,8 +736,41 @@ static void vexa_fill_pointer(XEvent* event, Display* dpy, int type, int x, int 
   }
 }
 
-static int g_warp_mode = 0;
 static int g_warp_centered = 0;
+static int g_pointer_grabbed = 0;
+
+static int vexa_absolute_pointer(void) {
+  const char* mode = getenv("VEXA_X11_ABSOLUTE_POINTER");
+  return mode && strcmp(mode, "1") == 0;
+}
+
+/* Opt-in, bounded trace of the Android/X11/guest-warp coordinate boundary. */
+static void vexa_trace_pointer(const char* kind, int x, int y, int dx, int dy, int out_x, int out_y,
+                               Window window) {
+  int flag = open("/data/data/com.critical.vexaemulator/files/rootfs/tmp/vexa-input-trace.flag", O_RDONLY);
+  static int checked;
+  if (!checked++) fprintf(stderr, "[VEXA][INPUT-TRACE] flag_fd=%d errno=%d\n", flag, flag < 0 ? errno : 0);
+  if (flag < 0) return;
+  close(flag);
+  int file = open("/data/data/com.critical.vexaemulator/files/rootfs/tmp/vexa-input-trace.log", O_WRONLY | O_CREAT | O_APPEND, 0600);
+  if (file < 0) return;
+  if (lseek(file, 0, SEEK_END) > 1024 * 1024) ftruncate(file, 0);
+  char line[256];
+  int n = snprintf(line, sizeof(line), "%s win=%lu input=%d,%d delta=%d,%d output=%d,%d pointer=%d,%d centered=%d screen=%dx%d\n",
+          kind, (unsigned long)window, x, y, dx, dy, out_x, out_y,
+          g_pointer_x, g_pointer_y, g_warp_centered, g_screen.width, g_screen.height);
+  if (n > 0 && n < (int)sizeof(line)) write(file, line, (size_t)n);
+  close(file);
+}
+
+static void vexa_relative_pointer(int dx, int dy, int* x, int* y) {
+  *x = g_pointer_x + dx;
+  *y = g_pointer_y + dy;
+  if (*x < 0) *x = 0;
+  if (*y < 0) *y = 0;
+  if (*x >= g_screen.width) *x = g_screen.width - 1;
+  if (*y >= g_screen.height) *y = g_screen.height - 1;
+}
 
 static void vexa_poll_pointer(Display* dpy) {
   unsigned char buf[16];
@@ -813,18 +846,18 @@ static void vexa_poll_pointer(Display* dpy) {
           g_last_touch_y = -1;
         }
       }
-      if (type == MotionNotify && synth && g_warp_mode > 0 && g_warp_centered) {
-        XEvent center_ev;
+      if (type == MotionNotify && g_warp_centered && !vexa_absolute_pointer()) {
         if (rel_dx == 0 && rel_dy == 0) {
           continue;
         }
-        g_warp_mode--;
-        vexa_fill_pointer(&center_ev, dpy, MotionNotify, g_warp_x, g_warp_y, (int)state);
-        vexa_q_push_locked(&center_ev);
-        mx = g_warp_x + rel_dx;
-        my = g_warp_y + rel_dy;
+        // The guest warp changes the X11 pointer, not Android's pointer or
+        // GuestPad's absolute aim. Accumulate deltas until the next real warp.
+        // Injecting a center event before each movement cancels motion in
+        // clients that consume every MotionNotify (rather than SDL filtering).
+        vexa_relative_pointer(rel_dx, rel_dy, &mx, &my);
       }
       vexa_fill_pointer(&event, dpy, (int)type, mx, my, (int)state);
+      vexa_trace_pointer(synth ? "pad-motion" : "mouse-touch", raw_x, raw_y, rel_dx, rel_dy, mx, my, g_input_window);
       g_pointer_x = mx;
       g_pointer_y = my;
       g_pointer_state = (unsigned int)state & 0x00ffffffu;
@@ -1728,6 +1761,7 @@ Window XGetSelectionOwner(Display* dpy, Atom selection) {
 
 int XGrabPointer(Display* dpy, Window grab_window, Bool owner_events, unsigned int event_mask, int pointer_mode, int keyboard_mode,
                  Window confine_to, Cursor cursor, Time time) {
+  g_pointer_grabbed = 1;
   (void)dpy;
   (void)grab_window;
   (void)owner_events;
@@ -1837,7 +1871,9 @@ Bool XQueryExtension(Display* dpy, const char* name, int* major, int* event, int
 
 Bool XQueryPointer(Display* dpy, Window window, Window* root, Window* child, int* root_x, int* root_y, int* win_x, int* win_y,
                    unsigned int* mask) {
-  (void)dpy;
+  /* Polling clients must see input even if they have not called XPending. */
+  vexa_poll_pointer(dpy);
+  vexa_trace_pointer("query", g_pointer_x, g_pointer_y, 0, 0, g_pointer_x, g_pointer_y, window);
   (void)window;
   if (root) {
     *root = 1;
@@ -1935,7 +1971,8 @@ int XUndefineCursor(Display* dpy, Window window) {
 int XUngrabPointer(Display* dpy, Time time) {
   (void)dpy;
   (void)time;
-  g_warp_mode = 0;
+  g_warp_centered = 0;
+  g_pointer_grabbed = 0;
   return 1;
 }
 
@@ -1953,6 +1990,13 @@ int XWarpPointer(Display* dpy, Window src, Window dest, int src_x, int src_y, un
   const struct vexa_window_geometry* geom = dest > 1 ? vexa_window(dest) : NULL;
   int wx = dest_x;
   int wy = dest_y;
+  if (dest == None) {
+    /* None means relative displacement, not root coordinates. In particular
+       (0,0) must not reset the pointer or create a spurious motion event. */
+    if (dest_x == 0 && dest_y == 0) return 1;
+    wx += g_pointer_x;
+    wy += g_pointer_y;
+  }
   (void)src;
   (void)src_x;
   (void)src_y;
@@ -1966,14 +2010,23 @@ int XWarpPointer(Display* dpy, Window src, Window dest, int src_x, int src_y, un
     static int logged;
     if (logged < 4) {
       logged++;
-      fprintf(stderr, "[VEXA][X11] warp_pointer -> %d,%d (eff %d,%d)\n", dest_x, dest_y, wx, wy);
+      fprintf(stderr, "[VEXA][X11] warp_pointer src=%lu dest=%lu -> %d,%d (eff %d,%d)\n",
+              (unsigned long)src, (unsigned long)dest, dest_x, dest_y, wx, wy);
     }
   }
+  /* Android/GuestPad supplies an absolute menu cursor. A captured client's
+     internal recenter must not reset that cursor or the next motion origin. */
+  if (g_pointer_grabbed && vexa_absolute_pointer() &&
+      abs(wx - g_screen.width / 2) <= 2 && abs(wy - g_screen.height / 2) <= 2) {
+    vexa_trace_pointer("absolute-recenter-ignored", dest_x, dest_y, 0, 0,
+                       g_pointer_x, g_pointer_y, target);
+    return 1;
+  }
   g_warp_x = wx;
+  vexa_trace_pointer("warp", dest_x, dest_y, (int)src, (int)dest, wx, wy, target);
   g_warp_y = wy;
   /* Only a warp to the window centre is SDL's relative-look emulation. */
   g_warp_centered = abs(wx - g_screen.width / 2) <= 2 && abs(wy - g_screen.height / 2) <= 2;
-  g_warp_mode = g_warp_centered ? 4 : 0;
   g_pointer_x = wx;
   g_pointer_y = wy;
   vexa_fill_pointer(&event, dpy, MotionNotify, wx, wy, (int)g_pointer_state);
@@ -2215,8 +2268,53 @@ Status XkbGetNames(Display* dpy, unsigned int which, XkbDescPtr desc) {
       count = 256;
     }
     desc->names->keys = (XkbKeyNamePtr)calloc((size_t)count, sizeof(XkbKeyNameRec));
+    if (desc->names->keys) {
+      /* xkeyboard-config "evdev" key names. ETS2 maps physical keys by these
+       * four-character names (AE01, AD01, SPCE, ...). */
+      static const struct { unsigned char code; char name[5]; } k_evdev_names[] = {
+        {9, "ESC"}, {10, "AE01"}, {11, "AE02"}, {12, "AE03"}, {13, "AE04"}, {14, "AE05"},
+        {15, "AE06"}, {16, "AE07"}, {17, "AE08"}, {18, "AE09"}, {19, "AE10"}, {20, "AE11"},
+        {21, "AE12"}, {22, "BKSP"}, {23, "TAB"}, {24, "AD01"}, {25, "AD02"}, {26, "AD03"},
+        {27, "AD04"}, {28, "AD05"}, {29, "AD06"}, {30, "AD07"}, {31, "AD08"}, {32, "AD09"},
+        {33, "AD10"}, {34, "AD11"}, {35, "AD12"}, {36, "RTRN"}, {37, "LCTL"}, {38, "AC01"},
+        {39, "AC02"}, {40, "AC03"}, {41, "AC04"}, {42, "AC05"}, {43, "AC06"}, {44, "AC07"},
+        {45, "AC08"}, {46, "AC09"}, {47, "AC10"}, {48, "AC11"}, {49, "TLDE"}, {50, "LFSH"},
+        {51, "BKSL"}, {52, "AB01"}, {53, "AB02"}, {54, "AB03"}, {55, "AB04"}, {56, "AB05"},
+        {57, "AB06"}, {58, "AB07"}, {59, "AB08"}, {60, "AB09"}, {61, "AB10"}, {62, "RTSH"},
+        {63, "KPMU"}, {64, "LALT"}, {65, "SPCE"}, {66, "CAPS"}, {67, "FK01"}, {68, "FK02"},
+        {69, "FK03"}, {70, "FK04"}, {71, "FK05"}, {72, "FK06"}, {73, "FK07"}, {74, "FK08"},
+        {75, "FK09"}, {76, "FK10"}, {77, "NMLK"}, {78, "SCLK"}, {79, "KP7"}, {80, "KP8"},
+        {81, "KP9"}, {82, "KPSU"}, {83, "KP4"}, {84, "KP5"}, {85, "KP6"}, {86, "KPAD"},
+        {87, "KP1"}, {88, "KP2"}, {89, "KP3"}, {90, "KP0"}, {91, "KPDL"}, {94, "LSGT"},
+        {95, "FK11"}, {96, "FK12"}, {104, "KPEN"}, {105, "RCTL"}, {106, "KPDV"}, {107, "PRSC"},
+        {108, "RALT"}, {110, "HOME"}, {111, "UP"}, {112, "PGUP"}, {113, "LEFT"}, {114, "RGHT"},
+        {115, "END"}, {116, "DOWN"}, {117, "PGDN"}, {118, "INS"}, {119, "DELE"}, {125, "KPEQ"},
+        {127, "PAUS"}, {133, "LWIN"}, {134, "RWIN"}, {135, "COMP"},
+      };
+      size_t i;
+      for (i = 0; i < sizeof(k_evdev_names) / sizeof(k_evdev_names[0]); ++i) {
+        if ((int)k_evdev_names[i].code < count) {
+          /* XkbKeyNameRec.name is char[4] and not NUL terminated. */
+          memcpy(desc->names->keys[k_evdev_names[i].code].name, k_evdev_names[i].name, 4);
+        }
+      }
+    }
   }
   return Success;
+}
+
+/* ETS2 reads the keyboard layout through XkbGetMap + XkbGetNames. The old
+ * sdl-stubs XkbGetMap returned NULL, so the game dereferenced desc->names
+ * (offset 0x30 of a NULL XkbDescRec) and crashed right after Steam init. */
+XkbDescPtr XkbGetMap(Display* dpy, unsigned int which, unsigned int device_spec) {
+  XkbDescPtr desc;
+  (void)dpy;
+  (void)which;
+  desc = XkbAllocKeyboard();
+  if (desc) {
+    desc->device_spec = (unsigned short)device_spec;
+  }
+  return desc;
 }
 
 Status XkbGetState(Display* dpy, unsigned int device, XkbStatePtr state) {
