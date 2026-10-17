@@ -1,0 +1,289 @@
+diff --git a/FEXHeaderUtils/FEXHeaderUtils/Syscalls.h b/FEXHeaderUtils/FEXHeaderUtils/Syscalls.h
+--- a/FEXHeaderUtils/FEXHeaderUtils/Syscalls.h
++++ b/FEXHeaderUtils/FEXHeaderUtils/Syscalls.h
+@@ -61,6 +61,15 @@ inline int32_t getcpu(uint32_t* cpu, uint32_t* node) {
+ #endif
+ }
+ 
++inline int32_t getpid() {
++#if defined(__ANDROID__)
++  // Bionic caches PID in pthread TLS and does not update it across raw clone() syscalls.
++  return ::syscall(SYS_getpid);
++#else
++  return ::getpid();
++#endif
++}
++
+ inline int32_t gettid() {
+ #if defined(HAS_SYSCALL_GETTID) && HAS_SYSCALL_GETTID
+   return ::gettid();
+diff --git a/Source/Tools/LinuxEmulation/LinuxSyscalls/FileManagement.cpp b/Source/Tools/LinuxEmulation/LinuxSyscalls/FileManagement.cpp
+--- a/Source/Tools/LinuxEmulation/LinuxSyscalls/FileManagement.cpp
++++ b/Source/Tools/LinuxEmulation/LinuxSyscalls/FileManagement.cpp
+@@ -425,3 +425,3 @@
+ 
+-  UpdatePID(::getpid());
++  UpdatePID(FHU::Syscalls::getpid());
+ }
+@@ -696,6 +696,20 @@ FileManager::GetEmulatedFDPath(int dirfd, const char* pathname, bool FollowSymli
+   return EmulatedFDPathResult {RootFSFD, &SubPath[1]};
+ }
+ 
++static const char* SkipDuplicateLeadingSlashes(const char* Pathname) {
++  if (!Pathname || Pathname[0] != '/') {
++    return Pathname;
++  }
++  while (Pathname[1] == '/') {
++    ++Pathname;
++  }
++  return Pathname;
++}
++
++static int GetActualPID() {
++  return static_cast<int>(::syscall(SYSCALL_DEF(getpid)));
++}
++
+ ///< Returns true if the pathname is self and symlink flags are set NOFOLLOW.
+ bool FileManager::IsSelfNoFollow(const char* Pathname, int flags) const {
+   const bool Follow = (flags & AT_SYMLINK_NOFOLLOW) == 0;
+@@ -708,8 +722,10 @@ bool FileManager::IsSelfNoFollow(const char* Pathname, int flags) const {
+     return false;
+   }
+ 
++  Pathname = SkipDuplicateLeadingSlashes(Pathname);
++
+   char PidSelfPath[50];
+-  snprintf(PidSelfPath, sizeof(PidSelfPath), "/proc/%i/exe", CurrentPID);
++  snprintf(PidSelfPath, sizeof(PidSelfPath), "/proc/%i/exe", GetActualPID());
+ 
+   return strcmp(Pathname, "/proc/self/exe") == 0 || strcmp(Pathname, "/proc/thread-self/exe") == 0 || strcmp(Pathname, PidSelfPath) == 0;
+ }
+@@ -719,10 +735,12 @@ std::optional<std::string_view> FileManager::GetSelf(const char* Pathname) const
+     return std::nullopt;
+   }
+ 
++  const char* Normalized = SkipDuplicateLeadingSlashes(Pathname);
++
+   char PidSelfPath[50];
+-  snprintf(PidSelfPath, sizeof(PidSelfPath), "/proc/%i/exe", CurrentPID);
++  snprintf(PidSelfPath, sizeof(PidSelfPath), "/proc/%i/exe", GetActualPID());
+ 
+-  if (strcmp(Pathname, "/proc/self/exe") == 0 || strcmp(Pathname, "/proc/thread-self/exe") == 0 || strcmp(Pathname, PidSelfPath) == 0) {
++  if (strcmp(Normalized, "/proc/self/exe") == 0 || strcmp(Normalized, "/proc/thread-self/exe") == 0 || strcmp(Normalized, PidSelfPath) == 0) {
+     return Filename();
+   }
+ 
+@@ -962,35 +980,7 @@ uint64_t FileManager::FAccessat2(int dirfd, const char* pathname, int mode, int
+ }
+ 
+ uint64_t FileManager::Readlink(const char* pathname, char* buf, size_t bufsiz) {
+-  // calculate the non-self link to exe
+-  // Some executables do getpid, stat("/proc/$pid/exe")
+-  char PidSelfPath[50];
+-  snprintf(PidSelfPath, 50, "/proc/%i/exe", CurrentPID);
+-
+-  if (strcmp(pathname, "/proc/self/exe") == 0 || strcmp(pathname, "/proc/thread-self/exe") == 0 || strcmp(pathname, PidSelfPath) == 0) {
+-    const auto& App = Filename();
+-    strncpy(buf, App.c_str(), bufsiz);
+-    return std::min(bufsiz, App.size());
+-  }
+-
+-  FDPathTmpData TmpFilename;
+-  auto Path = GetEmulatedFDPath(AT_FDCWD, pathname, false, TmpFilename);
+-  uint64_t Result = -1;
+-  if (Path.FD != -1) {
+-    Result = ::readlinkat(Path.FD, Path.Path, buf, bufsiz);
+-
+-    if (Result == -1 && errno == EINVAL) {
+-      // This means that the file wasn't a symlink
+-      // This is expected behaviour
+-      return -1;
+-    }
+-  }
+-  if (Result == -1) {
+-    Result = ::readlink(pathname, buf, bufsiz);
+-  }
+-
+-  // We might have read a /proc/self/fd/* link. If so, strip the RootFS prefix from it.
+-  return StripRootFSPrefix(buf, Result, true);
++  return Readlinkat(AT_FDCWD, pathname, buf, bufsiz);
+ }
+ 
+ uint64_t FileManager::Chmod(const char* pathname, mode_t mode) {
+@@ -1041,8 +1031,13 @@ uint64_t FileManager::Readlinkat(int dirfd, const char* pathname, char* buf, siz
+     }
+   }
+ 
++  // Collapse duplicate slashes (e.g. "//proc/self/exe" from glibc realpath).
++  while (Path.size() > 1 && Path[0] == '/' && Path[1] == '/') {
++    Path.erase(0, 1);
++  }
++
+   char PidSelfPath[50];
+-  snprintf(PidSelfPath, 50, "/proc/%i/exe", CurrentPID);
++  snprintf(PidSelfPath, sizeof(PidSelfPath), "/proc/%i/exe", GetActualPID());
+ 
+   if (Path == "/proc/self/exe" || Path == "/proc/thread-self/exe" || Path == PidSelfPath) {
+     const auto& App = Filename();
+diff --git a/Source/Tools/LinuxEmulation/LinuxSyscalls/Seccomp/SeccompEmulator.cpp b/Source/Tools/LinuxEmulation/LinuxSyscalls/Seccomp/SeccompEmulator.cpp
+--- a/Source/Tools/LinuxEmulation/LinuxSyscalls/Seccomp/SeccompEmulator.cpp
++++ b/Source/Tools/LinuxEmulation/LinuxSyscalls/Seccomp/SeccompEmulator.cpp
+@@ -406,7 +406,7 @@ SeccompEmulator::ExecuteFilter(FEXCore::Core::CpuStateFrame* Frame, uint64_t JIT
+     timespec tp {};
+     clock_gettime(CLOCK_MONOTONIC, &tp);
+     LogMan::Msg::IFmt("audit: type={} audit({}.{:03}:{}): uid={} gid={} pid={} comm={} sig={} arch={:x} syscall={} ip=0x{:x} code=0x{:x}",
+-                      AUDIT_SECCOMP, tp.tv_sec, tp.tv_nsec / 1'000'000, AuditSerialIncrement(), ::getuid(), ::getgid(), ::getpid(),
++                      AUDIT_SECCOMP, tp.tv_sec, tp.tv_nsec / 1'000'000, AuditSerialIncrement(), ::getuid(), ::getgid(), FHU::Syscalls::getpid(),
+                       Filename(), Signal, Arch, Args->Argument[0], RIP, SeccompResult);
+   }
+ 
+@@ -427,7 +427,7 @@ SeccompEmulator::ExecuteFilter(FEXCore::Core::CpuStateFrame* Frame, uint64_t JIT
+     uint64_t Mask = 1 << (SIGSYS - 1);
+     SignalDelegation->GuestSigProcMask(Thread, SIG_UNBLOCK, &Mask, nullptr);
+     SignalDelegation->UninstallHostHandler(SIGSYS);
+-    FHU::Syscalls::tgkill(::getpid(), ::gettid(), SIGSYS);
++    FHU::Syscalls::tgkill(FHU::Syscalls::getpid(), ::gettid(), SIGSYS);
+     break;
+   }
+   case SECCOMP_RET_TRAP: {
+@@ -441,7 +441,7 @@ SeccompEmulator::ExecuteFilter(FEXCore::Core::CpuStateFrame* Frame, uint64_t JIT
+     Info.si_syscall = Args->Argument[0];
+     Info.si_arch = Arch;
+ 
+-    SignalDelegation->QueueSignal(::getpid(), ::gettid(), SIGSYS, &Info, true);
++    SignalDelegation->QueueSignal(FHU::Syscalls::getpid(), ::gettid(), SIGSYS, &Info, true);
+     break;
+   }
+   case SECCOMP_RET_ERRNO: {
+diff --git a/Source/Tools/LinuxEmulation/LinuxSyscalls/SignalDelegator.cpp b/Source/Tools/LinuxEmulation/LinuxSyscalls/SignalDelegator.cpp
+--- a/Source/Tools/LinuxEmulation/LinuxSyscalls/SignalDelegator.cpp
++++ b/Source/Tools/LinuxEmulation/LinuxSyscalls/SignalDelegator.cpp
+@@ -94,7 +94,7 @@ static bool HostAltStackUsable(const ucontext_t* Context) {
+ 
+ static void ReraiseDefault(int Signal) {
+   ::signal(Signal, SIG_DFL);
+-  FHU::Syscalls::tgkill(::getpid(), FHU::Syscalls::gettid(), Signal);
++  FHU::Syscalls::tgkill(FHU::Syscalls::getpid(), FHU::Syscalls::gettid(), Signal);
+ }
+ 
+ // VEXA: FEX shares the process with ART. ART threads use SIGSEGV for implicit
+@@ -897,7 +897,7 @@ void SignalDelegator::HandleGuestSignal(FEX::HLE::ThreadStateObject* ThreadObjec
+       // If the signal wasn't sent by the kernel then we need to reraise it.
+       // This is necessary since returning from this signal handler now might just continue executing.
+       // eg: If sent from tgkill then the signal gets dropped and returns.
+-      FHU::Syscalls::tgkill(::getpid(), FHU::Syscalls::gettid(), Signal);
++      FHU::Syscalls::tgkill(FHU::Syscalls::getpid(), FHU::Syscalls::gettid(), Signal);
+     }
+   } else {
+     Handler.OldAction.handler(Signal);
+diff --git a/Source/Tools/LinuxEmulation/LinuxSyscalls/Syscalls.cpp b/Source/Tools/LinuxEmulation/LinuxSyscalls/Syscalls.cpp
+--- a/Source/Tools/LinuxEmulation/LinuxSyscalls/Syscalls.cpp
++++ b/Source/Tools/LinuxEmulation/LinuxSyscalls/Syscalls.cpp
+@@ -237,7 +237,7 @@ uint64_t ExecveHandler(FEXCore::Core::CpuStateFrame* Frame, const char* pathname
+       return -ENOENT;
+     }
+ 
+-    int pid = getpid();
++    int pid = static_cast<int>(::syscall(SYSCALL_DEF(getpid)));
+ 
+     char PidSelfPath[50];
+     snprintf(PidSelfPath, 50, "/proc/%i/exe", pid);
+diff --git a/Source/Tools/LinuxEmulation/LinuxSyscalls/Syscalls/Thread.cpp b/Source/Tools/LinuxEmulation/LinuxSyscalls/Syscalls/Thread.cpp
+--- a/Source/Tools/LinuxEmulation/LinuxSyscalls/Syscalls/Thread.cpp
++++ b/Source/Tools/LinuxEmulation/LinuxSyscalls/Syscalls/Thread.cpp
+@@ -69,3 +69,3 @@
+ 
+-  Thread->ThreadInfo.PID = ::getpid();
++  Thread->ThreadInfo.PID = FHU::Syscalls::getpid();
+   Thread->ThreadInfo.TID = FHU::Syscalls::gettid();
+@@ -238,7 +238,7 @@ uint64_t HandleNewClone(FEX::HLE::ThreadStateObject* Thread, FEXCore::Context::C
+ 
+   // Depending on clone settings, our TID and PID could have changed
+   Thread->ThreadInfo.TID = FHU::Syscalls::gettid();
+-  Thread->ThreadInfo.PID = ::getpid();
++  Thread->ThreadInfo.PID = ::syscall(SYSCALL_DEF(getpid));
+   FEX::HLE::_SyscallHandler->FM.UpdatePID(Thread->ThreadInfo.PID);
+ 
+   if (CreatedNewThreadObject) {
+@@ -320,7 +320,7 @@ uint64_t ForkGuest(FEXCore::Core::InternalThreadState* Thread, FEXCore::Core::Cp
+     // Child
+     // update the internal TID
+     ThreadObject->ThreadInfo.TID = FHU::Syscalls::gettid();
+-    ThreadObject->ThreadInfo.PID = ::getpid();
++    ThreadObject->ThreadInfo.PID = ::syscall(SYSCALL_DEF(getpid));
+     FEX::HLE::_SyscallHandler->FM.UpdatePID(ThreadObject->ThreadInfo.PID);
+     ThreadObject->ThreadInfo.clear_child_tid = nullptr;
+ 
+diff --git a/Source/Tools/LinuxEmulation/LinuxSyscalls/ThreadManager.cpp b/Source/Tools/LinuxEmulation/LinuxSyscalls/ThreadManager.cpp
+--- a/Source/Tools/LinuxEmulation/LinuxSyscalls/ThreadManager.cpp
++++ b/Source/Tools/LinuxEmulation/LinuxSyscalls/ThreadManager.cpp
+@@ -44,13 +44,13 @@ void ThreadManager::StatAlloc::Initialize() {
+         StatsFD = -1;
+       }
+ 
+-      auto Name = fextl::fmt::format("fex-{}-stats", ::getpid());
++      auto Name = fextl::fmt::format("fex-{}-stats", FHU::Syscalls::getpid());
+       int fd = static_cast<int>(::syscall(SYS_memfd_create, Name.c_str(), MFD_CLOEXEC));
+       if (fd == -1) {
+         return;
+       }
+   #else
+-      int fd = shm_open(fextl::fmt::format("fex-{}-stats", ::getpid()).c_str(), O_CREAT | O_TRUNC | O_RDWR, USER_PERMS);
++      int fd = shm_open(fextl::fmt::format("fex-{}-stats", FHU::Syscalls::getpid()).c_str(), O_CREAT | O_TRUNC | O_RDWR, USER_PERMS);
+       if (fd == -1) {
+         return;
+       };
+@@ -116,7 +116,7 @@ uint32_t ThreadManager::StatAlloc::FrontendAllocateSlots(uint32_t NewSize) {
+         return CurrentSize;
+       }
+   #else
+-      int fd = shm_open(fextl::fmt::format("fex-{}-stats", ::getpid()).c_str(), O_RDWR, USER_PERMS);
++      int fd = shm_open(fextl::fmt::format("fex-{}-stats", FHU::Syscalls::getpid()).c_str(), O_RDWR, USER_PERMS);
+       if (fd == -1) {
+         return CurrentSize;
+       };
+@@ -164,7 +164,7 @@ void ThreadManager::StatAlloc::CleanupForExit() {
+     StatsFD = -1;
+   }
+   #else
+-  shm_unlink(fextl::fmt::format("fex-{}-stats", ::getpid()).c_str());
++  shm_unlink(fextl::fmt::format("fex-{}-stats", FHU::Syscalls::getpid()).c_str());
+   #endif
+ }
+ 
+@@ -214,7 +214,7 @@ FEX::HLE::ThreadStateObject* ThreadManager::CreateThread(uint64_t InitialRIP, ui
+   auto ThreadStateObject = new FEX::HLE::ThreadStateObject;
+ 
+   ThreadStateObject->ThreadInfo.parent_tid = ParentTID;
+-  ThreadStateObject->ThreadInfo.PID = ::getpid();
++  ThreadStateObject->ThreadInfo.PID = FHU::Syscalls::getpid();
+ 
+   ThreadStateObject->ThreadInfo.TID = FHU::Syscalls::gettid();
+ 
+@@ -333,7 +333,7 @@ void ThreadManager::HandleThreadDeletion(FEX::HLE::ThreadStateObject* Thread, bo
+ #if defined(ASSERTIONS_ENABLED) && ASSERTIONS_ENABLED
+     // Sanity check. This can only be called from the owning thread.
+     {
+-      const auto pid = ::getpid();
++      const auto pid = FHU::Syscalls::getpid();
+       const auto tid = FHU::Syscalls::gettid();
+       LOGMAN_THROW_A_FMT(Thread->ThreadInfo.PID == pid && Thread->ThreadInfo.TID == tid, "Can't delete TLS data from a different thread!");
+     }
+@@ -369,7 +369,7 @@ void ThreadManager::Pause() {
+ #if defined(ASSERTIONS_ENABLED) && ASSERTIONS_ENABLED
+   // Sanity check. This can't be called from an emulation thread.
+   {
+-    const auto pid = ::getpid();
++    const auto pid = FHU::Syscalls::getpid();
+     const auto tid = FHU::Syscalls::gettid();
+     std::lock_guard lk(ThreadCreationMutex);
+     for (auto& Thread : Threads) {
+@@ -469,7 +469,7 @@ void ThreadManager::SleepThread(FEXCore::Context::Context* CTX, FEXCore::Core::C
+ #if defined(ASSERTIONS_ENABLED) && ASSERTIONS_ENABLED
+   // Sanity check. This can only be called from the owning thread.
+   {
+-    const auto pid = ::getpid();
++    const auto pid = FHU::Syscalls::getpid();
+     const auto tid = FHU::Syscalls::gettid();
+     LOGMAN_THROW_A_FMT(ThreadObject->ThreadInfo.PID == pid && ThreadObject->ThreadInfo.TID == tid, "Can't delete TLS data from a different "
+                                                                                                    "thread!");

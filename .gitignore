@@ -63,3 +63,12 @@ __pycache__/
 /test_*.py
 /top_ranges.py
 /verify_tgkill.py
+/.tools/
+/tmp/
+/tmp_dev/
+/tmp-*
+/tmp_ld.so
+/catch_*.txt
+/ets2_scr.png
+/tools/rsp_*.py
+/tools/ets2_hist*.txt

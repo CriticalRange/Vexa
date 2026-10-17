@@ -175,8 +175,14 @@ private fun LauncherScreen(
     onQuit: () -> Unit,
 ) {
     val c = VexaTheme.colors
-    val programs = GuestCatalog.programs
-    var selectedId by remember { mutableStateOf(programs.first().id) }
+    // Installed games first; the bundled smoke-test ELFs sink to the tail.
+    val programs = remember { GuestCatalog.programs.sortedByDescending { it.preinstalled } }
+    var selectedId by remember {
+        mutableStateOf(
+            VexaPrefs.lastProgram?.takeIf { id -> programs.any { it.id == id } }
+                ?: programs.first().id,
+        )
+    }
     val selected = programs.first { it.id == selectedId }
     val entries by LogStore.entries.collectAsState()
 
@@ -243,7 +249,10 @@ private fun LauncherScreen(
             ProgramTiles(
                 programs = programs,
                 selectedId = selectedId,
-                onSelect = { selectedId = it },
+                onSelect = {
+                    selectedId = it
+                    VexaPrefs.updateLastProgram(it)
+                },
                 modifier = Modifier.staggerIn(2),
             )
             Spacer(Modifier.height(14.dp))
@@ -284,6 +293,33 @@ private fun LauncherScreen(
                         icon = VexaGlyph.Vibrate,
                         iconTint = c.teal,
                         onCheckedChange = VexaPrefs::updateHaptics,
+                    )
+                    RowDivider()
+                    SwitchRow(
+                        label = "Vulkan renderer",
+                        description = "Launch Megabonk with Vulkan instead of OpenGL",
+                        checked = VexaPrefs.vulkan,
+                        icon = VexaGlyph.Cube,
+                        iconTint = c.ultraviolet,
+                        onCheckedChange = VexaPrefs::updateVulkan,
+                    )
+                    RowDivider()
+                    SwitchRow(
+                        label = "On-screen gamepad",
+                        description = "Show the touch pad overlay when a game starts",
+                        checked = VexaPrefs.padOverlay,
+                        icon = VexaGlyph.Gamepad,
+                        iconTint = c.teal,
+                        onCheckedChange = VexaPrefs::updatePadOverlay,
+                    )
+                    RowDivider()
+                    SwitchRow(
+                        label = "Uncapped FPS",
+                        description = "Disable vsync pacing in OpenGL guests",
+                        checked = VexaPrefs.uncappedFps,
+                        icon = VexaGlyph.Activity,
+                        iconTint = c.warning,
+                        onCheckedChange = VexaPrefs::updateUncappedFps,
                     )
                 }
             }
@@ -421,6 +457,10 @@ private fun ProgramTiles(
     modifier: Modifier = Modifier,
 ) {
     val listState = rememberLazyListState()
+    LaunchedEffect(Unit) {
+        val index = programs.indexOfFirst { it.id == selectedId }
+        if (index > 0) listState.scrollToItem(index)
+    }
     LazyRow(
         state = listState,
         modifier = modifier.fillMaxWidth(),

@@ -46,8 +46,12 @@ add_library(${CMAKE_PROJECT_NAME} SHARED
     runtime/init/syscalls.cpp
     runtime/init/execute.cpp
     runtime/launch.cpp
+    runtime/executable_format.cpp
+    runtime/compat_launch.cpp
     runtime/loader_main.cpp
     runtime/surface_bridge.cpp
+    x11/x11_present.cpp
+    x11/vulkan_wsi.cpp
     wrapper/jni.cpp
     main.cpp)
 
@@ -59,6 +63,14 @@ if(NOT EXISTS "${FEX_ROOT}/FEXCore/include/FEXCore/Core/Context.h")
 endif()
 if(NOT EXISTS "${FEX_BUILD}/FEXCore/Source/libFEXCore.a")
     message(FATAL_ERROR "Invalid FEX_BUILD: ${FEX_BUILD}")
+endif()
+
+# The weak PE/standalone-exit hooks must also be present in libLinuxEmulation.
+# Apply explicitly so configuration never silently mutates an external checkout.
+file(READ "${FEX_ROOT}/Source/Tools/LinuxEmulation/LinuxSyscalls/Syscalls.cpp" VEXA_FEX_SYSCALLS)
+string(FIND "${VEXA_FEX_SYSCALLS}" "Vexa_IsPortableExecutable" VEXA_FEX_COMPAT_MARKER)
+if(VEXA_FEX_COMPAT_MARKER EQUAL -1)
+    message(FATAL_ERROR "Apply tools/apply_fex_compat.py --fex-root ${FEX_ROOT}, then rebuild FEX")
 endif()
 
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE

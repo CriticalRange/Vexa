@@ -7,6 +7,7 @@
 
     <application
         android:allowBackup="true"
+        android:appCategory="game"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
         android:icon="@mipmap/ic_launcher"
@@ -46,6 +47,14 @@
             android:name=".runtime.RuntimeWorkerService"
             android:exported="false"
             android:process=":runtime_worker" />
+
+        <service android:name=".x11.RealX11Service"
+            android:exported="false" android:process=":xserver" />
+        <activity android:name=".x11.WindowsGameActivity"
+            android:permission="android.permission.DUMP" android:exported="true"
+            android:screenOrientation="sensorLandscape"
+            android:configChanges="orientation|screenSize|keyboard|keyboardHidden|density|uiMode"
+            android:theme="@style/Theme.VexaEmulator" />
 
         <!-- NoDisplay trampoline for `am start`-driven headless runs. Creates
              no window, so nothing reaches the screen. -->

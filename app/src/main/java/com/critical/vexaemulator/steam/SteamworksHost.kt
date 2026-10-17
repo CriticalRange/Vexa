@@ -9,6 +9,14 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.io.File
+import com.critical.vexaemulator.guest.GuestInstaller
+import com.critical.vexaemulator.runtime.LaunchRequest
+import com.critical.vexaemulator.runtime.GuestExecutableFormat
+import com.critical.vexaemulator.runtime.GuestExecutableFormats
+import com.critical.vexaemulator.runtime.CompatibilitySettings
+import com.critical.vexaemulator.x11.WindowsGameActivity
+import com.critical.vexaemulator.GameActivity
+import android.content.Intent
 
 data class SteamLibraries(
     val apiPresent: Boolean = false,
@@ -20,6 +28,84 @@ data class SteamLibraries(
 // libsteamclient.so is the Android client library a title connects to. Neither
 // binary is packaged in the APK or the git repo; the user imports them.
 object SteamworksHost {
+    /** Steam launch requests use the same header dispatch as catalog launches. */
+    fun launchExecutable(
+        context: Context,
+        appId: String,
+        executable: File,
+        workingDirectory: File = executable.absoluteFile.parentFile!!,
+        arguments: List<String> = emptyList(),
+        environment: List<String> = emptyList(),
+    ) {
+        val request = buildLaunchRequest(context, appId, executable, workingDirectory, arguments, environment)
+        when (GuestExecutableFormats.detect(executable)) {
+            GuestExecutableFormat.PE -> routeWindowsGame(context, request)
+            GuestExecutableFormat.ELF -> context.startActivity(Intent(context, GameActivity::class.java).apply {
+                if (context !is android.app.Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                putExtra(GameActivity.EXTRA_DIRECT_LAUNCH, true)
+                putExtra(GameActivity.EXTRA_DIRECT_EXECUTABLE, request.executablePath)
+                putExtra(GameActivity.EXTRA_DIRECT_ROOTFS, request.rootfsPath)
+                putExtra(GameActivity.EXTRA_DIRECT_THUNK_HOST, request.thunkHostPath)
+                putExtra(GameActivity.EXTRA_DIRECT_THUNK_GUEST, request.thunkGuestPath)
+                putExtra(GameActivity.EXTRA_DIRECT_WORKDIR, request.workingDirectory)
+                putExtra(GameActivity.EXTRA_DIRECT_ARTIFACTS, request.artifactDirectory)
+                putExtra(GameActivity.EXTRA_DIRECT_ENV, request.launchEnv.toTypedArray())
+                putExtra(GameActivity.EXTRA_DIRECT_ARGS, request.launchArgs.toTypedArray())
+            })
+            GuestExecutableFormat.OTHER -> throw IllegalArgumentException("Unsupported Steam executable format: $executable")
+        }
+    }
+
+    /** Returns true only after handing a PE to the real X11 frontend. */
+    fun routeWindowsGame(context: Context, request: LaunchRequest): Boolean {
+        if (GuestExecutableFormats.detect(File(request.executablePath)) != GuestExecutableFormat.PE) return false
+        val configured = CompatibilitySettings.environment(context)
+        val protonRootfs = (configured + request.launchEnv).lastOrNull { it.startsWith("VEXA_PROTON_ROOTFS=") }
+            ?.substringAfter('=')?.takeIf { it.isNotBlank() } ?: request.rootfsPath
+        val appId = request.launchEnv.lastOrNull { it.startsWith("SteamAppId=") }
+            ?.substringAfter('=')?.takeIf { it.matches(Regex("[0-9]{1,20}")) && it.any { digit -> digit != '0' } }
+            ?: throw IllegalArgumentException("Windows game needs a nonzero SteamAppId")
+        context.startActivity(Intent(context, WindowsGameActivity::class.java).apply {
+            if (context !is android.app.Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            putExtra("exe", request.executablePath)
+            putExtra("rootfs", protonRootfs)
+            putExtra("cwd", request.workingDirectory)
+            putExtra("appid", appId)
+            putExtra("args", request.launchArgs.toTypedArray())
+            putExtra("env", request.launchEnv.toTypedArray())
+        })
+        return true
+    }
+    /** Common adapter for a Steam client launch callback. Native dispatch reads
+     * the executable header, so .exe-named Linux builds remain native. */
+    fun buildLaunchRequest(
+        context: Context,
+        appId: String,
+        executable: File,
+        workingDirectory: File = executable.absoluteFile.parentFile!!,
+        arguments: List<String> = emptyList(),
+        environment: List<String> = emptyList(),
+    ): LaunchRequest {
+        require(appId.matches(Regex("[0-9]+")) && appId.any { it != '0' }) { "Invalid Steam app ID" }
+        require(executable.isFile && executable.canRead()) { "Steam executable is unreadable: $executable" }
+        require(workingDirectory.isDirectory) { "Steam working directory is missing: $workingDirectory" }
+        GuestInstaller.ensureRuntime(context)
+        val root = context.filesDir
+        val gameEnv = environment.filterNot {
+            it.startsWith("SteamAppId=") || it.startsWith("SteamGameId=")
+        } + listOf("SteamAppId=$appId", "SteamGameId=$appId")
+        return LaunchRequest(
+            executablePath = executable.absolutePath,
+            rootfsPath = File(root, "rootfs").absolutePath,
+            thunkHostPath = File(root, "thunks/host").absolutePath,
+            thunkGuestPath = File(root, "thunks/guest").absolutePath,
+            workingDirectory = workingDirectory.absolutePath,
+            artifactDirectory = File(root, "artifacts/steam-$appId").apply { mkdirs() }.absolutePath,
+            launchEnv = gameEnv + launchEnvironment(context, gameEnv),
+            launchArgs = arguments,
+        )
+    }
+
     private val _libraries = MutableStateFlow(SteamLibraries())
     val libraries: StateFlow<SteamLibraries> = _libraries.asStateFlow()
 

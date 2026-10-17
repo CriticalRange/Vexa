@@ -1,0 +1,86 @@
+diff --git a/Source/Tools/LinuxEmulation/LinuxSyscalls/Syscalls/FS.cpp b/Source/Tools/LinuxEmulation/LinuxSyscalls/Syscalls/FS.cpp
+--- a/Source/Tools/LinuxEmulation/LinuxSyscalls/Syscalls/FS.cpp
++++ b/Source/Tools/LinuxEmulation/LinuxSyscalls/Syscalls/FS.cpp
+@@ -6,6 +6,7 @@
+ */
+ 
+ #include "LinuxSyscalls/Syscalls.h"
++#include "LinuxSyscalls/VexaTmpPath.h"
+ #include "LinuxSyscalls/x64/Syscalls.h"
+ #include "LinuxSyscalls/x32/Syscalls.h"
+ 
+@@ -31,7 +32,8 @@
+   });
+ 
+   REGISTER_SYSCALL_IMPL(mkdir, [](FEXCore::Core::CpuStateFrame* Frame, const char* pathname, mode_t mode) -> uint64_t {
+-    uint64_t Result = ::mkdir(pathname, mode);
++    const auto path = VexaPrivateTmpPath(pathname);
++    uint64_t Result = ::mkdir(path.empty() ? pathname : path.c_str(), mode);
+     SYSCALL_ERRNO();
+   });
+ 
+diff --git a/Source/Tools/LinuxEmulation/LinuxSyscalls/Syscalls/Passthrough.cpp b/Source/Tools/LinuxEmulation/LinuxSyscalls/Syscalls/Passthrough.cpp
+--- a/Source/Tools/LinuxEmulation/LinuxSyscalls/Syscalls/Passthrough.cpp
++++ b/Source/Tools/LinuxEmulation/LinuxSyscalls/Syscalls/Passthrough.cpp
+@@ -15,6 +15,7 @@
+ 
+ #include <stdint.h>
+ #include <sys/epoll.h>
++#include "LinuxSyscalls/VexaTmpPath.h"
+ 
+ namespace FEX::HLE {
+ #ifdef ARCHITECTURE_arm64
+@@ -293,7 +294,11 @@
+   REGISTER_SYSCALL_IMPL(truncate, SyscallPassthrough2<SYSCALL_DEF(truncate)>);
+   REGISTER_SYSCALL_IMPL(ftruncate, SyscallPassthrough2<SYSCALL_DEF(ftruncate)>);
+   REGISTER_SYSCALL_IMPL(getcwd, SyscallPassthrough2<SYSCALL_DEF(getcwd)>);
+-  REGISTER_SYSCALL_IMPL(chdir, SyscallPassthrough1<SYSCALL_DEF(chdir)>);
++  REGISTER_SYSCALL_IMPL(chdir, [](FEXCore::Core::CpuStateFrame*, const char* pathname) -> uint64_t {
++    const auto path = VexaPrivateTmpPath(pathname);
++    uint64_t Result = ::syscall(SYSCALL_DEF(chdir), path.empty() ? pathname : path.c_str());
++    SYSCALL_ERRNO();
++  });
+   REGISTER_SYSCALL_IMPL(fchdir, SyscallPassthrough1<SYSCALL_DEF(fchdir)>);
+   REGISTER_SYSCALL_IMPL(fchmod, SyscallPassthrough2<SYSCALL_DEF(fchmod)>);
+   REGISTER_SYSCALL_IMPL(fchown, SyscallPassthrough3<SYSCALL_DEF(fchown)>);
+@@ -402,7 +407,11 @@
+ #else
+   REGISTER_SYSCALL_IMPL(migrate_pages, SyscallPassthrough4<SYSCALL_DEF(migrate_pages)>);
+ #endif
+-  REGISTER_SYSCALL_IMPL(mkdirat, SyscallPassthrough3<SYSCALL_DEF(mkdirat)>);
++  REGISTER_SYSCALL_IMPL(mkdirat, [](FEXCore::Core::CpuStateFrame*, int dirfd, const char* pathname, mode_t mode) -> uint64_t {
++    const auto path = VexaPrivateTmpPath(pathname);
++    uint64_t Result = ::syscall(SYSCALL_DEF(mkdirat), dirfd, path.empty() ? pathname : path.c_str(), mode);
++    SYSCALL_ERRNO();
++  });
+   REGISTER_SYSCALL_IMPL(mknodat, SyscallPassthrough4<SYSCALL_DEF(mknodat)>);
+   REGISTER_SYSCALL_IMPL(fchownat, SyscallPassthrough5<SYSCALL_DEF(fchownat)>);
+   REGISTER_SYSCALL_IMPL(unlinkat, SyscallPassthrough3<SYSCALL_DEF(unlinkat)>);
+diff --git a/Source/Tools/LinuxEmulation/LinuxSyscalls/VexaTmpPath.h b/Source/Tools/LinuxEmulation/LinuxSyscalls/VexaTmpPath.h
+new file mode 100644
+--- /dev/null
++++ b/Source/Tools/LinuxEmulation/LinuxSyscalls/VexaTmpPath.h
+@@ -0,0 +1,23 @@
++// SPDX-License-Identifier: MIT
++#pragma once
++#include "LinuxSyscalls/Syscalls.h"
++#include <cstdlib>
++#include <cstring>
++#include <string>
++
++namespace FEX::HLE {
++// Wine's Linux build hardcodes /tmp for its server directory. Rootfs reads
++// already use FileManager; these pathname-mutating syscalls need the same
++// location when the Android Proton supervisor explicitly enables the session.
++inline std::string VexaPrivateTmpPath(const char* path) {
++#if defined(__ANDROID__)
++  const char* session = getenv("VEXA_COMPAT_SESSION");
++  if (session && *session && path &&
++      (strcmp(path, "/tmp") == 0 || strncmp(path, "/tmp/", 5) == 0)) {
++    const auto root = _SyscallHandler->RootFSPath();
++    if (!root.empty()) return std::string(root.c_str()) + path;
++  }
++#endif
++  return {};
++}
++}

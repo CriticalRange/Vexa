@@ -177,6 +177,27 @@ object GuestCatalog {
             preinstalled = true,
         ),
         GuestProgram(
+            id = "hollowknight",
+            title = "Hollow Knight",
+            summary = "Unity game (Team Cherry). Native Linux Mono build from the GOG installer. " +
+                "Exercises the Unity Mono path like Vampire Survivors, on a newer engine generation.",
+            assetPath = "",
+            fileName = "Hollow Knight",
+            args = listOf("-screen-fullscreen", "0", "-screen-width", "2712", "-screen-height", "1220", "-force-glcore"),
+            env = listOf("DISPLAY=:0", "SDL_VIDEODRIVER=x11", "SteamAppId=367520", "VEXA_STEAM_TRACE=1", "VEXA_MONO_COMPAT=1"),
+            preinstalled = true,
+        ),
+        GuestProgram(
+            id = "ets2",
+            title = "Euro Truck Simulator 2",
+            summary = "SCS Prism3D engine. Native 64-bit Linux build (steamcmd -os linux). " +
+                "Heavy GL streaming title; base game files only (no dlc_*.scs).",
+            assetPath = "",
+            fileName = "bin/linux_x64/eurotrucks2",
+            env = listOf("DISPLAY=:0", "SDL_VIDEODRIVER=x11", "LD_LIBRARY_PATH=bin/linux_x64", "SteamAppId=227300", "VEXA_STEAM_TRACE=1", "LD_BIND_NOW=1", "VEXA_FAKE_IM=1", "LD_PRELOAD=libvexa_glmap.so"),
+            preinstalled = true,
+        ),
+        GuestProgram(
             id = "undertale",
             title = "Undertale",
             summary = "GameMaker Studio game. Native Linux build (depot 391544). Control test: a second Linux-native " +

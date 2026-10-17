@@ -36,6 +36,7 @@ TARGETS=(
   "libgbm_stub.c:libgbm.so.1"
   "libudev_stub.c:libudev.so.1"
   "libpulse_stub.c:libpulse-simple.so.0"
+  "libvexa_glmap.c:libvexa_glmap.so"
 )
 
 want=("$@")

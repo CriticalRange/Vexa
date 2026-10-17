@@ -143,9 +143,7 @@ namespace Vexa::Runtime::Init {
             fextl::vector<fextl::string> args;
             args.emplace_back(binary);
             for (const auto &arg: launchArgs) {
-                if (!arg.empty()) {
-                    args.emplace_back(arg.c_str());
-                }
+                args.emplace_back(arg.c_str());
             }
             // LoaderArgs feeds the guest execve fallback: FEX re-execs the
             // trampoline binary (VEXA_REEXEC, see Syscalls.cpp) with

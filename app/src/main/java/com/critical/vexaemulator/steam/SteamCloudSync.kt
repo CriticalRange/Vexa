@@ -73,6 +73,12 @@ object SteamCloudSync {
             withTimeout(TOTAL_TIMEOUT_MS) {
                 withContext(Dispatchers.IO) { run(cloud, appId, roots, store, manifest, onProgress, onConflict) }
             }
+        } catch (error: kotlinx.coroutines.TimeoutCancellationException) {
+            VexaLogger.log(LogLevel.WARN, LogCategory.BOOT, "Steam Cloud timed out",
+                mapOf("appId" to appId.toString()))
+            CloudSyncResult(skipped = "cloud timed out, using local saves")
+        } catch (error: kotlinx.coroutines.CancellationException) {
+            throw error
         } catch (error: Throwable) {
             VexaLogger.log(
                 LogLevel.WARN, LogCategory.BOOT, "Steam Cloud sync failed",
@@ -142,7 +148,7 @@ object SteamCloudSync {
         }
         // One popup per launch: every divergent file follows the same choice.
         val choice = if (conflicts.isEmpty()) null else onConflict(conflicts)
-        pending.forEachIndexed { index, (info, name, target) ->
+        for ((info, name, target) in pending) {
             val remoteSha = info.shaFile.toHex()
             val localSha = if (target.isFile) sha1(target.readBytes()) else null
             when {
@@ -150,6 +156,8 @@ object SteamCloudSync {
                     manifest[name] = remoteSha
                     current += 1
                 }
+                localSha != null && choice != CloudChoice.Remote &&
+                    target.lastModified() >= info.timestamp.time -> kept += 1
                 choice == CloudChoice.Local && localSha != null -> kept += 1
                 else -> try {
                     val bytes = download(cloud, appId, info, name)
@@ -162,12 +170,17 @@ object SteamCloudSync {
                     target.setLastModified(info.timestamp.time)
                     manifest[name] = remoteSha
                     downloaded += 1
+                } catch (error: kotlinx.coroutines.CancellationException) {
+                    throw error
                 } catch (error: Throwable) {
                     failed += 1
                     VexaLogger.log(
                         LogLevel.WARN, LogCategory.BOOT, "Steam Cloud download failed",
                         mapOf("file" to name, "error" to (error.message ?: error.javaClass.simpleName)),
                     )
+                    // A failed transport will usually fail the remaining files too.
+                    // Keep their local copies and let the game start promptly.
+                    break
                 }
             }
         }
@@ -180,13 +193,15 @@ object SteamCloudSync {
     }
 
     private suspend fun download(cloud: SteamCloud, appId: Int, info: AppFileInfo, name: String): ByteArray {
-        val meta = retry("download-url $name") { withTimeout(LIST_TIMEOUT_MS) { cloud.clientFileDownload(appId, name).await() } }
+        val meta = retry("download-url $name", attempts = 1) {
+            withTimeout(LIST_TIMEOUT_MS) { cloud.clientFileDownload(appId, name).await() }
+        }
         check(meta.urlHost.isNotBlank()) { "no download URL" }
         check(!meta.encrypted) { "encrypted payload" }
         val scheme = if (meta.useHttps) "https" else "http"
         val connection = URL("$scheme://${meta.urlHost}${meta.urlPath}").openConnection() as HttpURLConnection
-        connection.connectTimeout = 15_000
-        connection.readTimeout = 30_000
+        connection.connectTimeout = 5_000
+        connection.readTimeout = 10_000
         meta.requestHeaders.forEach { connection.setRequestProperty(it.name, it.value) }
         val raw = try {
             check(connection.responseCode == 200) { "HTTP ${connection.responseCode}" }
@@ -209,9 +224,9 @@ object SteamCloudSync {
         return bytes
     }
 
-    private suspend fun <T> retry(stage: String, block: suspend () -> T): T {
+    private suspend fun <T> retry(stage: String, attempts: Int = 3, block: suspend () -> T): T {
         var last: Throwable? = null
-        repeat(3) { attempt ->
+        repeat(attempts) { attempt ->
             try {
                 return block()
             } catch (error: kotlinx.coroutines.CancellationException) {

@@ -22,6 +22,8 @@ namespace Vexa::Runtime {
     void StopRuntime();
 
     void ReleaseAfterGuestExit();
+
+    int GetGuestExitCode();
 }
 
 #endif //VEXA_EMULATOR_LAUNCH_H

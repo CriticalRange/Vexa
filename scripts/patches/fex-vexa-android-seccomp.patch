@@ -1,0 +1,182 @@
+diff --git a/Source/Tools/LinuxEmulation/LinuxSyscalls/Syscalls/Passthrough.cpp b/Source/Tools/LinuxEmulation/LinuxSyscalls/Syscalls/Passthrough.cpp
+--- a/Source/Tools/LinuxEmulation/LinuxSyscalls/Syscalls/Passthrough.cpp
++++ b/Source/Tools/LinuxEmulation/LinuxSyscalls/Syscalls/Passthrough.cpp
+@@ -266,8 +266,15 @@ void RegisterCommon(FEX::HLE::SyscallHandler* Handler) {
+   REGISTER_SYSCALL_IMPL(sched_yield, SyscallPassthrough0<SYSCALL_DEF(sched_yield)>);
+   REGISTER_SYSCALL_IMPL(msync, SyscallPassthrough3<SYSCALL_DEF(msync)>);
+   REGISTER_SYSCALL_IMPL(mincore, SyscallPassthrough3<SYSCALL_DEF(mincore)>);
++#if defined(__ANDROID__)
++  // VEXA_FIXES: Android seccomp traps SysV IPC syscalls (shmget/shmctl/semget/msg*) with SIGSYS.
++  // Return ENOSYS so X11 clients (e.g. winex11.drv MIT-SHM probe) and guests fall back cleanly.
++  REGISTER_SYSCALL_IMPL(shmget, [](FEXCore::Core::CpuStateFrame*, uint64_t, uint64_t, uint64_t) -> uint64_t { return -ENOSYS; });
++  REGISTER_SYSCALL_IMPL(shmctl, [](FEXCore::Core::CpuStateFrame*, uint64_t, uint64_t, uint64_t) -> uint64_t { return -ENOSYS; });
++#else
+   REGISTER_SYSCALL_IMPL(shmget, SyscallPassthrough3<SYSCALL_DEF(shmget)>);
+   REGISTER_SYSCALL_IMPL(shmctl, SyscallPassthrough3<SYSCALL_DEF(shmctl)>);
++#endif
+   REGISTER_SYSCALL_IMPL(getpid, SyscallPassthrough0<SYSCALL_DEF(getpid)>);
+   REGISTER_SYSCALL_IMPL(socket, SyscallPassthrough3<SYSCALL_DEF(socket)>);
+   REGISTER_SYSCALL_IMPL(connect, [](FEXCore::Core::CpuStateFrame*, int FD, const sockaddr* Address, socklen_t Length) -> uint64_t {
+@@ -283,11 +290,19 @@ void RegisterCommon(FEX::HLE::SyscallHandler* Handler) {
+   REGISTER_SYSCALL_IMPL(getpeername, SyscallPassthrough3<SYSCALL_DEF(getpeername)>);
+   REGISTER_SYSCALL_IMPL(socketpair, SyscallPassthrough4<SYSCALL_DEF(socketpair)>);
+   REGISTER_SYSCALL_IMPL(kill, SyscallPassthrough2<SYSCALL_DEF(kill)>);
++#if defined(__ANDROID__)
++  REGISTER_SYSCALL_IMPL(semget, [](FEXCore::Core::CpuStateFrame*, uint64_t, uint64_t, uint64_t) -> uint64_t { return -ENOSYS; });
++  REGISTER_SYSCALL_IMPL(msgget, [](FEXCore::Core::CpuStateFrame*, uint64_t, uint64_t) -> uint64_t { return -ENOSYS; });
++  REGISTER_SYSCALL_IMPL(msgsnd, [](FEXCore::Core::CpuStateFrame*, uint64_t, uint64_t, uint64_t, uint64_t) -> uint64_t { return -ENOSYS; });
++  REGISTER_SYSCALL_IMPL(msgrcv, [](FEXCore::Core::CpuStateFrame*, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t) -> uint64_t { return -ENOSYS; });
++  REGISTER_SYSCALL_IMPL(msgctl, [](FEXCore::Core::CpuStateFrame*, uint64_t, uint64_t, uint64_t) -> uint64_t { return -ENOSYS; });
++#else
+   REGISTER_SYSCALL_IMPL(semget, SyscallPassthrough3<SYSCALL_DEF(semget)>);
+   REGISTER_SYSCALL_IMPL(msgget, SyscallPassthrough2<SYSCALL_DEF(msgget)>);
+   REGISTER_SYSCALL_IMPL(msgsnd, SyscallPassthrough4<SYSCALL_DEF(msgsnd)>);
+   REGISTER_SYSCALL_IMPL(msgrcv, SyscallPassthrough5<SYSCALL_DEF(msgrcv)>);
+   REGISTER_SYSCALL_IMPL(msgctl, SyscallPassthrough3<SYSCALL_DEF(msgctl)>);
++#endif
+   REGISTER_SYSCALL_IMPL(flock, SyscallPassthrough2<SYSCALL_DEF(flock)>);
+   REGISTER_SYSCALL_IMPL(fsync, SyscallPassthrough1<SYSCALL_DEF(fsync)>);
+   REGISTER_SYSCALL_IMPL(fdatasync, SyscallPassthrough1<SYSCALL_DEF(fdatasync)>);
+@@ -542,13 +557,24 @@ namespace x64 {
+     REGISTER_SYSCALL_IMPL_X64(getitimer, SyscallPassthrough2<SYSCALL_DEF(getitimer)>);
+     REGISTER_SYSCALL_IMPL_X64(setitimer, SyscallPassthrough3<SYSCALL_DEF(setitimer)>);
+     REGISTER_SYSCALL_IMPL_X64(sendfile, SyscallPassthrough4<SYSCALL_DEF(sendfile)>);
++#if defined(__ANDROID__)
++    // VEXA_FIXES: Android seccomp blocks arm64 SYS_accept (202); Bionic's accept() wraps SYS_accept4 (242) with flags=0.
++    REGISTER_SYSCALL_IMPL_X64(accept, [](FEXCore::Core::CpuStateFrame* Frame, uint64_t fd, uint64_t addr, uint64_t addrlen) -> uint64_t {
++      return SyscallPassthrough4<SYSCALL_DEF(accept4)>(Frame, fd, addr, addrlen, 0);
++    });
++#else
+     REGISTER_SYSCALL_IMPL_X64(accept, SyscallPassthrough3<SYSCALL_DEF(accept)>);
++#endif
+     REGISTER_SYSCALL_IMPL_X64(sendmsg, SyscallPassthrough3<SYSCALL_DEF(sendmsg)>);
+     REGISTER_SYSCALL_IMPL_X64(recvmsg, SyscallPassthrough3<SYSCALL_DEF(recvmsg)>);
+     REGISTER_SYSCALL_IMPL_X64(setsockopt, SyscallPassthrough5<SYSCALL_DEF(setsockopt)>);
+     REGISTER_SYSCALL_IMPL_X64(getsockopt, SyscallPassthrough5<SYSCALL_DEF(getsockopt)>);
+     REGISTER_SYSCALL_IMPL_X64(wait4, SyscallPassthrough4<SYSCALL_DEF(wait4)>);
++#if defined(__ANDROID__)
++    REGISTER_SYSCALL_IMPL_X64(semop, [](FEXCore::Core::CpuStateFrame*, uint64_t, uint64_t, uint64_t) -> uint64_t { return -ENOSYS; });
++#else
+     REGISTER_SYSCALL_IMPL_X64(semop, SyscallPassthrough3<SYSCALL_DEF(semop)>);
++#endif
+     REGISTER_SYSCALL_IMPL_X64(gettimeofday, SyscallPassthrough2<SYSCALL_DEF(gettimeofday)>);
+     REGISTER_SYSCALL_IMPL_X64(getrlimit, SyscallPassthrough2<SYSCALL_DEF(getrlimit)>);
+     REGISTER_SYSCALL_IMPL_X64(getrusage, SyscallPassthrough2<SYSCALL_DEF(getrusage)>);
+@@ -565,7 +591,11 @@ namespace x64 {
+     REGISTER_SYSCALL_IMPL_X64(readahead, SyscallPassthrough3<SYSCALL_DEF(readahead)>);
+     REGISTER_SYSCALL_IMPL_X64(futex, SyscallPassthrough6<SYSCALL_DEF(futex)>);
+     REGISTER_SYSCALL_IMPL_X64(io_getevents, SyscallPassthrough5<SYSCALL_DEF(io_getevents)>);
++#if defined(__ANDROID__)
++    REGISTER_SYSCALL_IMPL_X64(semtimedop, [](FEXCore::Core::CpuStateFrame*, uint64_t, uint64_t, uint64_t, uint64_t) -> uint64_t { return -ENOSYS; });
++#else
+     REGISTER_SYSCALL_IMPL_X64(semtimedop, SyscallPassthrough4<SYSCALL_DEF(semtimedop)>);
++#endif
+     REGISTER_SYSCALL_IMPL_X64(timer_create, SyscallPassthrough3<SYSCALL_DEF(timer_create)>);
+     REGISTER_SYSCALL_IMPL_X64(timer_settime, SyscallPassthrough4<SYSCALL_DEF(timer_settime)>);
+     REGISTER_SYSCALL_IMPL_X64(timer_gettime, SyscallPassthrough2<SYSCALL_DEF(timer_gettime)>);
+@@ -691,7 +721,11 @@ namespace x32 {
+     REGISTER_SYSCALL_IMPL_X32(io_pgetevents_time64, SyscallPassthrough6<SYSCALL_DEF(io_pgetevents)>);
+     REGISTER_SYSCALL_IMPL_X32(mq_timedsend_time64, SyscallPassthrough5<SYSCALL_DEF(mq_timedsend)>);
+     REGISTER_SYSCALL_IMPL_X32(mq_timedreceive_time64, SyscallPassthrough5<SYSCALL_DEF(mq_timedreceive)>);
++#if defined(__ANDROID__)
++    REGISTER_SYSCALL_IMPL_X32(semtimedop_time64, [](FEXCore::Core::CpuStateFrame*, uint64_t, uint64_t, uint64_t, uint64_t) -> uint64_t { return -ENOSYS; });
++#else
+     REGISTER_SYSCALL_IMPL_X32(semtimedop_time64, SyscallPassthrough4<SYSCALL_DEF(semtimedop)>);
++#endif
+     REGISTER_SYSCALL_IMPL_X32(futex_time64, SyscallPassthrough6<SYSCALL_DEF(futex)>);
+     REGISTER_SYSCALL_IMPL_X32(sched_rr_get_interval_time64, SyscallPassthrough2<SYSCALL_DEF(sched_rr_get_interval)>);
+   }
+diff --git a/Source/Tools/LinuxEmulation/LinuxSyscalls/SyscallsSMCTracking.cpp b/Source/Tools/LinuxEmulation/LinuxSyscalls/SyscallsSMCTracking.cpp
+--- a/Source/Tools/LinuxEmulation/LinuxSyscalls/SyscallsSMCTracking.cpp
++++ b/Source/Tools/LinuxEmulation/LinuxSyscalls/SyscallsSMCTracking.cpp
+@@ -471,6 +486,9 @@ uint64_t SyscallHandler::GuestMprotect(FEXCore::Core::InternalThreadState* Threa
+ }
+ 
+ uint64_t SyscallHandler::GuestShmat(bool Is64Bit, FEXCore::Core::InternalThreadState* Thread, int shmid, const void* shmaddr, int shmflg) {
++#if defined(__ANDROID__)
++  return -ENOSYS;
++#else
+   uint64_t Result {};
+   uint64_t Length {};
+ 
+@@ -501,9 +519,13 @@ uint64_t SyscallHandler::GuestShmat(bool Is64Bit, FEXCore::Core::InternalThreadS
+ 
+   InvalidateCodeRangeIfNecessary(Thread, Result, Length);
+   return Result;
++#endif
+ }
+ 
+ uint64_t SyscallHandler::GuestShmdt(bool Is64Bit, FEXCore::Core::InternalThreadState* Thread, const void* shmaddr) {
++#if defined(__ANDROID__)
++  return -ENOSYS;
++#else
+   uint64_t Result {};
+   uint64_t Length {};
+   {
+@@ -525,6 +547,7 @@ uint64_t SyscallHandler::GuestShmdt(bool Is64Bit, FEXCore::Core::InternalThreadS
+ 
+   InvalidateCodeRangeIfNecessary(Thread, reinterpret_cast<uintptr_t>(shmaddr), Length);
+   return Result;
++#endif
+ }
+ 
+ // MMan Tracking
+diff --git a/Source/Tools/LinuxEmulation/LinuxSyscalls/x32/Semaphore.cpp b/Source/Tools/LinuxEmulation/LinuxSyscalls/x32/Semaphore.cpp
+--- a/Source/Tools/LinuxEmulation/LinuxSyscalls/x32/Semaphore.cpp
++++ b/Source/Tools/LinuxEmulation/LinuxSyscalls/x32/Semaphore.cpp
+@@ -87,6 +87,10 @@ union semun {
+ };
+ 
+ uint64_t _ipc(FEXCore::Core::CpuStateFrame* Frame, uint32_t call, uint32_t first, uint32_t second, uint32_t third, uint32_t ptr, uint32_t fifth) {
++#if defined(__ANDROID__)
++  // VEXA_FIXES: Android seccomp traps every SysV IPC op multiplexed through SYS_ipc with SIGSYS.
++  return -ENOSYS;
++#else
+   uint64_t Result {};
+ 
+   const int Version = call >> 16;
+@@ -381,11 +385,15 @@ uint64_t _ipc(FEXCore::Core::CpuStateFrame* Frame, uint32_t call, uint32_t first
+   default: return -ENOSYS;
+   }
+   SYSCALL_ERRNO();
++#endif
+ }
+ void RegisterSemaphore(FEX::HLE::SyscallHandler* Handler) {
+   REGISTER_SYSCALL_IMPL_X32(ipc, _ipc);
+ 
+   REGISTER_SYSCALL_IMPL_X32(semctl, [](FEXCore::Core::CpuStateFrame* Frame, int semid, int semnum, int cmd, semun_32* semun) -> uint64_t {
++#if defined(__ANDROID__)
++    return -ENOSYS;
++#else
+     uint64_t Result {};
+     bool IPC64 = cmd & 0x100;
+ 
+@@ -456,6 +464,7 @@ void RegisterSemaphore(FEX::HLE::SyscallHandler* Handler) {
+     default: LOGMAN_MSG_A_FMT("Unhandled semctl cmd: {}", cmd); return -EINVAL;
+     }
+     SYSCALL_ERRNO();
++#endif
+   });
+ }
+ } // namespace FEX::HLE::x32
+diff --git a/Source/Tools/LinuxEmulation/LinuxSyscalls/x64/Semaphore.cpp b/Source/Tools/LinuxEmulation/LinuxSyscalls/x64/Semaphore.cpp
+--- a/Source/Tools/LinuxEmulation/LinuxSyscalls/x64/Semaphore.cpp
++++ b/Source/Tools/LinuxEmulation/LinuxSyscalls/x64/Semaphore.cpp
+@@ -24,6 +24,9 @@ ARG_TO_STR(FEX::HLE::x64::semun, "%lx")
+ namespace FEX::HLE::x64 {
+ void RegisterSemaphore(FEX::HLE::SyscallHandler* Handler) {
+   REGISTER_SYSCALL_IMPL_X64(semctl, [](FEXCore::Core::CpuStateFrame* Frame, int semid, int semnum, int cmd, FEX::HLE::x64::semun semun) -> uint64_t {
++#if defined(__ANDROID__)
++    return -ENOSYS;
++#else
+     uint64_t Result {};
+     switch (cmd) {
+     case IPC_SET: {
+@@ -77,6 +80,7 @@ void RegisterSemaphore(FEX::HLE::SyscallHandler* Handler) {
+     default: LOGMAN_MSG_A_FMT("Unhandled semctl cmd: {}", cmd); return -EINVAL;
+     }
+     SYSCALL_ERRNO();
++#endif
+   });
+ }
+ } // namespace FEX::HLE::x64

@@ -22,6 +22,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -110,11 +111,13 @@ object PadCtl {
  * switching SDL games into keyboard/mouse mode.
  * Left stick is WASD. D-pad is the arrow keys. Right stick moves the pointer.
  * A is Space/Z/Enter (Jump/Confirm). X is E/F (Interact). RT left-clicks (Attack/Confirm).
- * RB/LT right-clicks (Secondary/Aim). B is Control/Shift/C (Slide/Roll/Cancel), Y is R/Tab.
+ * RB/LT right-clicks (Secondary/Aim). B is Control/Shift/C/X (Slide/Roll/Cancel), Y is R/Tab.
  * LB is Shift, Start is Escape/Enter, Back is Tab, L3 is Shift, R3 is R.
  * Raw screen taps stay clicks only while the overlay is off.
  */
 class GuestPadState {
+    /** Megabonk's cancel/back action needs a keyboard Escape alongside its SDL B event. */
+    var bAsEscape = false
     var overlay by mutableStateOf(false)
     var aimX by mutableIntStateOf(-1)
     var aimY by mutableIntStateOf(-1)
@@ -127,6 +130,7 @@ class GuestPadState {
     var virtLt by mutableStateOf(false)
     var virtRt by mutableStateOf(false)
     var onFaceKey: (Boolean, Int) -> Unit = { _, _ -> }
+    var onDirectKey: (Boolean, Int) -> Unit = { _, _ -> }
     var onPadButton: (Boolean, Int) -> Unit = { _, _ -> }
 
     private var physLeftX = 0f
@@ -209,6 +213,9 @@ class GuestPadState {
                 sink.key(down, XKeys.SHIFT_L)
                 sink.key(down, XKeys.C)
                 sink.key(down, XKeys.X)
+                if (bAsEscape) {
+                    sink.directKey(down, XKeys.ESCAPE)
+                }
             }
             KeyEvent.KEYCODE_BUTTON_X -> {
                 sink.pad(PadCtl.X, padDown)
@@ -397,19 +404,24 @@ class GuestPadState {
         return if (abs(virtual) >= abs(physical)) virtual else physical
     }
 
-    private fun isController(event: android.view.InputEvent): Boolean {
-        val sources = event.device?.sources ?: 0
-        val source = event.source
-        fun has(mask: Int) = (sources and mask) == mask || (source and mask) == mask
-        val joystickClass = (sources and InputDevice.SOURCE_CLASS_JOYSTICK) != 0 ||
-            (source and InputDevice.SOURCE_CLASS_JOYSTICK) != 0
-        return has(InputDevice.SOURCE_GAMEPAD) || has(InputDevice.SOURCE_JOYSTICK) || joystickClass
-    }
+    private fun isController(event: android.view.InputEvent): Boolean = isControllerSourced(event)
+}
+
+/** True when the event comes from a gamepad/joystick-class device or carries a gamepad source. */
+internal fun isControllerSourced(event: android.view.InputEvent): Boolean {
+    val sources = event.device?.sources ?: 0
+    val source = event.source
+    fun has(mask: Int) = (sources and mask) == mask || (source and mask) == mask
+    val joystickClass = (sources and InputDevice.SOURCE_CLASS_JOYSTICK) != 0 ||
+        (source and InputDevice.SOURCE_CLASS_JOYSTICK) != 0
+    return has(InputDevice.SOURCE_GAMEPAD) || has(InputDevice.SOURCE_JOYSTICK) || joystickClass
 }
 
 interface PadSink {
     fun pointer(type: Int, x: Int, y: Int, state: Int)
     fun key(down: Boolean, keysym: Int)
+    /** Delivered to SDL guests too; use only when a keyboard action is explicitly required. */
+    fun directKey(down: Boolean, keysym: Int)
     fun pad(control: Int, value: Int)
 }
 
@@ -430,7 +442,7 @@ fun GuestPadOverlay(pad: GuestPadState) {
                     .size(14.dp)
                     .clip(CircleShape)
                     .background(Color.White.copy(alpha = 0.9f))
-                    .border(2.dp, c.plasma, CircleShape),
+                    .border(2.dp, c.borderStrong, CircleShape),
             )
         }
         Row(
@@ -556,6 +568,7 @@ private fun Diamond(pad: GuestPadState, modifier: Modifier) {
                 pad.onFaceKey(it, XKeys.SHIFT_L)
                 pad.onFaceKey(it, XKeys.C)
                 pad.onFaceKey(it, XKeys.X)
+                if (pad.bAsEscape) pad.onDirectKey(it, XKeys.ESCAPE)
             },
             modifier = Modifier.align(Alignment.CenterEnd),
         )
@@ -579,26 +592,30 @@ private fun HoldButton(
     emphasized: Boolean = false,
 ) {
     val c = VexaTheme.colors
+    var pressed by remember { mutableStateOf(false) }
+    val lit = emphasized || pressed
     Box(
         modifier = modifier
             .size(52.dp)
             .clip(CircleShape)
-            .background(if (emphasized) c.plasma.copy(alpha = 0.85f) else c.surface2.copy(alpha = 0.72f))
-            .border(1.dp, c.plasma.copy(alpha = 0.7f), CircleShape)
+            .background(if (lit) c.plasma.copy(alpha = 0.85f) else c.surface2.copy(alpha = 0.72f))
+            .border(if (lit) 2.dp else 1.dp, c.borderStrong, CircleShape)
             .pointerInput(label) {
                 awaitEachGesture {
                     val down = awaitFirstDown()
+                    pressed = true
                     onDown(true)
                     try {
                         drag(down.id) { change -> change.consume() }
                     } finally {
+                        pressed = false
                         onDown(false)
                     }
                 }
             },
         contentAlignment = Alignment.Center,
     ) {
-        Text(label, color = c.textPrimary, style = MonospaceTypography.labelLarge)
+        Text(label, color = if (lit) c.onAccent else c.textPrimary, style = MonospaceTypography.labelLarge)
     }
 }
 
@@ -616,7 +633,7 @@ private fun Stick(
             .size(148.dp)
             .clip(CircleShape)
             .background(c.surface2.copy(alpha = 0.4f))
-            .border(2.dp, c.plasma.copy(alpha = 0.55f), CircleShape)
+            .border(2.dp, c.borderStrong, CircleShape)
             .pointerInput(label) {
                 awaitEachGesture {
                     val down = awaitFirstDown()
