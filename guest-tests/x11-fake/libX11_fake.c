@@ -379,6 +379,10 @@ static struct vexa_window_geometry* vexa_window(Window window) {
   return window < 256 && g_windows[window].valid ? &g_windows[window] : NULL;
 }
 
+static int g_cfg_sent;
+static Window g_cfg_win;
+static int g_cfg_x, g_cfg_y, g_cfg_w, g_cfg_h;
+
 static void vexa_push_configure_win(Display* dpy, Window win, int x, int y, int w, int h) {
   XEvent event;
   if (win == 0) {
@@ -398,6 +402,18 @@ static void vexa_push_configure_win(Display* dpy, Window win, int x, int y, int 
   if (h < 1) {
     h = g_screen.height;
   }
+  /* ETS2 answers every ConfigureNotify with another resize of the same
+     window. The y nudge above would otherwise bounce 0 and 1 forever. */
+  if (g_cfg_sent && g_cfg_win == win && g_cfg_x == x && g_cfg_y == y && g_cfg_w == w && g_cfg_h == h) {
+    return;
+  }
+  g_cfg_sent = 1;
+  g_cfg_win = win;
+  g_cfg_x = x;
+  g_cfg_y = y;
+  g_cfg_w = w;
+  g_cfg_h = h;
+  fprintf(stderr, "[VEXA][X11] configure %d,%d %dx%d\n", x, y, w, h);
   memset(&event, 0, sizeof(event));
   event.type = ConfigureNotify;
   event.xconfigure.display = dpy;
@@ -517,7 +533,6 @@ static void vexa_configure(Display* dpy, int x, int y, int w, int h) {
   g_win_w = w;
   g_win_h = h;
   g_win_valid = 1;
-  fprintf(stderr, "[VEXA][X11] win_configure %d,%d %dx%d\n", x, y, w, h);
   vexa_push_configure_win(dpy, g_input_window, x, y, w, h);
   if (g_focus_sent_win != (int)g_input_window) {
     vexa_push_focus(dpy, g_input_window);
@@ -631,6 +646,36 @@ static unsigned int vexa_code_for_sym(KeySym sym) {
   return 0;
 }
 
+static KeySym vexa_shifted_sym(KeySym sym) {
+  if (sym >= (KeySym)'a' && sym <= (KeySym)'z') {
+    return sym - ('a' - 'A');
+  }
+  switch (sym) {
+    case '1': return '!';
+    case '2': return '@';
+    case '3': return '#';
+    case '4': return '$';
+    case '5': return '%';
+    case '6': return '^';
+    case '7': return '&';
+    case '8': return '*';
+    case '9': return '(';
+    case '0': return ')';
+    case '-': return '_';
+    case '=': return '+';
+    case '[': return '{';
+    case ']': return '}';
+    case '\\': return '|';
+    case ';': return ':';
+    case '\'': return '"';
+    case ',': return '<';
+    case '.': return '>';
+    case '/': return '?';
+    case '`': return '~';
+    default: return NoSymbol;
+  }
+}
+
 static KeySym vexa_sym_for_code(unsigned int code, int level) {
   KeySym sym;
   vexa_init_keys();
@@ -638,11 +683,8 @@ static KeySym vexa_sym_for_code(unsigned int code, int level) {
     return NoSymbol;
   }
   sym = g_sym_by_code[code];
-  if (level == 1 && sym >= (KeySym)'a' && sym <= (KeySym)'z') {
-    return sym - ('a' - 'A');
-  }
-  if (level != 0) {
-    return NoSymbol;
+  if (level == 1) {
+    return vexa_shifted_sym(sym);
   }
   return sym;
 }
@@ -688,19 +730,64 @@ static void vexa_fill_key(XEvent* event, Display* dpy, int type, KeySym sym, uns
   event->xkey.y_root = g_pointer_y;
   event->xkey.state = (state & 0x00ffffffu) | g_mod_state;
   event->xkey.keycode = vexa_code_for_sym(sym);
+  event->xkey.subwindow = None;
+  /* No evdev key for this symbol. Keep it on the event so text lookup can
+     still return the character (Unicode keysyms are 0x01000000 + code point). */
+  if (event->xkey.keycode == 0 && sym >= 0xa0) {
+    event->xkey.subwindow = (Window)sym;
+  }
   event->xkey.same_screen = True;
 }
 
+static int vexa_emit_char(char* buffer, int bytes, unsigned int cp) {
+  if (!buffer || bytes <= 0 || cp < 32) {
+    return 0;
+  }
+  if (cp < 128) {
+    buffer[0] = (char)cp;
+    return 1;
+  }
+  if (cp < 0x800) {
+    if (bytes < 2) return 0;
+    buffer[0] = (char)(0xc0 | (cp >> 6));
+    buffer[1] = (char)(0x80 | (cp & 0x3f));
+    return 2;
+  }
+  if (cp <= 0x10ffff) {
+    if (bytes < 3) return 0;
+    buffer[0] = (char)(0xe0 | (cp >> 12));
+    buffer[1] = (char)(0x80 | ((cp >> 6) & 0x3f));
+    buffer[2] = (char)(0x80 | (cp & 0x3f));
+    return 3;
+  }
+  return 0;
+}
+
 static int vexa_lookup_key(XKeyEvent* event, char* buffer, int bytes, KeySym* keysym) {
-  KeySym sym = event ? vexa_sym_for_code(event->keycode, 0) : NoSymbol;
+  KeySym sym = NoSymbol;
+  unsigned int cp = 0;
+  if (event && event->keycode == 0 && event->subwindow >= 0xa0) {
+    unsigned long packed = (unsigned long)event->subwindow;
+    sym = (KeySym)packed;
+    cp = packed >= 0x01000000ul ? (unsigned int)(packed & 0x1ffffful) : (unsigned int)packed;
+  } else if (event) {
+    int level = (event->state & ShiftMask) ? 1 : 0;
+    sym = vexa_sym_for_code(event->keycode, level);
+    cp = (unsigned int)sym;
+  }
   if (keysym) {
     *keysym = sym;
   }
-  if (buffer && bytes > 0) {
-    if (sym >= 32 && sym < 127) {
-      buffer[0] = (char)sym;
-      return 1;
+  /* Printable ASCII and Unicode keysyms become text. BackSpace, Return and
+     the other 0xffxx controls stay key events, so lookup does not insert them. */
+  {
+    int printable = (sym >= 32 && sym < 127) || (sym >= 0x01000000);
+    int written = printable ? vexa_emit_char(buffer, bytes, cp) : 0;
+    if (written > 0) {
+      return written;
     }
+  }
+  if (buffer && bytes > 0) {
     buffer[0] = 0;
   }
   return 0;
@@ -738,6 +825,32 @@ static void vexa_fill_pointer(XEvent* event, Display* dpy, int type, int x, int 
 
 static int g_warp_centered = 0;
 static int g_pointer_grabbed = 0;
+/* One cursor shared by MotionNotify, clicks, and XQueryPointer. A centre
+   warp may publish that centre once. After the stick or mouse has stepped
+   it, another warp must not move it: resetting to the centre made the
+   reachable set a disk, and reporting only the step pinned the cursor. */
+static int g_cursor_x = 0;
+static int g_cursor_y = 0;
+static int g_cursor_moved = 0;
+
+static void vexa_step_cursor(int dx, int dy) {
+  if (!g_cursor_moved) {
+    /* 0,0 is a real warp target. Promoting it to the screen centre makes
+       ETS2 add the centre again and the cursor can only travel the
+       bottom-right quarter until the pointer is pushed off the screen. */
+    g_cursor_x = g_pointer_x;
+    g_cursor_y = g_pointer_y;
+  }
+  g_cursor_x += dx;
+  g_cursor_y += dy;
+  if (g_cursor_x < 0) g_cursor_x = 0;
+  if (g_cursor_y < 0) g_cursor_y = 0;
+  if (g_screen.width > 1 && g_cursor_x >= g_screen.width) g_cursor_x = g_screen.width - 1;
+  if (g_screen.height > 1 && g_cursor_y >= g_screen.height) g_cursor_y = g_screen.height - 1;
+  g_cursor_moved = 1;
+  g_pointer_x = g_cursor_x;
+  g_pointer_y = g_cursor_y;
+}
 
 static int vexa_absolute_pointer(void) {
   const char* mode = getenv("VEXA_X11_ABSOLUTE_POINTER");
@@ -846,15 +959,23 @@ static void vexa_poll_pointer(Display* dpy) {
           g_last_touch_y = -1;
         }
       }
-      if (type == MotionNotify && g_warp_centered && !vexa_absolute_pointer()) {
+      if (type == MotionNotify && g_warp_centered) {
         if (rel_dx == 0 && rel_dy == 0) {
           continue;
         }
-        // The guest warp changes the X11 pointer, not Android's pointer or
-        // GuestPad's absolute aim. Accumulate deltas until the next real warp.
-        // Injecting a center event before each movement cancels motion in
-        // clients that consume every MotionNotify (rather than SDL filtering).
-        vexa_relative_pointer(rel_dx, rel_dy, &mx, &my);
+        /* ETS2 reads the motion as a delta from the last event or from
+           XQueryPointer. Those two have to be the same cursor. Reporting
+           the centre, or only the step, disagrees by about half the screen
+           and the cursor clamps into a corner. */
+        vexa_step_cursor(rel_dx, rel_dy);
+        mx = g_pointer_x;
+        my = g_pointer_y;
+      } else if ((type == ButtonPress || type == ButtonRelease) && g_warp_centered) {
+        mx = g_cursor_moved ? g_cursor_x : g_pointer_x;
+        my = g_cursor_moved ? g_cursor_y : g_pointer_y;
+      } else {
+        g_cursor_x = mx;
+        g_cursor_y = my;
       }
       vexa_fill_pointer(&event, dpy, (int)type, mx, my, (int)state);
       vexa_trace_pointer(synth ? "pad-motion" : "mouse-touch", raw_x, raw_y, rel_dx, rel_dy, mx, my, g_input_window);
@@ -2014,19 +2135,62 @@ int XWarpPointer(Display* dpy, Window src, Window dest, int src_x, int src_y, un
               (unsigned long)src, (unsigned long)dest, dest_x, dest_y, wx, wy);
     }
   }
-  /* Android/GuestPad supplies an absolute menu cursor. A captured client's
-     internal recenter must not reset that cursor or the next motion origin. */
-  if (g_pointer_grabbed && vexa_absolute_pointer() &&
-      abs(wx - g_screen.width / 2) <= 2 && abs(wy - g_screen.height / 2) <= 2) {
-    vexa_trace_pointer("absolute-recenter-ignored", dest_x, dest_y, 0, 0,
-                       g_pointer_x, g_pointer_y, target);
-    return 1;
+  /* Absolute warps only move the anchor. Echoing one as MotionNotify is a
+     delta of about half the screen and pins the cursor to the bottom-right. */
+  {
+    int cx = g_screen.width > 1 ? g_screen.width / 2 : 0;
+    int cy = g_screen.height > 1 ? g_screen.height / 2 : 0;
+    int near_center = abs(wx - cx) <= 2 && abs(wy - cy) <= 2;
+    /* ETS2 repeats this warp whenever it resets the cursor. Publish the
+       origin and drop the previous walk, or the next motion is measured
+       from the centre again. */
+    if (dest != None && wx == 0 && wy == 0) {
+      g_warp_centered = 1;
+      g_warp_x = 0;
+      g_warp_y = 0;
+      g_cursor_x = 0;
+      g_cursor_y = 0;
+      g_pointer_x = 0;
+      g_pointer_y = 0;
+      g_cursor_moved = 0;
+      vexa_trace_pointer("warp-origin", dest_x, dest_y, 0, 0, 0, 0, target);
+      return 1;
+    }
+    if (dest != None && near_center && g_pointer_grabbed && vexa_absolute_pointer()) {
+      g_warp_centered = 1;
+      g_warp_x = wx;
+      g_warp_y = wy;
+      /* Publish the centre until the user steps. After that, leave the
+         cursor where the steps put it. */
+      if (!g_cursor_moved) {
+        g_cursor_x = wx;
+        g_cursor_y = wy;
+        g_pointer_x = wx;
+        g_pointer_y = wy;
+      }
+      vexa_trace_pointer("warp-anchor", dest_x, dest_y, 0, 0, g_pointer_x, g_pointer_y, target);
+      return 1;
+    }
+    if (dest != None && (near_center || g_warp_centered)) {
+      g_warp_centered = 1;
+      g_warp_x = wx;
+      g_warp_y = wy;
+      if (!g_cursor_moved) {
+        g_cursor_x = wx;
+        g_cursor_y = wy;
+        g_pointer_x = wx;
+        g_pointer_y = wy;
+      }
+      vexa_trace_pointer("warp-anchor", dest_x, dest_y, 0, 0, g_pointer_x, g_pointer_y, target);
+      return 1;
+    }
   }
   g_warp_x = wx;
   vexa_trace_pointer("warp", dest_x, dest_y, (int)src, (int)dest, wx, wy, target);
   g_warp_y = wy;
-  /* Only a warp to the window centre is SDL's relative-look emulation. */
-  g_warp_centered = abs(wx - g_screen.width / 2) <= 2 && abs(wy - g_screen.height / 2) <= 2;
+  g_warp_centered = 0;
+  g_cursor_x = wx;
+  g_cursor_y = wy;
   g_pointer_x = wx;
   g_pointer_y = wy;
   vexa_fill_pointer(&event, dpy, MotionNotify, wx, wy, (int)g_pointer_state);
