@@ -116,6 +116,8 @@ object PadCtl {
  * Raw screen taps stay clicks only while the overlay is off.
  */
 class GuestPadState {
+    /** FNA menus can require keyboard navigation when their pad path is unavailable. */
+    var keyboardNavigationFallback = false
     /** Megabonk's cancel/back action needs a keyboard Escape alongside its SDL B event. */
     var bAsEscape = false
     var overlay by mutableStateOf(false)
@@ -292,10 +294,14 @@ class GuestPadState {
         hold(XKeys.S, down && !up, sink)
         hold(XKeys.A, left && !right, sink)
         hold(XKeys.D, right && !left, sink)
-        hold(XKeys.UP, dpadUp && !dpadDown, sink)
-        hold(XKeys.DOWN, dpadDown && !dpadUp, sink)
-        hold(XKeys.LEFT, dpadLeft && !dpadRight, sink)
-        hold(XKeys.RIGHT, dpadRight && !dpadLeft, sink)
+        val navUp = dpadUp || (keyboardNavigationFallback && stickUp)
+        val navDown = dpadDown || (keyboardNavigationFallback && stickDown)
+        val navLeft = dpadLeft || (keyboardNavigationFallback && stickLeft)
+        val navRight = dpadRight || (keyboardNavigationFallback && stickRight)
+        hold(XKeys.UP, navUp && !navDown, sink, keyboardNavigationFallback)
+        hold(XKeys.DOWN, navDown && !navUp, sink, keyboardNavigationFallback)
+        hold(XKeys.LEFT, navLeft && !navRight, sink, keyboardNavigationFallback)
+        hold(XKeys.RIGHT, navRight && !navLeft, sink, keyboardNavigationFallback)
 
         val ltValue = maxOf(if (virtLt) 1f else 0f, if (physLtKey) 1f else 0f, physLtVal)
         val rtValue = maxOf(if (virtRt) 1f else 0f, if (physRtKey) 1f else 0f, physRtVal)
@@ -345,14 +351,14 @@ class GuestPadState {
         }
     }
 
-    private fun hold(key: Int, want: Boolean, sink: PadSink) {
+    private fun hold(key: Int, want: Boolean, sink: PadSink, direct: Boolean = false) {
         val has = held.contains(key)
         if (want && !has) {
             held.add(key)
-            sink.key(true, key)
+            if (direct) sink.directKey(true, key) else sink.key(true, key)
         } else if (!want && has) {
             held.remove(key)
-            sink.key(false, key)
+            if (direct) sink.directKey(false, key) else sink.key(false, key)
         }
     }
 
@@ -492,13 +498,13 @@ fun GuestPadOverlay(pad: GuestPadState) {
         }
         Dpad(
             pad,
-            Modifier.align(Alignment.BottomStart).padding(start = 188.dp, bottom = 96.dp),
+            Modifier.align(Alignment.BottomStart).padding(start = 44.dp, bottom = 196.dp),
         )
         Stick(
             x = pad.virtLeftX,
             y = pad.virtLeftY,
             label = "L",
-            modifier = Modifier.align(Alignment.BottomStart).padding(start = 28.dp, bottom = 72.dp),
+            modifier = Modifier.align(Alignment.BottomStart).padding(start = 32.dp, bottom = 36.dp),
         ) { x, y ->
             pad.virtLeftX = x
             pad.virtLeftY = y
@@ -509,17 +515,18 @@ fun GuestPadOverlay(pad: GuestPadState) {
                 pad.face(it, PadCtl.LSTICK, XKeys.SHIFT_L)
                 pad.onFaceKey(it, XKeys.C)
             },
-            modifier = Modifier.align(Alignment.BottomStart).padding(start = 78.dp, bottom = 228.dp),
+            modifier = Modifier.align(Alignment.BottomStart).padding(start = 176.dp, bottom = 56.dp),
+            size = 38.dp,
         )
         Diamond(
             pad,
-            Modifier.align(Alignment.BottomEnd).padding(end = 188.dp, bottom = 64.dp),
+            Modifier.align(Alignment.BottomEnd).padding(end = 36.dp, bottom = 176.dp),
         )
         Stick(
             x = pad.virtRightX,
             y = pad.virtRightY,
             label = "R",
-            modifier = Modifier.align(Alignment.BottomEnd).padding(end = 28.dp, bottom = 72.dp),
+            modifier = Modifier.align(Alignment.BottomEnd).padding(end = 32.dp, bottom = 36.dp),
         ) { x, y ->
             pad.virtRightX = x
             pad.virtRightY = y
@@ -527,14 +534,15 @@ fun GuestPadOverlay(pad: GuestPadState) {
         HoldButton(
             "R3",
             { pad.face(it, PadCtl.RSTICK, XKeys.R) },
-            modifier = Modifier.align(Alignment.BottomEnd).padding(end = 78.dp, bottom = 228.dp),
+            modifier = Modifier.align(Alignment.BottomEnd).padding(end = 176.dp, bottom = 56.dp),
+            size = 38.dp,
         )
     }
 }
 
 @Composable
 private fun Dpad(pad: GuestPadState, modifier: Modifier) {
-    Box(modifier.size(132.dp)) {
+    Box(modifier.size(120.dp)) {
         HoldButton("↑", { pad.setDpad(0, it) }, modifier = Modifier.align(Alignment.TopCenter))
         HoldButton("↓", { pad.setDpad(1, it) }, modifier = Modifier.align(Alignment.BottomCenter))
         HoldButton("←", { pad.setDpad(2, it) }, modifier = Modifier.align(Alignment.CenterStart))
@@ -544,7 +552,7 @@ private fun Dpad(pad: GuestPadState, modifier: Modifier) {
 
 @Composable
 private fun Diamond(pad: GuestPadState, modifier: Modifier) {
-    Box(modifier.size(164.dp)) {
+    Box(modifier.size(144.dp)) {
         HoldButton(
             "Y",
             {
@@ -590,13 +598,14 @@ private fun HoldButton(
     onDown: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
     emphasized: Boolean = false,
+    size: androidx.compose.ui.unit.Dp = 44.dp,
 ) {
     val c = VexaTheme.colors
     var pressed by remember { mutableStateOf(false) }
     val lit = emphasized || pressed
     Box(
         modifier = modifier
-            .size(52.dp)
+            .size(size)
             .clip(CircleShape)
             .background(if (lit) c.plasma.copy(alpha = 0.85f) else c.surface2.copy(alpha = 0.72f))
             .border(if (lit) 2.dp else 1.dp, c.borderStrong, CircleShape)
@@ -630,7 +639,7 @@ private fun Stick(
     val c = VexaTheme.colors
     Box(
         modifier = modifier
-            .size(148.dp)
+            .size(136.dp)
             .clip(CircleShape)
             .background(c.surface2.copy(alpha = 0.4f))
             .border(2.dp, c.borderStrong, CircleShape)
@@ -638,8 +647,13 @@ private fun Stick(
                 awaitEachGesture {
                     val down = awaitFirstDown()
                     fun report(px: Float, py: Float) {
-                        val dx = ((px - size.width / 2f) / (size.width / 2f)).coerceIn(-1f, 1f)
-                        val dy = ((py - size.height / 2f) / (size.height / 2f)).coerceIn(-1f, 1f)
+                        var dx = (px - size.width / 2f) / (size.width / 2f)
+                        var dy = (py - size.height / 2f) / (size.height / 2f)
+                        val mag = hypot(dx, dy)
+                        if (mag > 1f) {
+                            dx /= mag
+                            dy /= mag
+                        }
                         onChange(dx, dy)
                     }
                     try {
@@ -657,8 +671,13 @@ private fun Stick(
     ) {
         Box(
             modifier = Modifier
-                .offset { IntOffset((x * 40.dp.toPx()).roundToInt(), (y * 40.dp.toPx()).roundToInt()) }
-                .size(54.dp)
+                .offset {
+                    val travel = 38.dp.toPx()
+                    val mag = hypot(x, y)
+                    val scale = if (mag > 1f) 1f / mag else 1f
+                    IntOffset((x * scale * travel).roundToInt(), (y * scale * travel).roundToInt())
+                }
+                .size(48.dp)
                 .clip(CircleShape)
                 .background(Color.Black.copy(alpha = 0.55f))
                 .border(1.dp, c.textPrimary.copy(alpha = 0.8f), CircleShape),

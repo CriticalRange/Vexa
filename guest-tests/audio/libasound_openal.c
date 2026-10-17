@@ -586,19 +586,32 @@ const char* snd_strerror(int err) {
 
 const char* snd_asoundlib_version(void) { return "1.2.0-vexa"; }
 
+int snd_pcm_hw_params_test_rate(void* pcm, void* params, unsigned int rate, int dir) {
+  (void)pcm;
+  (void)params;
+  (void)dir;
+  return (rate >= 8000 && rate <= 192000) ? 0 : -EINVAL;
+}
+
+static const char k_vexa_default_hint[] = "VEXA_DEFAULT_PCM_HINT";
+
 int snd_device_name_hint(int card, const char* iface, void*** hints) {
   void** list;
   (void)card;
   (void)iface;
   if (!hints) return -EINVAL;
-  list = calloc(1, sizeof(void*));
+  list = calloc(2, sizeof(void*));
   if (!list) return -ENOMEM;
+  list[0] = (void*)k_vexa_default_hint;
+  list[1] = NULL;
   *hints = list;
   return 0;
 }
 char* snd_device_name_get_hint(const void* hint, const char* id) {
-  (void)hint;
-  (void)id;
+  if (!hint || !id) return NULL;
+  if (strcmp(id, "NAME") == 0) return strdup("default");
+  if (strcmp(id, "DESC") == 0) return strdup("VEXA OpenAL Default Output");
+  if (strcmp(id, "IOID") == 0) return strdup("Output");
   return NULL;
 }
 int snd_device_name_free_hint(void** hints) {

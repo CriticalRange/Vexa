@@ -63,6 +63,7 @@ SONAMES = (
     "libXss.so.1",
     "libXxf86vm.so.1",
     "libgbm.so.1",
+    "libvexa_memcpy214.so",
 )
 REQUIRED = (
     "ld-linux-x86-64.so.2",

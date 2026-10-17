@@ -44,10 +44,15 @@ XcursorImage* XcursorImageCreate(int width, int height) {
   image->size = (uint32_t)(width > height ? width : height);
   image->width = (uint32_t)width;
   image->height = (uint32_t)height;
-  /* Godot replaces pixels with its own buffer and memfrees that buffer
-   * before XcursorImageDestroy. Upstream libXcursor keeps pixels inside
-   * the image allocation and destroy frees only the image. */
-  image->pixels = NULL;
+  /* Upstream places the pixel buffer immediately after the struct. Unity
+   * memcpy's that pointer while building the cursor; NULL faults. Godot
+   * replaces the pointer and frees its own buffer before destroy, so
+   * destroy still frees only the struct. */
+  image->pixels = (uint32_t*)calloc((size_t)width * (size_t)height, sizeof(uint32_t));
+  if (!image->pixels) {
+    free(image);
+    return NULL;
+  }
   return image;
 }
 

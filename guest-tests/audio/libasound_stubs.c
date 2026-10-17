@@ -702,7 +702,6 @@ int snd_pcm_hw_params_test_format(void){return 0;}
 int snd_pcm_hw_params_test_period_size(void){return 0;}
 int snd_pcm_hw_params_test_period_time(void){return 0;}
 int snd_pcm_hw_params_test_periods(void){return 0;}
-int snd_pcm_hw_params_test_rate(void){return 0;}
 int snd_pcm_hw_params_test_subformat(void){return 0;}
 int snd_pcm_hw_params_test_tick_time(void){return 0;}
 int snd_pcm_hwsync(void){return 0;}

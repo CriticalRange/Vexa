@@ -12,6 +12,12 @@ FEX_BUILD = os.environ.get("FEX_BUILD_DIR", os.path.normpath(os.path.join(VEXA, 
 THIRD_PARTY = os.path.join(VEXA, "third_party", "install-android-arm64")
 
 PAYLOADS = (
+    ("x86_64", os.path.join(VEXA, "guest-tests", "audio", "libasound.so.2"),
+     "rootfs/usr/lib/x86_64-linux-gnu/libasound.so.2"),
+    # Keep the XkbGetMap fix in the APK; a manually pushed device shim must
+    # not regress to the stale rootfs copy on the next runtime installation.
+    ("x86_64", os.path.join(VEXA, "guest-tests", "x11-fake", "libX11.so.6"),
+     "rootfs/usr/lib/x86_64-linux-gnu/libX11.so.6"),
     ("x86_64", os.path.join(FEX_BUILD, "Guest", "libopenal-guest.so"), "thunks/guest/libopenal-guest.so"),
     ("aarch64", os.path.join(FEX_BUILD, "HostLibs_64", "libopenal-host.so"), "thunks/host/libopenal-host.so"),
     ("x86_64", os.path.join(FEX_BUILD, "Guest", "libGL-guest.so"), "thunks/guest/libGL-guest.so"),

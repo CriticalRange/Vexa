@@ -296,6 +296,26 @@ val prepareI386Sysroot by tasks.registering(Exec::class) {
     commandLine(pythonExe, rootProject.file("guest-tests/graphics/stage_i386_sysroot.py").absolutePath)
 }
 
+val buildAlsaBridge by tasks.registering(Exec::class) {
+    group = "build setup"
+    onlyIf { buildThunks.get() == "ON" }
+    inputs.files(rootProject.fileTree("guest-tests/audio") { include("*.c", "build_alsa_bridge.py") })
+    outputs.file(rootProject.file("guest-tests/audio/libasound.so.2"))
+    commandLine(pythonExe, rootProject.file("guest-tests/audio/build_alsa_bridge.py").absolutePath)
+}
+
+val buildAmd64X11Shim by tasks.registering(Exec::class) {
+    group = "build setup"
+    onlyIf { buildThunks.get() == "ON" }
+    inputs.files(rootProject.fileTree("guest-tests/x11-fake") { include("*.c", "*.h") })
+    inputs.file(rootProject.file("scripts/build_x11_fakes.sh"))
+    outputs.file(rootProject.file("guest-tests/x11-fake/libX11.so.6"))
+    environment("GUEST_ARCH", "x86_64")
+    environment("NDK", cmakePath(File(sdkDirPath, "ndk/29.0.14206865").absolutePath))
+    commandLine(if (isWindowsHost) "C:/Program Files/Git/bin/bash.exe" else "bash",
+        rootProject.file("scripts/build_x11_fakes.sh").absolutePath, "libX11.so.6")
+}
+
 val buildI386X11Shims by tasks.registering(Exec::class) {
     group = "build setup"
     dependsOn(prepareI386Sysroot)
@@ -529,6 +549,8 @@ val stageSDL3Thunks by tasks.registering(Exec::class) {
     group = "build setup"
     description = "Stages paired GL/SDL thunk payloads without replacing guest rootfs assets."
     dependsOn(buildFEXCore)
+    dependsOn(buildAmd64X11Shim)
+    dependsOn(buildAlsaBridge)
     dependsOn(buildI386X11Shims)
     environment("VEXA_BUILD_32BIT_THUNKS", build32BitThunks.get())
     environment("FEX_BUILD_DIR", fexBuildDir.get())
