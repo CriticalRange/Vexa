@@ -307,7 +307,7 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
         runCatching {
             val dir = java.io.File(rootfs, "tmp")
             dir.mkdirs()
-            java.io.File(dir, "vexa-fit").writeText(if (VexaPrefs.stretchFullscreen) "stretch\n" else "aspect\n")
+            java.io.File(dir, "vexa-fit").writeText(if (VexaPrefs.stretchFor(intent.getStringExtra(EXTRA_PROGRAM_ID).orEmpty())) "stretch\n" else "aspect\n")
         }
     }
 
@@ -725,7 +725,7 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
         pad.onDirectKey = { down, keysym -> writePointer(if (down) 2 else 3, keysym, 0, 0) }
         pad.onPadButton = { down, control -> writePointer(7, control, if (down) 1 else 0, 0) }
         pad.profile = PadProfiles.forProgram(intent.getStringExtra(EXTRA_PROGRAM_ID))
-        pad.overlay = VexaPrefs.padOverlay
+        pad.overlay = VexaPrefs.padFor(intent.getStringExtra(EXTRA_PROGRAM_ID).orEmpty())
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 while (true) {
@@ -800,7 +800,10 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
                     showDebugMenu = showDebugMenu,
                     onToggleDebugMenu = { showDebugMenu = !showDebugMenu },
                     onToggleStretch = {
-                        VexaPrefs.updateStretchFullscreen(!VexaPrefs.stretchFullscreen)
+                        val id = intent.getStringExtra(EXTRA_PROGRAM_ID).orEmpty()
+                        val next = !VexaPrefs.stretchFor(id)
+                        VexaPrefs.updateStretchFor(id, next)
+                        VexaPrefs.updateStretchFullscreen(next)
                         guestRootfs?.let { publishFitMode(it) }
                     },
                     hideFilters = hideFilters,
@@ -1081,7 +1084,7 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
                 val installed = com.critical.vexaemulator.guest.GuestInstaller.install(this@GameActivity, program)
                 if (program.id == "megabonk") {
                     val selected = intent.getStringExtra(EXTRA_GRAPHICS_BACKEND)
-                        ?: if (VexaPrefs.vulkan) "vulkan" else null
+                        ?: if (VexaPrefs.vulkanFor(program.id)) "vulkan" else null
                     val env = if (selected == null) installed.launchEnv else
                         installed.launchEnv.filterNot {
                             it.startsWith("${com.critical.vexaemulator.guest.MegabonkGraphics.ENV}=")
@@ -1101,7 +1104,7 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
             }.let { request ->
                 val extra = intent.getStringArrayExtra(EXTRA_EXTRA_ENV)?.toList().orEmpty()
                 val prefEnv =
-                    if (VexaPrefs.uncappedFps) listOf("VEXA_GLX_SWAP_INTERVAL=0") else emptyList()
+                    if (VexaPrefs.uncappedFor(program.id)) listOf("VEXA_GLX_SWAP_INTERVAL=0") else emptyList()
                 val merged = request.launchEnv + prefEnv + extra
                 request.copy(launchEnv = merged)
             }
@@ -1426,9 +1429,11 @@ private fun GameScreen(
                         padOn = pad.overlay,
                         onTogglePad = {
                             pad.overlay = !pad.overlay
+                            val id = program?.id.orEmpty()
+                            VexaPrefs.updatePadFor(id, pad.overlay)
                             VexaPrefs.updatePadOverlay(pad.overlay)
                         },
-                        stretchOn = VexaPrefs.stretchFullscreen,
+                        stretchOn = VexaPrefs.stretchFor(program?.id.orEmpty()),
                         onToggleStretch = onToggleStretch,
                         onOpenKeyboard = {
                             settle(false)

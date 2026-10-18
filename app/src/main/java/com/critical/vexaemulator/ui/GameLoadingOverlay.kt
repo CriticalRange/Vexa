@@ -1,9 +1,14 @@
 package com.critical.vexaemulator.ui
 
-import android.os.Build
+import android.graphics.BitmapFactory
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -11,40 +16,60 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.em
 import com.critical.vexaemulator.guest.GuestProgram
 import com.critical.vexaemulator.ui.theme.MonospaceTypography
-import com.critical.vexaemulator.ui.theme.OverlineStyle
 import com.critical.vexaemulator.ui.theme.PillShape
 import com.critical.vexaemulator.ui.theme.VexaMotion
 import com.critical.vexaemulator.ui.theme.VexaTheme
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.io.File
 
 data class BootStep(val title: String, val detail: String)
+
+private const val ICON_BYTE_CAP = 4L * 1024L * 1024L
 
 fun bootSteps(program: GuestProgram?, surfaceSize: String?, cloudDetail: String? = null): List<BootStep> = listOfNotNull(
     BootStep("Preparing rootfs", "guest files staged in app storage"),
@@ -56,8 +81,8 @@ fun bootSteps(program: GuestProgram?, surfaceSize: String?, cloudDetail: String?
 )
 
 /**
- * Boot screen (landscape): live boot checklist on the left, hero brand + segment ring on
- * the right. [step] is the number of finished steps; the last log line streams underneath.
+ * Boot screen (landscape): scrollable boot checklist on the left, game icon or
+ * brand mark on the right. [step] is the number of finished steps.
  */
 @Composable
 fun GameLoadingOverlay(
@@ -80,28 +105,19 @@ fun GameLoadingOverlay(
         AmbientOrb(Modifier.fillMaxSize(), center = null, radiusFraction = 0.7f)
 
         Row(
-            Modifier.fillMaxSize().padding(start = 40.dp, end = 40.dp, top = 60.dp, bottom = 44.dp),
+            Modifier.fillMaxSize().padding(start = 40.dp, end = 40.dp, top = 72.dp, bottom = 28.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            BootChecklist(steps, step, Modifier.weight(1f).staggerIn(1))
+            BootChecklist(steps, step, Modifier.weight(1f).fillMaxHeight().staggerIn(1))
             Spacer(Modifier.width(24.dp))
             Column(
                 Modifier.weight(1.15f),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                BrandLogo(size = LogoSize.Hero, modifier = Modifier.staggerIn(0).lightSweep(Unit, c.bgBase))
-                Text(
-                    "LINUX X86_64 RUNTIME",
-                    style = OverlineStyle.copy(color = c.textSecondary, letterSpacing = 0.3.em),
-                )
+                BootMark(program, Modifier.staggerIn(0))
                 Spacer(Modifier.height(22.dp))
                 SegmentRing(sizeDp = 56.dp)
                 Spacer(Modifier.height(16.dp))
-                Text(
-                    "Starting the program",
-                    style = MaterialTheme.typography.titleLarge.copy(color = c.textPrimary),
-                )
-                Spacer(Modifier.height(6.dp))
                 AnimatedContent(
                     targetState = lastMessage.orEmpty(),
                     transitionSpec = { fadeIn(tween(VexaMotion.SMALL)) togetherWith fadeOut(tween(VexaMotion.MICRO)) },
@@ -119,13 +135,12 @@ fun GameLoadingOverlay(
             }
         }
 
-        // Top bar: program chip · device chip · actions.
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 16.dp).staggerIn(2),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             program?.let { p ->
-                val (typeLabel, typeColor) = p.typeBadge()
+                val (_, typeColor) = p.typeBadge()
                 Row(
                     Modifier
                         .clip(PillShape)
@@ -136,52 +151,76 @@ fun GameLoadingOverlay(
                 ) {
                     IconTile(p.glyph(), typeColor, size = 26.dp)
                     Spacer(Modifier.width(8.dp))
-                    Text(p.title, style = MaterialTheme.typography.titleMedium.copy(color = c.textPrimary, fontWeight = FontWeight.SemiBold))
-                    Spacer(Modifier.width(8.dp))
-                    TinyPill("$typeLabel · x86_64", typeColor)
+                    Text(
+                        p.title,
+                        style = MaterialTheme.typography.titleMedium.copy(color = c.textPrimary, fontWeight = FontWeight.SemiBold),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
             }
-            Spacer(Modifier.weight(1f))
-            TinyPill(
-                "${Build.MODEL}" + (surfaceSize?.let { " · $it" } ?: ""),
-                c.textSecondary,
-                dot = true,
-            )
             Spacer(Modifier.weight(1f))
             VexaIconButton(VexaGlyph.Bug, onDebug, tint = c.ultraviolet)
             Spacer(Modifier.width(8.dp))
             VexaIconButton(VexaGlyph.Close, onClose)
         }
-
-        // Bottom bar.
-        Row(
-            Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = 24.dp, vertical = 16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                "FEX · arm64-v8a · Android ${Build.VERSION.RELEASE}",
-                style = MonospaceTypography.labelSmall.copy(color = c.textTertiary),
-                modifier = Modifier.weight(1f),
-            )
-            TinyPill("initializing runtime", c.plasma, dot = true)
-            Text(
-                "STEP ${(step + 1).coerceAtMost(steps.size)} / ${steps.size}",
-                style = MonospaceTypography.labelSmall.copy(color = c.textTertiary),
-                textAlign = TextAlign.End,
-                modifier = Modifier.weight(1f),
-            )
-        }
     }
 }
 
 @Composable
+private fun BootMark(program: GuestProgram?, modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    var logo by remember(program?.id) { mutableStateOf<ImageBitmap?>(null) }
+    LaunchedEffect(program?.id, program?.fileName) {
+        logo = withContext(Dispatchers.IO) { decodeGuestIcon(context.filesDir, program) }
+    }
+    val bitmap = logo
+    if (bitmap != null) {
+        Image(
+            bitmap = bitmap,
+            contentDescription = program?.title,
+            contentScale = ContentScale.Fit,
+            modifier = modifier.size(120.dp).clip(RoundedCornerShape(20.dp)),
+        )
+    } else {
+        BrandLogo(size = LogoSize.Hero, modifier = modifier.lightSweep(Unit, VexaTheme.colors.bgBase))
+    }
+}
+
+/** Sibling icon.png / icon.jpg next to the guest executable. PNG or JPEG magic only. */
+private fun decodeGuestIcon(filesDir: File, program: GuestProgram?): ImageBitmap? {
+    if (program == null) return null
+    val guestDir = File(filesDir, "guests/${program.id}")
+    val executable = File(guestDir, program.fileName)
+    val dirs = listOfNotNull(executable.parentFile, guestDir).distinctBy { it.path }
+    val names = listOf("icon.png", "icon.jpg", "icon.jpeg")
+    for (dir in dirs) {
+        for (name in names) {
+            val bitmap = decodeIconFile(File(dir, name)) ?: continue
+            return bitmap.asImageBitmap()
+        }
+    }
+    return null
+}
+
+private fun decodeIconFile(file: File): android.graphics.Bitmap? {
+    if (!file.isFile) return null
+    val length = file.length()
+    if (length < 8L || length > ICON_BYTE_CAP) return null
+    val header = ByteArray(8)
+    val read = runCatching { file.inputStream().use { it.read(header) } }.getOrDefault(-1)
+    if (read < 3) return null
+    val png = read >= 8 &&
+        header[0] == 0x89.toByte() && header[1] == 0x50.toByte() &&
+        header[2] == 0x4E.toByte() && header[3] == 0x47.toByte()
+    val jpeg = header[0] == 0xFF.toByte() && header[1] == 0xD8.toByte() && header[2] == 0xFF.toByte()
+    if (!png && !jpeg) return null
+    return BitmapFactory.decodeFile(file.absolutePath)
+}
+
+@Composable
 private fun BootChecklist(steps: List<BootStep>, done: Int, modifier: Modifier = Modifier) {
-    val c = VexaTheme.colors
-    Column(modifier) {
-        Text("BOOT SEQUENCE", style = OverlineStyle.copy(color = c.textTertiary))
-        Spacer(Modifier.height(4.dp))
-        Text("Runtime initializing", style = MaterialTheme.typography.headlineSmall.copy(color = c.textPrimary))
-        Spacer(Modifier.height(16.dp))
+    Column(modifier.verticalScroll(rememberScrollState())) {
         steps.forEachIndexed { i, s ->
             val state = when {
                 i < done -> 2
@@ -227,10 +266,7 @@ private fun StepRow(step: BootStep, state: Int, isLast: Boolean, index: Int) {
                             Modifier.size(20.dp).clip(CircleShape).background(c.soft(c.success)).border(1.dp, c.success, CircleShape),
                             contentAlignment = Alignment.Center,
                         ) { VexaIcon(VexaGlyph.Check, c.success, size = 12.dp, strokeWidth = 3f) }
-                        1 -> Box(
-                            Modifier.size(20.dp).clip(CircleShape).border(2.dp, c.plasma, CircleShape),
-                            contentAlignment = Alignment.Center,
-                        ) { Box(Modifier.size(6.dp).clip(CircleShape).background(c.plasma)) }
+                        1 -> ActiveStepMark()
                         else -> Box(Modifier.size(14.dp).clip(CircleShape).border(1.dp, c.borderStrong, CircleShape))
                     }
                 }
@@ -255,5 +291,33 @@ private fun StepRow(step: BootStep, state: Int, isLast: Boolean, index: Int) {
                 overflow = TextOverflow.Ellipsis,
             )
         }
+    }
+}
+
+@Composable
+private fun ActiveStepMark() {
+    val c = VexaTheme.colors
+    val spin = rememberInfiniteTransition(label = "activeStep")
+    val rotation by spin.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(tween(900, easing = LinearEasing), RepeatMode.Restart),
+        label = "activeStepSpin",
+    )
+    Box(Modifier.size(20.dp), contentAlignment = Alignment.Center) {
+        Canvas(Modifier.fillMaxSize().graphicsLayer { rotationZ = rotation }) {
+            val stroke = 2.dp.toPx()
+            val inset = stroke / 2f
+            drawArc(
+                color = c.plasma,
+                startAngle = 0f,
+                sweepAngle = 270f,
+                useCenter = false,
+                topLeft = Offset(inset, inset),
+                size = Size(size.width - stroke, size.height - stroke),
+                style = Stroke(width = stroke, cap = StrokeCap.Round),
+            )
+        }
+        Box(Modifier.size(6.dp).clip(CircleShape).background(c.plasma))
     }
 }

@@ -21,6 +21,7 @@
 /build
 /captures
 .externalNativeBuild
+.kotlin/
 .cxx
 local.properties
 AGENTS.md

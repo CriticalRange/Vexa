@@ -49,6 +49,7 @@ import com.critical.vexaemulator.ui.theme.VexaMotion
 import com.critical.vexaemulator.ui.theme.VexaTheme
 
 private val ToggleSpring = spring<Dp>(dampingRatio = 0.55f, stiffness = 380f)
+private val SettingsIconRed = Color(0xFFB00000)
 
 /** Pill switch: spring thumb with a little overshoot, crossfading track, check glyph in the thumb. */
 @Composable
@@ -99,14 +100,13 @@ fun VexaSwitch(
 }
 
 @Composable
-fun IconTile(glyph: VexaGlyph, tint: Color, modifier: Modifier = Modifier, size: Dp = 40.dp) {
+fun IconTile(glyph: VexaGlyph, tint: Color = SettingsIconRed, modifier: Modifier = Modifier, size: Dp = 40.dp) {
     val c = VexaTheme.colors
     Box(
         modifier
             .size(size)
             .clip(RoundedCornerShape(12.dp))
-            .background(c.soft(tint))
-            .border(1.dp, tint.copy(alpha = 0.18f), RoundedCornerShape(12.dp)),
+            .background(c.soft(tint)),
         contentAlignment = Alignment.Center,
     ) {
         VexaIcon(glyph, tint = tint, size = size * 0.5f)
@@ -120,7 +120,7 @@ fun SettingRow(
     description: String,
     modifier: Modifier = Modifier,
     icon: VexaGlyph? = null,
-    iconTint: Color = VexaTheme.colors.plasma,
+    iconTint: Color = SettingsIconRed,
     dot: Color? = null,
     onClick: (() -> Unit)? = null,
     trailing: @Composable () -> Unit,
@@ -161,7 +161,7 @@ fun SwitchRow(
     onCheckedChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
     icon: VexaGlyph? = null,
-    iconTint: Color = VexaTheme.colors.plasma,
+    iconTint: Color = SettingsIconRed,
     dot: Color? = null,
 ) {
     SettingRow(

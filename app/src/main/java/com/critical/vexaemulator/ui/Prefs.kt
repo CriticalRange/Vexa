@@ -33,6 +33,8 @@ object VexaPrefs {
         private set
     var lastProgram by mutableStateOf<String?>(null)
         private set
+    var libraryColumns by mutableStateOf(1)
+        private set
 
     fun init(context: Context) {
         if (sp != null) return
@@ -47,6 +49,8 @@ object VexaPrefs {
         uncappedFps = prefs.getBoolean(KEY_UNCAPPED_FPS, false)
         stretchFullscreen = prefs.getBoolean(KEY_STRETCH, true)
         lastProgram = prefs.getString(KEY_LAST_PROGRAM, null)
+        libraryColumns = prefs.getInt(KEY_LIBRARY_COLUMNS, 1).coerceIn(1, 3)
+        com.critical.vexaemulator.guest.CustomGuestStore.load(context.applicationContext)
     }
 
     fun updateThemeMode(mode: ThemeMode) {
@@ -89,6 +93,32 @@ object VexaPrefs {
         sp?.edit { putString(KEY_LAST_PROGRAM, id) }
     }
 
+    fun updateLibraryColumns(columns: Int) {
+        val next = columns.coerceIn(1, 3)
+        libraryColumns = next
+        sp?.edit { putInt(KEY_LIBRARY_COLUMNS, next) }
+    }
+
+    fun vulkanFor(programId: String): Boolean = gameBool(programId, "vulkan", vulkan)
+    fun padFor(programId: String): Boolean = gameBool(programId, "pad", padOverlay)
+    fun uncappedFor(programId: String): Boolean = gameBool(programId, "fps", uncappedFps)
+    fun stretchFor(programId: String): Boolean = gameBool(programId, "stretch", stretchFullscreen)
+
+    fun updateVulkanFor(programId: String, enabled: Boolean) = putGameBool(programId, "vulkan", enabled)
+    fun updatePadFor(programId: String, enabled: Boolean) = putGameBool(programId, "pad", enabled)
+    fun updateUncappedFor(programId: String, enabled: Boolean) = putGameBool(programId, "fps", enabled)
+    fun updateStretchFor(programId: String, enabled: Boolean) = putGameBool(programId, "stretch", enabled)
+
+    private fun gameBool(programId: String, name: String, fallback: Boolean): Boolean {
+        val key = "game.$programId.$name"
+        val prefs = sp ?: return fallback
+        return if (prefs.contains(key)) prefs.getBoolean(key, fallback) else fallback
+    }
+
+    private fun putGameBool(programId: String, name: String, enabled: Boolean) {
+        sp?.edit { putBoolean("game.$programId.$name", enabled) }
+    }
+
     /** Remembered cloud-conflict answer for one game: "local", "remote", or null. */
     fun cloudChoice(programId: String): String? =
         sp?.getString(KEY_CLOUD_CHOICE_PREFIX + programId, null)
@@ -109,6 +139,7 @@ object VexaPrefs {
     private const val KEY_STRETCH = "stretch_fullscreen"
     private const val KEY_UNCAPPED_FPS = "uncapped_fps"
     private const val KEY_LAST_PROGRAM = "last_program"
+    private const val KEY_LIBRARY_COLUMNS = "library_columns"
 }
 
 class VexaHaptics(private val view: View) {

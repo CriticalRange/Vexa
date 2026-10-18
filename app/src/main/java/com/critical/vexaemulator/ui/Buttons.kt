@@ -185,17 +185,19 @@ fun VexaIconButton(
     modifier: Modifier = Modifier,
     tint: Color = VexaTheme.colors.textSecondary,
     size: Dp = 38.dp,
+    container: Color = VexaTheme.colors.surface2,
 ) {
     val c = VexaTheme.colors
     val haptics = rememberHaptics()
     val source = remember { MutableInteractionSource() }
+    val filled = container != c.surface2
     Box(
         modifier = modifier
             .size(size)
             .pressScale(source, 0.92f)
             .clip(SmallShape)
-            .background(c.surface2)
-            .border(1.dp, c.hairline, SmallShape)
+            .background(container)
+            .border(1.dp, if (filled) container else c.hairline, SmallShape)
             .clickable(source, ripple(color = tint)) {
                 haptics.tap()
                 onClick()

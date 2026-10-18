@@ -28,6 +28,26 @@
             </intent-filter>
         </activity>
         <activity
+            android:name=".SettingsActivity"
+            android:exported="false"
+            android:theme="@style/Theme.VexaEmulator" />
+        <activity
+            android:name=".AccountActivity"
+            android:exported="false"
+            android:theme="@style/Theme.VexaEmulator" />
+        <activity
+            android:name=".LogsActivity"
+            android:exported="false"
+            android:theme="@style/Theme.VexaEmulator" />
+        <activity
+            android:name=".ProgramActivity"
+            android:exported="false"
+            android:theme="@style/Theme.VexaEmulator" />
+        <activity
+            android:name=".AddGameActivity"
+            android:exported="false"
+            android:theme="@style/Theme.VexaEmulator" />
+        <activity
             android:name=".GameActivity"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|keyboard|navigation|density|uiMode|layoutDirection|fontScale|locale|touchscreen"
             android:exported="false"

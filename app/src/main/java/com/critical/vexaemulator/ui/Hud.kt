@@ -111,16 +111,16 @@ fun EdgeHandle(
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(end = 4.dp)) {
             AnimatedVisibility(touched && open < 0.5f, enter = fadeIn() + slideInHorizontally { it / 2 }, exit = fadeOut()) {
-                VexaIcon(VexaGlyph.ChevronLeft, c.plasma, size = 16.dp, strokeWidth = 2.6f)
+                VexaIcon(VexaGlyph.ChevronLeft, BloodRed, size = 16.dp, strokeWidth = 2.6f)
             }
             Box(
                 Modifier
                     .alpha(alpha)
                     .width(8.dp)
                     .height(stretch)
-                    .shadow(if (c.isDark) 12.dp else 4.dp, PillShape, ambientColor = c.plasma, spotColor = c.plasma)
+                    .shadow(if (c.isDark) 12.dp else 4.dp, PillShape, ambientColor = BloodRed, spotColor = BloodHot)
                     .clip(PillShape)
-                    .background(Brush.verticalGradient(c.brandStops)),
+                    .background(Brush.verticalGradient(listOf(BloodHot, BloodRed, BloodDeep))),
             )
         }
     }
@@ -159,7 +159,7 @@ fun QuickPanel(
         Box(Modifier.fillMaxHeight().width(1.5.dp).background(Brush.verticalGradient(c.brandStops)))
         Column(Modifier.fillMaxSize().padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                CircleHudButton(VexaGlyph.Terminal, c.ultraviolet, onClick = onOpenDebug, size = 42.dp, iconSize = 20.dp)
+                CircleHudButton(VexaGlyph.Terminal, BloodRed, onClick = onOpenDebug, size = 42.dp, iconSize = 20.dp)
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -171,7 +171,7 @@ fun QuickPanel(
                             modifier = Modifier.weight(1f, fill = false),
                         )
                         Spacer(Modifier.width(6.dp))
-                        Badge("x86_64", c.plasma)
+                        Badge("x86_64", BloodRed)
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         StatusDot(c.success, size = 6.dp, pulse = true)
@@ -209,7 +209,7 @@ fun QuickPanel(
                 if (onTogglePad != null) {
                     CircleHudButton(
                         VexaGlyph.Gamepad,
-                        if (padOn) c.plasma else c.textSecondary,
+                        if (padOn) BloodRed else BloodRed.copy(alpha = 0.45f),
                         onClick = onTogglePad,
                     )
                     Spacer(Modifier.width(10.dp))
@@ -217,7 +217,7 @@ fun QuickPanel(
                 if (onToggleStretch != null) {
                     CircleHudButton(
                         VexaGlyph.Expand,
-                        if (stretchOn) c.plasma else c.textSecondary,
+                        if (stretchOn) BloodRed else BloodRed.copy(alpha = 0.45f),
                         onClick = onToggleStretch,
                     )
                     Spacer(Modifier.width(10.dp))
@@ -225,7 +225,7 @@ fun QuickPanel(
                 if (onOpenKeyboard != null) {
                     CircleHudButton(
                         VexaGlyph.Keyboard,
-                        c.textSecondary,
+                        BloodRed.copy(alpha = 0.45f),
                         onClick = onOpenKeyboard,
                     )
                     Spacer(Modifier.width(10.dp))
@@ -251,7 +251,7 @@ private fun UptimeBadge(sessionStartMs: Long) {
         Text("UPTIME", style = MonospaceTypography.labelSmall.copy(color = c.textTertiary, letterSpacing = 0.1.em))
         Text(
             "%02d:%02d:%02d".format(s / 3600, (s / 60) % 60, s % 60),
-            style = MonospaceTypography.labelLarge.copy(color = c.plasma, fontWeight = FontWeight.Bold),
+            style = MonospaceTypography.labelLarge.copy(color = BloodRed, fontWeight = FontWeight.Bold),
             modifier = Modifier
                 .clip(RoundedCornerShape(8.dp))
                 .background(c.surface2)
@@ -278,19 +278,17 @@ private fun CircleHudButton(
             .size(size)
             .pressScale(source, 0.9f)
             .clip(CircleShape)
-            .background(c.surface1)
-            .border(1.dp, c.hairline, CircleShape)
+            .background(BloodRed.copy(alpha = 0.12f))
             .clickable(source, ripple(color = tint)) { haptics.tap(); onClick() },
         contentAlignment = Alignment.Center,
     ) {
-        Box(
-            Modifier.size(size * 0.68f).clip(CircleShape).background(c.soft(tint)),
-            contentAlignment = Alignment.Center,
-        ) {
-            VexaIcon(glyph, tint, size = iconSize)
-        }
+        VexaIcon(glyph, tint, size = iconSize)
     }
 }
+
+private val BloodHot = Color(0xFFFF1A1A)
+private val BloodRed = Color(0xFFB00000)
+private val BloodDeep = Color(0xFF5A0000)
 
 /** Circular hold-to-exit: press and hold until the ring completes around the power glyph. */
 @Composable
@@ -304,8 +302,7 @@ fun HoldToExitCircle(onExit: () -> Unit, modifier: Modifier = Modifier, holdMs: 
         modifier
             .size(56.dp)
             .clip(CircleShape)
-            .background(c.soft(c.error).copy(alpha = if (c.isDark) 0.10f else 0.08f))
-            .border(1.dp, c.error.copy(alpha = 0.35f + 0.45f * progress.value), CircleShape)
+            .background(BloodRed.copy(alpha = 0.12f))
             .pointerInput(Unit) {
                 detectTapGestures(onPress = {
                     if (done) return@detectTapGestures
@@ -328,7 +325,7 @@ fun HoldToExitCircle(onExit: () -> Unit, modifier: Modifier = Modifier, holdMs: 
         Canvas(Modifier.fillMaxSize().padding(4.dp)) {
             val stroke = 2.5.dp.toPx()
             drawArc(
-                color = c.error,
+                color = BloodRed,
                 startAngle = -90f,
                 sweepAngle = 360f * progress.value,
                 useCenter = false,
@@ -337,7 +334,7 @@ fun HoldToExitCircle(onExit: () -> Unit, modifier: Modifier = Modifier, holdMs: 
                 style = Stroke(stroke, cap = StrokeCap.Round),
             )
         }
-        VexaIcon(VexaGlyph.Power, c.error, size = 20.dp, modifier = Modifier.graphicsLayer {
+        VexaIcon(VexaGlyph.Power, BloodRed, size = 20.dp, modifier = Modifier.graphicsLayer {
             val s = 1f + 0.15f * progress.value
             scaleX = s; scaleY = s
         })

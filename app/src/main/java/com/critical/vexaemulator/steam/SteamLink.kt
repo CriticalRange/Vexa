@@ -15,6 +15,8 @@ import `in`.dragonbra.javasteam.steam.authentication.AuthSessionDetails
 import `in`.dragonbra.javasteam.steam.authentication.AuthenticationException
 import `in`.dragonbra.javasteam.steam.authentication.CredentialsAuthSession
 import `in`.dragonbra.javasteam.steam.authentication.IAuthenticator
+import `in`.dragonbra.javasteam.steam.handlers.steamapps.License
+import `in`.dragonbra.javasteam.steam.handlers.steamapps.callback.LicenseListCallback
 import `in`.dragonbra.javasteam.steam.handlers.steamuser.LogOnDetails
 import `in`.dragonbra.javasteam.steam.handlers.steamuser.SteamUser
 import `in`.dragonbra.javasteam.steam.handlers.steamuser.callback.LoggedOnCallback
@@ -110,10 +112,21 @@ object SteamLink {
     }
 
     fun cloud(): `in`.dragonbra.javasteam.steam.handlers.steamcloud.SteamCloud? {
-        val client = steamClient ?: return null
-        if (!accountOnline.get() || !client.isConnected) return null
+        val client = connectedClient() ?: return null
         return client.getHandler(`in`.dragonbra.javasteam.steam.handlers.steamcloud.SteamCloud::class.java)
     }
+
+    // In-memory CM session only. Null when the account is not logged on.
+    fun connectedClient(): SteamClient? {
+        val client = steamClient ?: return null
+        if (!accountOnline.get() || !client.isConnected) return null
+        return client
+    }
+
+    // Package ids and access tokens from the logon license list. Not written to disk.
+    fun licenses(): List<License> = licenseList.get()
+
+    private val licenseList = AtomicReference<List<License>>(emptyList())
 
     fun restore(context: Context) {
         val app = context.applicationContext
@@ -131,7 +144,11 @@ object SteamLink {
     suspend fun ensureOnline(context: Context): StoredSteamSession? {
         val app = context.applicationContext
         appContext = app
-        if (signingIn.get()) return SteamSessionStore.load(app)
+        var waited = 0
+        while (signingIn.get() && waited < 200) {
+            delay(200)
+            waited++
+        }
         return sessionMutex.withLock {
             if (signingIn.get()) return@withLock SteamSessionStore.load(app)
             val saved = SteamSessionStore.load(app)
@@ -288,6 +305,7 @@ object SteamLink {
         guardCode.getAndSet(null)?.cancel(true)
         authSession = null
         accountOnline.set(false)
+        licenseList.set(emptyList())
         runCatching { steamUser?.logOff() }
         val saved = appContext?.let { SteamSessionStore.load(it) }
         _state.value = if (saved != null) {
@@ -303,6 +321,7 @@ object SteamLink {
         guardCode.getAndSet(null)?.cancel(true)
         authSession = null
         accountOnline.set(false)
+        licenseList.set(emptyList())
         SteamSessionStore.clear(context.applicationContext)
         runCatching { steamUser?.logOff() }
         _state.value = SteamUiState.SignedOut
@@ -403,6 +422,11 @@ object SteamLink {
             }
             manager.subscribe(LoggedOnCallback::class.java) {
                 if (token == sessionToken.get()) loggedOn.complete(it)
+            }
+            manager.subscribe(LicenseListCallback::class.java) { list ->
+                if (token == sessionToken.get() && list.result == EResult.OK) {
+                    licenseList.set(list.licenseList.toList())
+                }
             }
             callbacks = manager
             steamClient = created

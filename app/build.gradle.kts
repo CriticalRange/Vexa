@@ -166,7 +166,8 @@ val ensureThirdPartySources by tasks.registering {
                 throw GradleException("dirty repo: ${dir.absolutePath}")
             }
 
-            run("git", "fetch", "--force", "origin", commit, cwd = dir, ignoreExit = false)
+            // A failed fetch is fine when the pinned commit is already in the local clone.
+            run("git", "fetch", "--force", "origin", commit, cwd = dir, ignoreExit = true)
             run("git", "checkout", "--detach", commit, cwd = dir)
 
             if (updateSubmodules && dir.resolve(".gitmodules").exists()) {
@@ -580,6 +581,9 @@ dependencies {
     // Java port of SteamKit. The Android RSA path needs BouncyCastle by name;
     // coroutines-jdk8 is what JavaSteam uses to bridge its callback futures.
     implementation("in.dragonbra:javasteam:1.8.0")
+    // JavaSteam's optional depot codecs are not pulled in transitively.
+    implementation("org.tukaani:xz:1.12")
+    implementation("com.github.luben:zstd-jni:1.5.7-6@aar")
     implementation("com.google.protobuf:protobuf-java:4.31.1")
     implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-jdk8:1.10.2")

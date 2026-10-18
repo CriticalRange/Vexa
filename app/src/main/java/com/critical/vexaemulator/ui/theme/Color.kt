@@ -1,4 +1,4 @@
-// VEXA "Quantum Terminal" design tokens: Void (dark) and Paper (light) palettes, brand gradients, M3 schemes.
+// VEXA design tokens: Void (pure black / blood red) and Paper palettes, brand gradient, M3 schemes.
 package com.critical.vexaemulator.ui.theme
 
 import androidx.compose.material3.ColorScheme
@@ -40,7 +40,8 @@ data class VexaColors(
     val glassBorder: Color,
     val shadow: Color,
 ) {
-    val brandStops: List<Color> get() = listOf(plasma, ion, ultraviolet)
+    // Hot red → blood red (plasma) → deeper red. Not tied to ion/ultraviolet order.
+    val brandStops: List<Color> get() = listOf(Color(0xFFFF1A1A), plasma, Color(0xFF5A0000))
 
     fun brand(start: Offset = Offset.Zero, end: Offset = Offset.Infinite): Brush =
         Brush.linearGradient(brandStops, start, end)
@@ -50,33 +51,33 @@ data class VexaColors(
 
 val VoidColors = VexaColors(
     isDark = true,
-    bgBase = Color(0xFF07080C),
-    bgElevated = Color(0xFF0D0F15),
-    surface1 = Color(0xFF12151D),
-    surface2 = Color(0xFF181C26),
-    surface3 = Color(0xFF1F2431),
-    well = Color(0xFF0A0C12),
-    hairline = Color(0xFF242A38),
-    borderStrong = Color(0xFF343B4E),
-    textPrimary = Color(0xFFF3F5F9),
-    textSecondary = Color(0xFFA9B0BE),
-    textTertiary = Color(0xFF6B7282),
-    plasma = Color(0xFF2EE6F2),
-    ultraviolet = Color(0xFF8B6CFF),
-    ion = Color(0xFF4F8BFF),
-    onAccent = Color(0xFF07080C),
+    bgBase = Color(0xFF000000),
+    bgElevated = Color(0xFF070707),
+    surface1 = Color(0xFF0C0C0C),
+    surface2 = Color(0xFF121212),
+    surface3 = Color(0xFF161616),
+    well = Color(0xFF050505),
+    hairline = Color(0xFF1A0A0A),
+    borderStrong = Color(0xFF2A1010),
+    textPrimary = Color(0xFFF5F2F2),
+    textSecondary = Color(0xFFC4B8B8),
+    textTertiary = Color(0xFF7A7070),
+    plasma = Color(0xFFB00000),
+    ultraviolet = Color(0xFF5A0000),
+    ion = Color(0xFFFF1A1A),
+    onAccent = Color(0xFFFFF5F5),
     success = Color(0xFF34D399),
     warning = Color(0xFFFBBF24),
-    error = Color(0xFFFB7185),
-    fatal = Color(0xFFF43F5E),
-    info = Color(0xFF38BDF8),
-    pink = Color(0xFFF472B6),
-    teal = Color(0xFF2DD4BF),
-    magenta = Color(0xFFE879F9),
+    error = Color(0xFFFF1A1A),
+    fatal = Color(0xFF8B0000),
+    info = Color(0xFFFF6A6A),
+    pink = Color(0xFFFF8A8A),
+    teal = Color(0xFF7A1515),
+    magenta = Color(0xFFE10600),
     scrim = Color(0x99000000),
-    glass = Color(0xB812151D),
-    glassBorder = Color(0x14FFFFFF),
-    shadow = Color(0xFF2EE6F2),
+    glass = Color(0xCC070707),
+    glassBorder = Color(0x332A1010),
+    shadow = Color(0xFFB00000),
 )
 
 val PaperColors = VexaColors(
@@ -92,18 +93,18 @@ val PaperColors = VexaColors(
     textPrimary = Color(0xFF0D1117),
     textSecondary = Color(0xFF4E5768),
     textTertiary = Color(0xFF8A93A3),
-    plasma = Color(0xFF0891B2),
-    ultraviolet = Color(0xFF6D4AFF),
-    ion = Color(0xFF2F6BFF),
-    onAccent = Color(0xFFFFFFFF),
+    plasma = Color(0xFFB00000),
+    ultraviolet = Color(0xFF5A0000),
+    ion = Color(0xFFD42020),
+    onAccent = Color(0xFFFFF5F5),
     success = Color(0xFF059669),
     warning = Color(0xFFD97706),
-    error = Color(0xFFE11D48),
-    fatal = Color(0xFFBE123C),
-    info = Color(0xFF0284C7),
-    pink = Color(0xFFDB2777),
-    teal = Color(0xFF0D9488),
-    magenta = Color(0xFFC026D3),
+    error = Color(0xFFB00000),
+    fatal = Color(0xFF5A0000),
+    info = Color(0xFFC44848),
+    pink = Color(0xFFE07070),
+    teal = Color(0xFF7A1515),
+    magenta = Color(0xFFE10600),
     scrim = Color(0x660D1117),
     glass = Color(0xEBFFFFFF),
     glassBorder = Color(0x0F0D1117),

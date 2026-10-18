@@ -9,6 +9,10 @@ data class GuestProgram(
     val args: List<String> = emptyList(),
     val env: List<String> = emptyList(),
     val preinstalled: Boolean = false,
+    val arch: String? = null,
+    val steamAppId: String? = null,
+    val iconFile: String? = null,
+    val userAdded: Boolean = false,
 )
 
 object GuestCatalog {
@@ -283,5 +287,17 @@ object GuestCatalog {
         env = env,
     )
 
-    fun find(id: String): GuestProgram? = programs.find { it.id == id }
+    @Volatile
+    var userPrograms: List<GuestProgram> = emptyList()
+
+    fun find(id: String): GuestProgram? =
+        programs.find { it.id == id } ?: userPrograms.find { it.id == id }
+
+    fun merged(): List<GuestProgram> {
+        val extra = userPrograms.filter { added -> programs.none { it.id == added.id } }
+        return programs + extra
+    }
+
+    fun envSuggestions(): List<String> =
+        programs.flatMap { it.env }.distinct()
 }

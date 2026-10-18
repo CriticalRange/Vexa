@@ -125,6 +125,8 @@ object SteamCloudSync {
                 unmapped += 1
                 return@forEachIndexed
             }
+            // Dead Cells and other RemoteStorage games also keep a copy in the
+            // install save folder and prefer it over FileRead. Compare that copy.
             if (info.persistState == ECloudStoragePersistState.k_ECloudStoragePersistStateDeleted) {
                 return@forEachIndexed
             }
@@ -139,10 +141,11 @@ object SteamCloudSync {
                 ),
             )
             val remoteSha = info.shaFile.toHex()
-            val localSha = if (target.isFile) sha1(target.readBytes()) else null
+            val visible = roots.gameSave(name)?.takeIf { it.isFile } ?: target
+            val localSha = if (visible.isFile) sha1(visible.readBytes()) else null
             val localChanged = localSha != null && manifest[name] != localSha
             if (localSha != null && localSha != remoteSha && localChanged) {
-                conflicts += CloudConflict(name, target.lastModified(), info.timestamp.time)
+                conflicts += CloudConflict(name, visible.lastModified(), info.timestamp.time)
             }
             pending += Triple(info, name, target)
         }
@@ -150,24 +153,23 @@ object SteamCloudSync {
         val choice = if (conflicts.isEmpty()) null else onConflict(conflicts)
         for ((info, name, target) in pending) {
             val remoteSha = info.shaFile.toHex()
-            val localSha = if (target.isFile) sha1(target.readBytes()) else null
+            val mirror = roots.gameSave(name)
+            val visible = mirror?.takeIf { it.isFile } ?: target
+            val localSha = if (visible.isFile) sha1(visible.readBytes()) else null
             when {
                 localSha == remoteSha -> {
                     manifest[name] = remoteSha
                     current += 1
                 }
                 localSha != null && choice != CloudChoice.Remote &&
-                    target.lastModified() >= info.timestamp.time -> kept += 1
+                    visible.lastModified() >= info.timestamp.time -> kept += 1
                 choice == CloudChoice.Local && localSha != null -> kept += 1
                 else -> try {
                     val bytes = download(cloud, appId, info, name)
-                    if (target.isFile) backup(store, name, target)
-                    target.parentFile?.mkdirs()
-                    val temp = File(target.parentFile, target.name + ".vexa-tmp")
-                    temp.writeBytes(bytes)
-                    check(temp.renameTo(target)) { "rename failed" }
-                    target.setReadable(true, false)
-                    target.setLastModified(info.timestamp.time)
+                    writeCloudFile(store, name, target, bytes, info.timestamp.time)
+                    if (choice == CloudChoice.Remote && mirror != null) {
+                        writeCloudFile(store, name, mirror, bytes, info.timestamp.time)
+                    }
                     manifest[name] = remoteSha
                     downloaded += 1
                 } catch (error: kotlinx.coroutines.CancellationException) {
@@ -261,6 +263,16 @@ object SteamCloudSync {
         return (prefix ?: "") + info.filename
     }
 
+    private fun writeCloudFile(store: File, name: String, target: File, bytes: ByteArray, modified: Long) {
+        if (target.isFile) backup(store, name, target)
+        target.parentFile?.mkdirs()
+        val temp = File(target.parentFile, target.name + ".vexa-tmp")
+        temp.writeBytes(bytes)
+        check(temp.renameTo(target)) { "rename failed" }
+        target.setReadable(true, false)
+        target.setLastModified(modified)
+    }
+
     private fun backup(store: File, name: String, target: File) {
         val safe = name.replace(Regex("[^A-Za-z0-9._-]"), "_")
         val dest = File(store, "backup/$safe")
@@ -270,6 +282,14 @@ object SteamCloudSync {
 
     private class Roots(val home: File, val gameDir: File, val remote: File) {
         private val token = Regex("^%(\\w+)%/?(.*)$")
+
+        /** Install copy used by games that read save/ instead of FileRead. Only plain RemoteStorage names. */
+        fun gameSave(name: String): File? {
+            if (name.startsWith("%") || name.contains('\\')) return null
+            val base = File(gameDir, "save").canonicalFile
+            val file = File(base, name).canonicalFile
+            return file.takeIf { it.path == base.path || it.path.startsWith(base.path + File.separator) }
+        }
 
         fun resolve(name: String): File? {
             val match = token.matchEntire(name)

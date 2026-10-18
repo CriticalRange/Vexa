@@ -1,16 +1,19 @@
 package com.critical.vexaemulator.ui
 
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.TextUnit
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
-import com.critical.vexaemulator.ui.theme.SpaceGrotesk
-import com.critical.vexaemulator.ui.theme.VexaTheme
+import com.critical.vexaemulator.R
 
 @Composable
 fun GradientText(
@@ -36,20 +39,22 @@ fun GradientText(
     )
 }
 
-enum class LogoSize(val sp: Int) { Hero(84), Large(38), Medium(30), Small(18) }
+enum class LogoSize(val mark: Int) {
+    Hero(96),
+    Large(56),
+    Header(64),
+    Medium(48),
+    Small(28),
+}
 
 @Composable
 fun BrandLogo(
     modifier: Modifier = Modifier,
     size: LogoSize = LogoSize.Large,
 ) {
-    GradientText(
-        text = "VEXA",
-        brush = VexaTheme.colors.brand(),
-        modifier = modifier,
-        fontSize = size.sp.sp,
-        fontWeight = FontWeight.Bold,
-        letterSpacing = (-0.04).em,
-        style = TextStyle(fontFamily = SpaceGrotesk, lineHeight = (size.sp * 1.05f).sp),
+    Image(
+        painter = painterResource(R.drawable.ic_vexa_mark),
+        contentDescription = "VEXA",
+        modifier = modifier.size(size.mark.dp),
     )
 }
