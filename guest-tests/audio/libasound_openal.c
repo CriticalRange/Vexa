@@ -409,7 +409,12 @@ long snd_pcm_writei(void* pcm, const void* buffer, unsigned long frames) {
     p_alSourcePlay(g_source);
   }
   p_alGetSourcei(g_source, AL_BUFFERS_QUEUED, &queued);
-  if ((g_writes++ & 63) == 0) {
+  static int alsa_verbose = -1;
+  if (alsa_verbose < 0) {
+    const char* v = getenv("VEXA_ALSA_VERBOSE");
+    alsa_verbose = (v && v[0] && v[0] != '0') ? 1 : 0;
+  }
+  if (alsa_verbose && (g_writes++ & 63) == 0) {
     unsigned long elapsed = now_ms() - g_start_ms;
     unsigned long expected = elapsed * g_rate / 1000ul;
     fprintf(stderr, "[VEXA][ALSA] write n=%d %lu f queued %d qf=%lu feed=%lu need=%lu err %d tid=%ld\n",

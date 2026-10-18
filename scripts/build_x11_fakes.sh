@@ -38,6 +38,7 @@ TARGETS=(
   "libpulse_stub.c:libpulse-simple.so.0"
   "libvexa_glmap.c:libvexa_glmap.so"
   "libvexa_memcpy214.c:libvexa_memcpy214.so"
+  "libvexa_evdev.c:libvexa_evdev.so"
 )
 
 want=("$@")
@@ -67,6 +68,9 @@ for t in "${TARGETS[@]}"; do
   extra=()
   if [ "$so" = "libvexa_memcpy214.so" ]; then
     extra+=(-Wl,--version-script,"$SRC/libvexa_memcpy214.map")
+  fi
+  if [ "$so" = "libvexa_evdev.so" ]; then
+    extra+=(-ldl -lpthread)
   fi
   "$CLANG" --target="$GUEST_ARCH-linux-gnu" --sysroot="$SYSROOT" -O1 -fPIC -shared \
            -fno-stack-protector -Wl,-soname,"$so" -I"$SRC" \

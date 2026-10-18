@@ -37,6 +37,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -109,17 +110,28 @@ fun GameDebugPanel(
     val activeFilters = selectedLevels.size + selectedCategories.size + if (terms.isEmpty()) 0 else 1
 
     // Follow the tail while the user sits at the bottom; otherwise count unseen rows.
+    // Keyed on entry ids: at the store's cap the list size stays constant.
     val scope = rememberCoroutineScope()
     val atBottom by remember { derivedStateOf { !listState.canScrollForward } }
-    var seenCount by remember { mutableIntStateOf(filteredEntries.size) }
-    LaunchedEffect(filteredEntries.size) {
-        if (atBottom || seenCount > filteredEntries.size) {
+    val lastId = filteredEntries.lastOrNull()?.id ?: -1L
+    var seenId by remember { mutableLongStateOf(lastId) }
+    LaunchedEffect(lastId) {
+        if (atBottom || lastId < seenId) {
             if (filteredEntries.isNotEmpty()) listState.scrollToItem(filteredEntries.lastIndex)
-            seenCount = filteredEntries.size
+            seenId = lastId
         }
     }
-    LaunchedEffect(atBottom) { if (atBottom) seenCount = filteredEntries.size }
-    val unseen = (filteredEntries.size - seenCount).coerceAtLeast(0)
+    LaunchedEffect(atBottom) { if (atBottom) seenId = lastId }
+    val unseen = remember(filteredEntries, seenId) {
+        // Ids increase monotonically: count the suffix newer than seenId.
+        var lo = 0
+        var hi = filteredEntries.size
+        while (lo < hi) {
+            val mid = (lo + hi) ushr 1
+            if (filteredEntries[mid].id <= seenId) lo = mid + 1 else hi = mid
+        }
+        filteredEntries.size - lo
+    }
 
     Box(
         modifier = Modifier

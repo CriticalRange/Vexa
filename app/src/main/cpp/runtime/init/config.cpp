@@ -440,6 +440,9 @@ namespace Vexa::Runtime::Init {
 
         ::setenv("VEXA_VK_PROFILE", ::access("/data/data/com.critical.vexaemulator/files/fex_vkprofile.flag", F_OK) == 0 ? "1" : "0", 1);
         ::setenv("VEXA_VK_MAILBOX", ::access("/data/data/com.critical.vexaemulator/files/fex_vkmailbox.flag", F_OK) == 0 ? "1" : "0", 1);
+        // Per-call GL thunk trace (draws, FBO binds, teximage formats). Opt-in:
+        // files/fex_gltrace.flag. Costs real frame time -- use for bisects only.
+        ::setenv("VEXA_GL_TRACE", ::access("/data/data/com.critical.vexaemulator/files/fex_gltrace.flag", F_OK) == 0 ? "1" : "0", 1);
 
         return {Vexa::Common::Code::Ok, Vexa::Common::Phase::Init,
                 "Config initialized"};

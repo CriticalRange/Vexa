@@ -7,7 +7,10 @@
 #include <android/native_window.h>
 #include <android/native_window_jni.h>
 #include <atomic>
+#include <chrono>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <mutex>
 #include <string>
 #include <sys/stat.h>
@@ -151,6 +154,43 @@ void Vexa_PublishPresentMap(int x0, int y0, int cw, int ch, int sx, int sy, int 
     if (std::rename(tmp.c_str(), path.c_str()) != 0) {
         std::remove(tmp.c_str());
     }
+}
+
+// Display preferences shared with the GL host: fit mode (/tmp/vexa-fit, "aspect"
+// letterboxes, anything else stretches) and the refresh rate of the selected
+// RandR mode (3rd field of /tmp/vexa-mode). Re-read at most every 250 ms.
+extern "C" __attribute__((visibility("default")))
+void Vexa_GetDisplayPrefs(int *aspect, int *rate_hz) {
+    static std::mutex mu;
+    static std::chrono::steady_clock::time_point last{};
+    static int cached_aspect = 0;
+    static int cached_rate = 0;
+    std::lock_guard<std::mutex> lock(mu);
+    const auto now = std::chrono::steady_clock::now();
+    if (last.time_since_epoch().count() == 0 || now - last > std::chrono::milliseconds(250)) {
+        last = now;
+        std::string root;
+        {
+            std::lock_guard<std::mutex> l2(g_mutex);
+            root = g_guest_rootfs;
+        }
+        cached_aspect = 0;
+        cached_rate = 0;
+        if (!root.empty()) {
+            char buf[64] = {};
+            if (FILE *f = std::fopen((root + "/tmp/vexa-fit").c_str(), "r")) {
+                if (std::fgets(buf, sizeof(buf), f)) cached_aspect = std::strncmp(buf, "aspect", 6) == 0;
+                std::fclose(f);
+            }
+            int w = 0, h = 0, r = 0;
+            if (FILE *f = std::fopen((root + "/tmp/vexa-mode").c_str(), "r")) {
+                if (std::fscanf(f, "%d %d %d", &w, &h, &r) == 3) cached_rate = r;
+                std::fclose(f);
+            }
+        }
+    }
+    if (aspect) *aspect = cached_aspect;
+    if (rate_hz) *rate_hz = cached_rate;
 }
 
 extern "C" __attribute__((visibility("default")))

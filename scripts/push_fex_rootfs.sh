@@ -401,6 +401,18 @@ if [[ "$INCLUDE_OPTIONAL" -eq 1 ]]; then
 fi
 stage_x11_compat_overlays
 
+# Virtual Xbox 360 gamepad: ld.so.preload shim + /dev/input marker + the udev
+# stub that enumerates it. Guests then see a standard controller and apply
+# their own default bindings.
+mkdir -p "$LOCAL_STAGE_DIR/dev/input" "$LOCAL_STAGE_DIR/etc" "$LOCAL_STAGE_DIR/usr/lib/x86_64-linux-gnu"
+: > "$LOCAL_STAGE_DIR/dev/input/event0"
+printf '%s\n' "/usr/lib/x86_64-linux-gnu/libvexa_evdev.so" > "$LOCAL_STAGE_DIR/etc/ld.so.preload"
+for name in libvexa_evdev.so libudev.so.1; do
+  if [[ -f "${REPO_ROOT}/guest-tests/x11-fake/${name}" ]]; then
+    cp -aL -- "${REPO_ROOT}/guest-tests/x11-fake/${name}" "$LOCAL_STAGE_DIR/usr/lib/x86_64-linux-gnu/${name}"
+  fi
+done
+
 if [[ "$CLEAN_DEST" -eq 1 ]]; then
   adb shell run-as "$PKG" /system/bin/rm -rf "$DEST_ROOTFS_DIR"
 fi

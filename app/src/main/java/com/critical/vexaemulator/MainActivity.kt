@@ -184,8 +184,6 @@ private fun LauncherScreen(
         )
     }
     val selected = programs.first { it.id == selectedId }
-    val entries by LogStore.entries.collectAsState()
-
     val context = LocalContext.current
     var rootLoggingEnabled by remember {
         mutableStateOf(RootLogCollector.isEnabled(context.filesDir))
@@ -349,7 +347,7 @@ private fun LauncherScreen(
                 trailing = { TinyPill(text = "live", color = c.success, dot = true, pulse = true) },
             )
             Spacer(Modifier.height(12.dp))
-            LogPanel(entries = entries, modifier = Modifier.staggerIn(9))
+            LogPanel(modifier = Modifier.staggerIn(9))
 
             Spacer(Modifier.height(22.dp))
             DangerButton(
@@ -612,7 +610,9 @@ private fun programMetadata(program: GuestProgram, argv: Color, env: Color, ok: 
 }
 
 @Composable
-private fun LogPanel(entries: List<VexaLogEntry>, modifier: Modifier = Modifier) {
+private fun LogPanel(modifier: Modifier = Modifier) {
+    // Subscribed here so log flushes recompose only this panel, not the launcher.
+    val entries by LogStore.entries.collectAsState()
     val c = VexaTheme.colors
     val context = LocalContext.current
     PanelSurface(

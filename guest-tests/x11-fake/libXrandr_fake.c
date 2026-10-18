@@ -77,7 +77,60 @@ static void vexa_screen_size(int* width, int* height) {
   }
 }
 
-static void vexa_fill_mode(XRRModeInfo* mode, unsigned long id, int width, int height) {
+static const short kVexaRates[] = {60, 30, 90, 120, 144, 165};
+#define VEXA_NRATES ((int)(sizeof(kVexaRates) / sizeof(kVexaRates[0])))
+#define VEXA_MAX_SIZES 4
+
+/* Native surface size first, then common 16:9 sizes (deduplicated). */
+static int vexa_size_list(int dims[VEXA_MAX_SIZES][2], int width, int height) {
+  static const int extra[3][2] = {{1920, 1080}, {1600, 900}, {1280, 720}};
+  int n = 0;
+  dims[n][0] = width;
+  dims[n][1] = height;
+  n++;
+  for (int i = 0; i < 3; ++i) {
+    if (extra[i][0] == width && extra[i][1] == height) {
+      continue;
+    }
+    dims[n][0] = extra[i][0];
+    dims[n][1] = extra[i][1];
+    n++;
+  }
+  return n;
+}
+
+/* Selected mode ("w h rate"), shared with libX11_fake and the GL host. */
+static int vexa_read_selected_mode(int* w, int* h, int* rate) {
+  char buf[64];
+  int fd = open("/tmp/vexa-mode", O_RDONLY);
+  int n;
+  if (fd < 0) {
+    return 0;
+  }
+  n = (int)read(fd, buf, sizeof(buf) - 1);
+  close(fd);
+  if (n <= 0) {
+    return 0;
+  }
+  buf[n] = 0;
+  return sscanf(buf, "%d %d %d", w, h, rate) == 3 && *w > 1 && *h > 1 && *rate > 0;
+}
+
+static void vexa_write_selected_mode(int w, int h, int rate) {
+  char buf[48];
+  const int len = snprintf(buf, sizeof(buf), "%d %d %d\n", w, h, rate);
+  int fd = open("/tmp/vexa-mode.tmp", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+  if (fd < 0) {
+    return;
+  }
+  const int ok = write(fd, buf, (size_t)len) == len;
+  close(fd);
+  if (ok) {
+    rename("/tmp/vexa-mode.tmp", "/tmp/vexa-mode");
+  }
+}
+
+static void vexa_fill_mode(XRRModeInfo* mode, unsigned long id, int width, int height, int rate) {
   memset(mode, 0, sizeof(*mode));
   mode->id = id;
   mode->width = (unsigned int)width;
@@ -90,7 +143,7 @@ static void vexa_fill_mode(XRRModeInfo* mode, unsigned long id, int width, int h
   mode->vSyncEnd = mode->height + 3;
   mode->vTotal = mode->height + 10;
   /* Real pixel clock in Hz so clients derive ~60 Hz refresh. */
-  mode->dotClock = (unsigned long)mode->hTotal * (unsigned long)mode->vTotal * 60UL;
+  mode->dotClock = (unsigned long)mode->hTotal * (unsigned long)mode->vTotal * (unsigned long)rate;
   mode->modeFlags = 0;
 }
 
@@ -146,10 +199,12 @@ XRRScreenResources* XRRGetScreenResources(Display* dpy, Window window) {
   res->configTimestamp = 1;
   res->ncrtc = 1;
   res->noutput = 1;
-  res->nmode = 2;
+  int dims[VEXA_MAX_SIZES][2];
+  const int nsz = vexa_size_list(dims, width, height);
+  res->nmode = nsz * VEXA_NRATES;
   res->crtcs = (RRCrtc*)calloc(1, sizeof(RRCrtc));
   res->outputs = (RROutput*)calloc(1, sizeof(RROutput));
-  res->modes = (XRRModeInfo*)calloc(2, sizeof(XRRModeInfo));
+  res->modes = (XRRModeInfo*)calloc((size_t)res->nmode, sizeof(XRRModeInfo));
   if (!res->crtcs || !res->outputs || !res->modes) {
     XRRFreeScreenResources(res);
     return NULL;
@@ -158,11 +213,16 @@ XRRScreenResources* XRRGetScreenResources(Display* dpy, Window window) {
   res->outputs[0] = 1;
   /* The surface mode is current/preferred; 1920x1080 is offered alongside so
      games that persisted a desktop resolution still find it in the list. */
-  vexa_fill_mode(&res->modes[0], 1, width, height);
-  vexa_fill_mode(&res->modes[1], 2, 1920, 1080);
+  for (int i = 0; i < nsz; ++i) {
+    for (int r = 0; r < VEXA_NRATES; ++r) {
+      const int k = i * VEXA_NRATES + r;
+      vexa_fill_mode(&res->modes[k], (unsigned long)k + 1, dims[i][0], dims[i][1], kVexaRates[r]);
+    }
+  }
   for (int i = 0; i < res->nmode; ++i) {
     char name[32];
-    const int len = snprintf(name, sizeof(name), "%ux%u_60.00", res->modes[i].width, res->modes[i].height);
+    const int len = snprintf(name, sizeof(name), "%ux%u_%d.00", res->modes[i].width, res->modes[i].height,
+                             (int)(res->modes[i].dotClock / ((unsigned long)res->modes[i].hTotal * res->modes[i].vTotal)));
     res->modes[i].name = (char*)malloc((size_t)len + 1);
     if (res->modes[i].name) {
       memcpy(res->modes[i].name, name, (size_t)len + 1);
@@ -211,9 +271,26 @@ XRRCrtcInfo* XRRGetCrtcInfo(Display* dpy, XRRScreenResources* resources, RRCrtc 
   info->timestamp = 1;
   info->x = 0;
   info->y = 0;
+  info->mode = resources && resources->nmode > 0 ? resources->modes[0].id : 1;
+  {
+    int sw_ = 0;
+    int sh_ = 0;
+    int sr_ = 0;
+    if (resources && vexa_read_selected_mode(&sw_, &sh_, &sr_)) {
+      for (int i = 0; i < resources->nmode; ++i) {
+        const XRRModeInfo* m = &resources->modes[i];
+        if ((int)m->width == sw_ && (int)m->height == sh_ &&
+            (int)(m->dotClock / ((unsigned long)m->hTotal * m->vTotal)) == sr_) {
+          info->mode = m->id;
+          width = sw_;
+          height = sh_;
+          break;
+        }
+      }
+    }
+  }
   info->width = (unsigned int)width;
   info->height = (unsigned int)height;
-  info->mode = resources && resources->nmode > 0 ? resources->modes[0].id : 1;
   info->rotation = RR_ROTATE_0;
   info->rotations = RR_ROTATE_0;
   info->noutput = 1;
@@ -334,15 +411,24 @@ int XRRSetCrtcConfig(Display* dpy, XRRScreenResources* resources, RRCrtc crtc, T
   VEXA_RANDR_TRACE("set_crtc_config crtc=%lu mode=%lu %dx%d outputs=%d\n", (unsigned long)crtc,
                    (unsigned long)mode, x, y, noutputs);
   (void)dpy;
-  (void)resources;
   (void)crtc;
   (void)timestamp;
   (void)x;
   (void)y;
-  (void)mode;
   (void)rotation;
   (void)outputs;
   (void)noutputs;
+  if (resources) {
+    for (int i = 0; i < resources->nmode; ++i) {
+      const XRRModeInfo* m = &resources->modes[i];
+      if (m->id == (unsigned long)mode) {
+        const int rate = (int)(m->dotClock / ((unsigned long)m->hTotal * m->vTotal));
+        vexa_write_selected_mode((int)m->width, (int)m->height, rate);
+        VEXA_RANDR_TRACE("set_crtc_config applied %ux%u@%d\n", m->width, m->height, rate);
+        break;
+      }
+    }
+  }
   return RR_SET_CONFIG_SUCCESS;
 }
 
@@ -438,18 +524,19 @@ XRRScreenConfiguration* XRRGetScreenInfo(Display* dpy, Drawable draw) {
   if (!config) {
     return NULL;
   }
-  config->nsizes = 2;
-  config->nconfigs = 2;
-  config->nrates = 1;
+  int dims[VEXA_MAX_SIZES][2];
+  const int nsz = vexa_size_list(dims, width, height);
+  config->nsizes = nsz;
+  config->nconfigs = nsz;
+  config->nrates = VEXA_NRATES;
   config->sizes = (XRRScreenSize*)calloc((size_t)config->nsizes, sizeof(XRRScreenSize));
   config->size_configs = (XRRSizeConfig*)calloc((size_t)config->nconfigs, sizeof(XRRSizeConfig));
-  config->rates = (short*)calloc(1, sizeof(short));
+  config->rates = (short*)calloc((size_t)VEXA_NRATES, sizeof(short));
   if (!config->sizes || !config->size_configs || !config->rates) {
     XRRFreeScreenConfigInfo(config);
     return NULL;
   }
-  const int dims[2][2] = {{width, height}, {1920, 1080}};
-  for (int i = 0; i < 2; ++i) {
+  for (int i = 0; i < nsz; ++i) {
     config->sizes[i].width = dims[i][0];
     config->sizes[i].height = dims[i][1];
     config->sizes[i].mwidth = dims[i][0] * 254 / 960;
@@ -459,7 +546,9 @@ XRRScreenConfiguration* XRRGetScreenInfo(Display* dpy, Drawable draw) {
     config->size_configs[i].mwidth = dims[i][0] * 254 / 960;
     config->size_configs[i].mheight = dims[i][1] * 254 / 960;
   }
-  config->rates[0] = 60;
+  for (int r = 0; r < VEXA_NRATES; ++r) {
+    config->rates[r] = kVexaRates[r];
+  }
   config->current_size = 0;
   return config;
 }
@@ -499,14 +588,30 @@ int XRRConfigCurrentConfiguration(XRRScreenConfiguration* config, Rotation* rota
   if (rotation) {
     *rotation = RR_ROTATE_0;
   }
+  if (config) {
+    int w = 0;
+    int h = 0;
+    int r = 0;
+    if (vexa_read_selected_mode(&w, &h, &r)) {
+      for (int i = 0; i < config->nsizes; ++i) {
+        if (config->size_configs[i].width == w && config->size_configs[i].height == h) {
+          return i;
+        }
+      }
+    }
+  }
   return config ? config->current_size : 0;
 }
 
 short XRRConfigCurrentRate(XRRScreenConfiguration* config) {
   VEXA_RANDR_TRACE("config_current_rate\n");
 
+  int w = 0;
+  int h = 0;
+  int r = 60;
   (void)config;
-  return 60;
+  vexa_read_selected_mode(&w, &h, &r);
+  return (short)r;
 }
 
 Rotation XRRConfigRotations(XRRScreenConfiguration* config, Rotation* current_rotation) {
@@ -533,7 +638,12 @@ int XRRSetScreenConfig(Display* dpy, XRRScreenConfiguration* config, Drawable dr
   (void)rotation;
   (void)timestamp;
   if (config && size_index >= 0 && size_index < config->nsizes) {
+    int w = 0;
+    int h = 0;
+    int r = 60;
     config->current_size = size_index;
+    vexa_read_selected_mode(&w, &h, &r);
+    vexa_write_selected_mode(config->size_configs[size_index].width, config->size_configs[size_index].height, r);
   }
   return RR_SET_CONFIG_SUCCESS;
 }
@@ -541,8 +651,11 @@ int XRRSetScreenConfig(Display* dpy, XRRScreenConfiguration* config, Drawable dr
 int XRRSetScreenConfigAndRate(Display* dpy, XRRScreenConfiguration* config, Drawable draw, int size_index,
                               Rotation rotation, short rate, Time timestamp) {
   VEXA_RANDR_TRACE("set_screen_config_rate idx=%d rate=%d\n", size_index, (int)rate);
-  (void)rate;
-  return XRRSetScreenConfig(dpy, config, draw, size_index, rotation, timestamp);
+  const int res = XRRSetScreenConfig(dpy, config, draw, size_index, rotation, timestamp);
+  if (config && size_index >= 0 && size_index < config->nsizes && rate > 0) {
+    vexa_write_selected_mode(config->size_configs[size_index].width, config->size_configs[size_index].height, (int)rate);
+  }
+  return res;
 }
 
 int XRRRootToScreen(Display* dpy, Window root) {

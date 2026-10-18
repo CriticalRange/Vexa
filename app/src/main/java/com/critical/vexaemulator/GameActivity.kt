@@ -27,6 +27,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
@@ -46,7 +47,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -63,12 +66,15 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import com.critical.vexaemulator.input.FloatingKeyboard
 import com.critical.vexaemulator.input.GuestKeyboard
 import com.critical.vexaemulator.input.guestKeyPlan
 import com.critical.vexaemulator.input.GuestPadOverlay
 import com.critical.vexaemulator.input.GuestPadState
+import com.critical.vexaemulator.input.PadProfiles
 import com.critical.vexaemulator.input.PadCtl
 import com.critical.vexaemulator.input.PadSink
 import com.critical.vexaemulator.input.XKeys
@@ -282,6 +288,7 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
         surfaceSizeLabel = "$surfaceWidth×$surfaceHeight"
         guestRootfs = request.rootfsPath
         if (!publishGuestWindowSize(request.rootfsPath, surfaceWidth, surfaceHeight)) return false
+        publishFitMode(request.rootfsPath)
         bootPublished = true
         runtimeStarted = true
         sendSurfaceCreated(surface)
@@ -296,12 +303,21 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
         return true
     }
 
+    private fun publishFitMode(rootfs: String) {
+        runCatching {
+            val dir = java.io.File(rootfs, "tmp")
+            dir.mkdirs()
+            java.io.File(dir, "vexa-fit").writeText(if (VexaPrefs.stretchFullscreen) "stretch\n" else "aspect\n")
+        }
+    }
+
     private fun publishGuestWindowSize(rootfs: String, width: Int, height: Int): Boolean {
         return try {
             val dir = java.io.File(rootfs, "tmp")
             if (!dir.isDirectory && !dir.mkdirs()) return false
             java.io.File(dir, "vexa-window-size").writeText("$width $height\n")
             java.io.File(dir, "vexa-pointer").writeBytes(ByteArray(0))
+            java.io.File(dir, "vexa-mode").delete()
             java.io.File(dir, "vexa-present").writeText("0 0 $width $height 0 0 $width $height $width $height\n")
             VexaLogger.log(
                 LogLevel.INFO,
@@ -323,20 +339,32 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
 
     // 16-byte little-endian records: type, x, y, state. X11 types are
     // ButtonPress=4, ButtonRelease=5, MotionNotify=6. Button1Mask is 256.
+    // Every mouse move and pad tick lands here on the main thread; keep one
+    // append stream open instead of mkdirs/length/open/close per record.
+    private var pointerOut: java.io.FileOutputStream? = null
+    private var pointerBytes = 0L
+
     private fun writePointer(type: Int, x: Int, y: Int, state: Int) {
         val root = guestRootfs ?: return
-        val file = java.io.File(root, "tmp/vexa-pointer")
         try {
-            file.parentFile?.mkdirs()
-            if (file.length() > 1_000_000L) {
-                file.writeBytes(ByteArray(0))
+            var out = pointerOut
+            if (out == null || pointerBytes > 1_000_000L) {
+                val rollover = out != null
+                out?.close()
+                val file = java.io.File(root, "tmp/vexa-pointer")
+                file.parentFile?.mkdirs()
+                // Rollover truncates; the guest reader restarts when the file shrinks.
+                out = java.io.FileOutputStream(file, !rollover)
+                pointerBytes = if (rollover) 0L else file.length()
+                pointerOut = out
             }
             pointerRecord.clear()
             pointerRecord.putInt(type)
             pointerRecord.putInt(x)
             pointerRecord.putInt(y)
             pointerRecord.putInt(state)
-            java.io.FileOutputStream(file, true).use { it.write(pointerRecord.array()) }
+            out.write(pointerRecord.array())
+            pointerBytes += 16
             if (!loggedTouch) {
                 loggedTouch = true
                 VexaLogger.log(
@@ -696,13 +724,14 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
         pad.onFaceKey = { down, keysym -> writePointer(if (down) 2 else 3, keysym, 0, PadCtl.SYNTH_FLAG) }
         pad.onDirectKey = { down, keysym -> writePointer(if (down) 2 else 3, keysym, 0, 0) }
         pad.onPadButton = { down, control -> writePointer(7, control, if (down) 1 else 0, 0) }
-        pad.bAsEscape = intent.getStringExtra(EXTRA_PROGRAM_ID) == "megabonk"
-        pad.keyboardNavigationFallback = intent.getStringExtra(EXTRA_PROGRAM_ID) == "ets2"
+        pad.profile = PadProfiles.forProgram(intent.getStringExtra(EXTRA_PROGRAM_ID))
         pad.overlay = VexaPrefs.padOverlay
         lifecycleScope.launch {
-            while (true) {
-                pad.pump(surfaceWidth, surfaceHeight, padSink)
-                delay(32)
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                while (true) {
+                    pad.pump(surfaceWidth, surfaceHeight, padSink)
+                    delay(32)
+                }
             }
         }
         requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
@@ -753,7 +782,16 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
                     bootStep = bootStep,
                     cloudDetail = cloudDetail,
                     cloudConflict = cloudConflict,
-                    onCloudChoice = { picked ->
+                    onCloudChoice = { picked, remember ->
+                        if (remember) {
+                            program?.id?.let {
+                                VexaPrefs.updateCloudChoice(
+                                    it,
+                                    if (picked == com.critical.vexaemulator.steam.CloudChoice.Remote)
+                                        "remote" else "local",
+                                )
+                            }
+                        }
                         cloudChoice.complete(picked)
                         cloudConflict = null
                     },
@@ -761,9 +799,18 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
                     showLoading = showLoading,
                     showDebugMenu = showDebugMenu,
                     onToggleDebugMenu = { showDebugMenu = !showDebugMenu },
+                    onToggleStretch = {
+                        VexaPrefs.updateStretchFullscreen(!VexaPrefs.stretchFullscreen)
+                        guestRootfs?.let { publishFitMode(it) }
+                    },
                     hideFilters = hideFilters,
                     onHideFilters = { hideFilters = !hideFilters },
                     onBack = { closeGameActivity() },
+                    onOverlayChange = { drawerOpen, keyboardOpen ->
+                        uiDrawerOpen = drawerOpen
+                        uiKeyboardOpen = keyboardOpen
+                        if (mouseToUi()) releaseGuestMouse()
+                    },
                     pad = pad,
                     onTypeChar = ::typeGuestChar,
                     onTypeKey = ::tapGuestKey,
@@ -777,7 +824,41 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
         )
     }
 
+    // Overlay state reported by GameScreen. While any UI layer is up the mouse
+    // drives that UI; otherwise it bypasses Compose and goes to the guest.
+    private var uiDrawerOpen = false
+    private var uiKeyboardOpen = false
+    private var mouseGestureToUi = false
+
+    private fun mouseToUi(): Boolean =
+        showLoading || showDebugMenu || cloudConflict != null || uiDrawerOpen || uiKeyboardOpen
+
+    private fun backToUi(): Boolean = showDebugMenu || uiDrawerOpen || uiKeyboardOpen
+
+    // The quick-panel edge handle (52 x 200 dp, vertically centred on the right
+    // edge) must stay reachable with a mouse while the game owns the pointer.
+    private fun isOverEdgeHandle(event: MotionEvent): Boolean {
+        val view = window.decorView
+        val d = resources.displayMetrics.density
+        return event.rawX >= view.width - 52f * d && kotlin.math.abs(event.rawY - view.height / 2f) <= 100f * d
+    }
+
+    // Buttons held when a UI layer opens would otherwise stay pressed in the guest.
+    private fun releaseGuestMouse() {
+        if (mouseButtons == 0) return
+        for ((androidButton, xButton) in listOf(
+            MotionEvent.BUTTON_PRIMARY to 1, MotionEvent.BUTTON_TERTIARY to 2,
+            MotionEvent.BUTTON_SECONDARY to 3,
+        )) {
+            if (mouseButtons and androidButton != 0) writePointer(5, pad.aimX, pad.aimY, xButton shl 24)
+        }
+        mouseButtons = 0
+    }
+
     override fun dispatchGenericMotionEvent(event: MotionEvent): Boolean {
+        if (event.isFromSource(android.view.InputDevice.SOURCE_MOUSE) && mouseToUi()) {
+            return super.dispatchGenericMotionEvent(event)
+        }
         if (handlePhysicalMouse(event)) return true
         if (pad.onMotion(event)) return true
         return super.dispatchGenericMotionEvent(event)
@@ -786,7 +867,16 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
         // Compose's controller overlay otherwise consumes mouse drag events
         // before the SurfaceView's touch listener can forward them.
-        if (!showDebugMenu && handlePhysicalMouse(event)) return true
+        if (event.isFromSource(android.view.InputDevice.SOURCE_MOUSE)) {
+            if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+                mouseGestureToUi = mouseToUi() || isOverEdgeHandle(event)
+            }
+            val toUi = mouseGestureToUi
+            if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
+                mouseGestureToUi = false
+            }
+            if (!toUi && handlePhysicalMouse(event)) return true
+        }
         return super.dispatchTouchEvent(event)
     }
 
@@ -812,6 +902,16 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
             else -> event.buttonState
         }
         writePointer(6, x, y, xMask(mouseButtons))
+        if (event.actionMasked == MotionEvent.ACTION_SCROLL) {
+            // X11 wheel: button 4 up, 5 down. The guest maps only buttons 1-5.
+            val v = event.getAxisValue(MotionEvent.AXIS_VSCROLL)
+            if (v != 0f) {
+                val wheel = if (v > 0f) 4 else 5
+                writePointer(4, x, y, (wheel shl 24) or xMask(mouseButtons))
+                writePointer(5, x, y, (wheel shl 24) or xMask(mouseButtons))
+            }
+            return true
+        }
         for ((androidButton, xButton) in listOf(
             MotionEvent.BUTTON_PRIMARY to 1, MotionEvent.BUTTON_TERTIARY to 2,
             MotionEvent.BUTTON_SECONDARY to 3,
@@ -844,6 +944,14 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
                 "src=0x${Integer.toHexString(event.source)} " +
                 "dev=0x${event.device?.sources?.let { Integer.toHexString(it) }}"
         )
+        // Back closes the top UI layer (Compose BackHandlers) before it reaches the guest.
+        if (event.keyCode == KeyEvent.KEYCODE_BACK && backToUi()) {
+            return super.dispatchKeyEvent(event)
+        }
+        // The debug console has a search field; physical keys belong to it.
+        if (showDebugMenu && GuestKeyboard.isKeyboardSource(event)) {
+            return super.dispatchKeyEvent(event)
+        }
         if (event.keyCode == KeyEvent.KEYCODE_BACK) {
             if (event.action == KeyEvent.ACTION_DOWN) {
                 lastBackKeyTime = event.eventTime
@@ -1020,13 +1128,25 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
                     this@GameActivity, cloudAppId, home, JFile(request.workingDirectory),
                     onProgress = { cloudDetail = it },
                     onConflict = { conflicts ->
-                        cloudDetail = "save conflict, waiting for choice"
-                        cloudConflict = conflicts
-                        val picked = cloudChoice.await()
-                        cloudConflict = null
-                        cloudDetail = if (picked == com.critical.vexaemulator.steam.CloudChoice.Remote)
-                            "using the cloud save" else "keeping the device save"
-                        picked
+                        when (val remembered = VexaPrefs.cloudChoice(program.id)) {
+                            "remote" -> {
+                                cloudDetail = "using the remembered cloud save"
+                                com.critical.vexaemulator.steam.CloudChoice.Remote
+                            }
+                            "local" -> {
+                                cloudDetail = "keeping the remembered device save"
+                                com.critical.vexaemulator.steam.CloudChoice.Local
+                            }
+                            else -> {
+                                cloudDetail = "save conflict, waiting for choice"
+                                cloudConflict = conflicts
+                                val picked = cloudChoice.await()
+                                cloudConflict = null
+                                cloudDetail = if (picked == com.critical.vexaemulator.steam.CloudChoice.Remote)
+                                    "using the cloud save" else "keeping the device save"
+                                picked
+                            }
+                        }
                     },
                 )
                 cloudDetail = result.summary()
@@ -1138,6 +1258,8 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
     }
 
     override fun onDestroy() {
+        runCatching { pointerOut?.close() }
+        pointerOut = null
         if (runtimeBound) {
             sendUnregister()
             runCatching {
@@ -1173,7 +1295,13 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
                     val size = (length - position).coerceAtMost(65536L).toInt()
                     val bytes = ByteArray(size)
                     val read = raf.read(bytes)
-                    if (read <= 0) null else read to String(bytes, 0, read, Charsets.UTF_8)
+                    if (read <= 0) return@use null
+                    // Stop at the last newline so a line (or a UTF-8 sequence)
+                    // split across reads is published once, whole, next time.
+                    var end = read
+                    while (end > 0 && bytes[end - 1] != '\n'.code.toByte()) end--
+                    if (end == 0) end = if (read == size && size == 65536) read else return@use null
+                    end to String(bytes, 0, end, Charsets.UTF_8)
                 }
             }
         } catch (_: Exception) {
@@ -1210,7 +1338,7 @@ private fun GameScreen(
     bootStep: Int,
     cloudDetail: String?,
     cloudConflict: List<com.critical.vexaemulator.steam.CloudConflict>?,
-    onCloudChoice: (com.critical.vexaemulator.steam.CloudChoice) -> Unit,
+    onCloudChoice: (com.critical.vexaemulator.steam.CloudChoice, Boolean) -> Unit,
     surfaceSize: String?,
     showLoading: Boolean,
     showDebugMenu: Boolean,
@@ -1218,12 +1346,13 @@ private fun GameScreen(
     hideFilters: Boolean,
     onHideFilters: () -> Unit,
     onBack: () -> Unit,
+    onOverlayChange: (drawerOpen: Boolean, keyboardOpen: Boolean) -> Unit,
+    onToggleStretch: () -> Unit,
     pad: GuestPadState,
     onTypeChar: (Char) -> Unit,
     onTypeKey: (Int) -> Unit,
 ) {
     val c = VexaTheme.colors
-    val entries by LogStore.entries.collectAsState()
 
     // Quick panel: 0 = closed, 1 = open. Dragged by the edge handle, settles with a spring.
     val scope = rememberCoroutineScope()
@@ -1245,6 +1374,12 @@ private fun GameScreen(
         }
         if (open) haptics.confirm()
     }
+    val drawerOpen by remember { derivedStateOf { drawer.value > 0f || drawer.targetValue > 0f } }
+    SideEffect { onOverlayChange(drawerOpen, keyboardOpen) }
+    // Later handlers win: the debug console closes first, then the keyboard, then the panel.
+    BackHandler(enabled = drawerOpen && !showDebugMenu) { settle(false) }
+    BackHandler(enabled = keyboardOpen && !showDebugMenu) { keyboardOpen = false }
+    BackHandler(enabled = showDebugMenu) { onToggleDebugMenu() }
 
     Box(modifier = Modifier.fillMaxSize().background(VoidColors.bgBase)) {
         AndroidView(
@@ -1281,11 +1416,10 @@ private fun GameScreen(
                     },
             ) {
                 if (open > 0f) {
-                    QuickPanel(
+                    QuickPanelWithLogs(
                         program = program,
                         runtimePid = runtimePid,
                         sessionStartMs = sessionStartMs,
-                        entries = entries,
                         onOpenDebug = { openDebug(emptySet()) },
                         onOpenLogs = openDebug,
                         onExit = onBack,
@@ -1294,6 +1428,8 @@ private fun GameScreen(
                             pad.overlay = !pad.overlay
                             VexaPrefs.updatePadOverlay(pad.overlay)
                         },
+                        stretchOn = VexaPrefs.stretchFullscreen,
+                        onToggleStretch = onToggleStretch,
                         onOpenKeyboard = {
                             settle(false)
                             keyboardOpen = true
@@ -1325,11 +1461,14 @@ private fun GameScreen(
             enter = fadeIn(tween(450)),
             exit = fadeOut(tween(450)) + scaleOut(targetScale = 1.04f, animationSpec = tween(450)),
         ) {
+            // Collected here, not in GameScreen: log flushes must not recompose
+            // the whole game screen while playing.
+            val lastMessage by LogStore.entries.collectAsState()
             GameLoadingOverlay(
                 program = program,
                 step = bootStep,
                 surfaceSize = surfaceSize,
-                lastMessage = entries.lastOrNull()?.message,
+                lastMessage = lastMessage.lastOrNull()?.message,
                 cloudDetail = cloudDetail,
                 onDebug = { openDebug(emptySet()) },
                 onClose = onBack,
@@ -1358,4 +1497,36 @@ private fun GameScreen(
             )
         }
     }
+}
+
+// Own recomposition scope for the log subscription; see GameLoadingOverlay above.
+@Composable
+private fun QuickPanelWithLogs(
+    program: GuestProgram?,
+    runtimePid: Int?,
+    sessionStartMs: Long,
+    onOpenDebug: () -> Unit,
+    onOpenLogs: (Set<com.critical.vexaemulator.logging.LogLevel>) -> Unit,
+    onExit: () -> Unit,
+    padOn: Boolean,
+    onTogglePad: () -> Unit,
+    stretchOn: Boolean,
+    onToggleStretch: () -> Unit,
+    onOpenKeyboard: () -> Unit,
+) {
+    val entries by LogStore.entries.collectAsState()
+    QuickPanel(
+        program = program,
+        runtimePid = runtimePid,
+        sessionStartMs = sessionStartMs,
+        entries = entries,
+        onOpenDebug = onOpenDebug,
+        onOpenLogs = onOpenLogs,
+        onExit = onExit,
+        padOn = padOn,
+        onTogglePad = onTogglePad,
+        stretchOn = stretchOn,
+        onToggleStretch = onToggleStretch,
+        onOpenKeyboard = onOpenKeyboard,
+    )
 }

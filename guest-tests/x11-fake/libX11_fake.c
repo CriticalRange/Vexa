@@ -326,6 +326,22 @@ static void vexa_read_window_size(void) {
   }
   buf[n] = 0;
   if (sscanf(buf, "%d %d", &width, &height) == 2 && width > 1 && height > 1) {
+    /* Resolution picked through XRRSetCrtcConfig overrides the surface size. */
+    fd = open("/tmp/vexa-mode", O_RDONLY);
+    if (fd >= 0) {
+      char mbuf[64];
+      int mn = (int)read(fd, mbuf, sizeof(mbuf) - 1);
+      int mw = 0;
+      int mh = 0;
+      close(fd);
+      if (mn > 0) {
+        mbuf[mn] = 0;
+        if (sscanf(mbuf, "%d %d", &mw, &mh) == 2 && mw > 1 && mh > 1) {
+          width = mw;
+          height = mh;
+        }
+      }
+    }
     g_screen.width = width;
     g_screen.height = height;
     g_screen.mwidth = width * 254 / 960;
@@ -825,10 +841,11 @@ static void vexa_fill_pointer(XEvent* event, Display* dpy, int type, int x, int 
 
 static int g_warp_centered = 0;
 static int g_pointer_grabbed = 0;
-/* One cursor shared by MotionNotify, clicks, and XQueryPointer. A centre
-   warp may publish that centre once. After the stick or mouse has stepped
-   it, another warp must not move it: resetting to the centre made the
-   reachable set a disk, and reporting only the step pinned the cursor. */
+/* One cursor shared by MotionNotify, clicks, and XQueryPointer. Guest
+   warps move it exactly like a real X server does — pointer jumps to the
+   target and a MotionNotify announces it — because clients mix two delta
+   styles: diff consecutive events (needs the echo to not fake a jump) and
+   diff against their own warp anchor (needs the pointer at the target). */
 static int g_cursor_x = 0;
 static int g_cursor_y = 0;
 static int g_cursor_moved = 0;
@@ -2039,10 +2056,34 @@ Status XSendEvent(Display* dpy, Window window, Bool propagate, long event_mask, 
   (void)event_mask;
   fprintf(stderr, "[VEXA][X11] send_event type=%d\n", event ? event->type : -1);
   if (event && event->type == ClientMessage) {
-    /* A real WM consumes EWMH client messages (e.g. _NET_WM_STATE fullscreen
-       toggles) and answers with _NET_WM_STATE property notification plus a
-       ConfigureNotify at the display bounds. SDL waits on exactly that pair
-       before it reports the window as fullscreen/on-display. */
+    /* ETS2 recentering sends itself a ClientMessage carrying the warp
+       target (window centre) and resyncs its motion baseline when it reads
+       the message back. Swallowing it leaves the baseline stale, so every
+       recenter warp reads as a delta of (centre - old) and the cursor
+       snaps. Deliver only that self-message -- it targets the game's own
+       window and its payload is the centre point. Delivering WM/EWMH
+       messages back to the game can be read as a close request (the game
+       quit shortly after launch when every ClientMessage was queued). */
+    fprintf(stderr, "[VEXA][X11] client_message win=%lu type=%lu fmt=%d l0=%ld l1=%ld\n",
+            (unsigned long)event->xclient.window, (unsigned long)event->xclient.message_type,
+            event->xclient.format, (long)event->xclient.data.l[0], (long)event->xclient.data.l[1]);
+    int centered = 0;
+    if (g_screen.width > 1 && g_screen.height > 1 &&
+        event->xclient.data.l[0] == g_screen.width / 2 && event->xclient.data.l[1] == g_screen.height / 2) {
+      centered = 1;
+    }
+    if (g_win_w > 1 && g_win_h > 1 &&
+        event->xclient.data.l[0] == g_win_w / 2 && event->xclient.data.l[1] == g_win_h / 2) {
+      centered = 1;
+    }
+    if (event->xclient.format == 32 && event->xclient.window == g_input_window && centered) {
+      vexa_q_push(event);
+    }
+    /* A real WM also consumes EWMH client messages (e.g. _NET_WM_STATE
+       fullscreen toggles) and answers with _NET_WM_STATE property
+       notification plus a ConfigureNotify at the display bounds. SDL waits
+       on exactly that pair before it reports the window as
+       fullscreen/on-display. */
     fprintf(stderr, "[VEXA][X11] wm_ack client_message fmt=%d l0=%ld\n", event->xclient.format,
             (long)event->xclient.data.l[0]);
     vexa_push_property(dpy, event->xclient.message_type, PropertyNewValue);
@@ -2141,47 +2182,28 @@ int XWarpPointer(Display* dpy, Window src, Window dest, int src_x, int src_y, un
     int cx = g_screen.width > 1 ? g_screen.width / 2 : 0;
     int cy = g_screen.height > 1 ? g_screen.height / 2 : 0;
     int near_center = abs(wx - cx) <= 2 && abs(wy - cy) <= 2;
-    /* ETS2 repeats this warp whenever it resets the cursor. Publish the
-       origin and drop the previous walk, or the next motion is measured
-       from the centre again. */
-    if (dest != None && wx == 0 && wy == 0) {
-      g_warp_centered = 1;
-      g_warp_x = 0;
-      g_warp_y = 0;
-      g_cursor_x = 0;
-      g_cursor_y = 0;
-      g_pointer_x = 0;
-      g_pointer_y = 0;
-      g_cursor_moved = 0;
-      vexa_trace_pointer("warp-origin", dest_x, dest_y, 0, 0, 0, 0, target);
-      return 1;
-    }
-    if (dest != None && near_center && g_pointer_grabbed && vexa_absolute_pointer()) {
+    /* ETS2 drives its virtual cursor like SDL's RELATIVE_MODE_WARP: it
+       re-centres the X pointer and measures deltas from that anchor. Real
+       X semantics keep every consumer consistent: move the pointer to the
+       target AND emit the MotionNotify — the client caused the warp, so it
+       expects (and compensates) the event. Silently teleporting injects a
+       fake delta for consecutive-diff clients (cursor snaps to centre),
+       while ignoring the warp leaves query-vs-anchor clients a constant
+       offset that drifts the reachable region every reset. */
+    if (dest != None && ((wx == 0 && wy == 0) || near_center || g_warp_centered ||
+                         (g_pointer_grabbed && vexa_absolute_pointer()))) {
       g_warp_centered = 1;
       g_warp_x = wx;
       g_warp_y = wy;
-      /* Publish the centre until the user steps. After that, leave the
-         cursor where the steps put it. */
-      if (!g_cursor_moved) {
-        g_cursor_x = wx;
-        g_cursor_y = wy;
-        g_pointer_x = wx;
-        g_pointer_y = wy;
-      }
-      vexa_trace_pointer("warp-anchor", dest_x, dest_y, 0, 0, g_pointer_x, g_pointer_y, target);
-      return 1;
-    }
-    if (dest != None && (near_center || g_warp_centered)) {
-      g_warp_centered = 1;
-      g_warp_x = wx;
-      g_warp_y = wy;
-      if (!g_cursor_moved) {
-        g_cursor_x = wx;
-        g_cursor_y = wy;
-        g_pointer_x = wx;
-        g_pointer_y = wy;
-      }
-      vexa_trace_pointer("warp-anchor", dest_x, dest_y, 0, 0, g_pointer_x, g_pointer_y, target);
+      g_cursor_x = wx;
+      g_cursor_y = wy;
+      g_pointer_x = wx;
+      g_pointer_y = wy;
+      vexa_fill_pointer(&event, dpy, MotionNotify, wx, wy, (int)g_pointer_state);
+      event.xmotion.window = target;
+      vexa_trace_pointer(wx == 0 && wy == 0 ? "warp-origin" : "warp-anchor",
+                         dest_x, dest_y, 0, 0, wx, wy, target);
+      vexa_q_push(&event);
       return 1;
     }
   }

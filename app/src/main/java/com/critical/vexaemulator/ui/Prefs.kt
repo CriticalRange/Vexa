@@ -27,6 +27,8 @@ object VexaPrefs {
         private set
     var padOverlay by mutableStateOf(false)
         private set
+    var stretchFullscreen by mutableStateOf(true)
+        private set
     var uncappedFps by mutableStateOf(false)
         private set
     var lastProgram by mutableStateOf<String?>(null)
@@ -43,6 +45,7 @@ object VexaPrefs {
         vulkan = prefs.getBoolean(KEY_VULKAN, false)
         padOverlay = prefs.getBoolean(KEY_PAD_OVERLAY, false)
         uncappedFps = prefs.getBoolean(KEY_UNCAPPED_FPS, false)
+        stretchFullscreen = prefs.getBoolean(KEY_STRETCH, true)
         lastProgram = prefs.getString(KEY_LAST_PROGRAM, null)
     }
 
@@ -71,6 +74,11 @@ object VexaPrefs {
         sp?.edit { putBoolean(KEY_PAD_OVERLAY, enabled) }
     }
 
+    fun updateStretchFullscreen(enabled: Boolean) {
+        stretchFullscreen = enabled
+        sp?.edit { putBoolean(KEY_STRETCH, enabled) }
+    }
+
     fun updateUncappedFps(enabled: Boolean) {
         uncappedFps = enabled
         sp?.edit { putBoolean(KEY_UNCAPPED_FPS, enabled) }
@@ -81,11 +89,24 @@ object VexaPrefs {
         sp?.edit { putString(KEY_LAST_PROGRAM, id) }
     }
 
+    /** Remembered cloud-conflict answer for one game: "local", "remote", or null. */
+    fun cloudChoice(programId: String): String? =
+        sp?.getString(KEY_CLOUD_CHOICE_PREFIX + programId, null)
+
+    fun updateCloudChoice(programId: String, choice: String?) {
+        sp?.edit {
+            val key = KEY_CLOUD_CHOICE_PREFIX + programId
+            if (choice == null) remove(key) else putString(key, choice)
+        }
+    }
+
+    private const val KEY_CLOUD_CHOICE_PREFIX = "cloud_choice_"
     private const val KEY_THEME = "theme_mode"
     private const val KEY_HAPTICS = "haptics"
     private const val KEY_SEPARATE_WINDOW = "separate_window"
     private const val KEY_VULKAN = "vulkan_renderer"
     private const val KEY_PAD_OVERLAY = "pad_overlay"
+    private const val KEY_STRETCH = "stretch_fullscreen"
     private const val KEY_UNCAPPED_FPS = "uncapped_fps"
     private const val KEY_LAST_PROGRAM = "last_program"
 }

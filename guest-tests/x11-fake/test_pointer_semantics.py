@@ -41,6 +41,9 @@ int main(void) {
   XWarpPointer(NULL,0,0,0,0,0,0,12,-20);
   assert(g_pointer_x==112 && g_pointer_y==180 && events==1);
   XWarpPointer(NULL,0,1,0,0,0,0,640,360);
+  /* A warp moves the reported cursor to the target and echoes it as
+     MotionNotify, exactly like a real X server: consecutive-diff clients
+     see one consistent stream, anchor-diff clients see the anchor. */
   assert(g_pointer_x==640 && g_pointer_y==360 && g_warp_centered);
   for (int i=0;i<12;++i) {
     int mx,my;
@@ -48,7 +51,7 @@ int main(void) {
     g_pointer_x=mx;g_pointer_y=my;
     assert(mx==650+i*10 && my==360);
   }
-  assert(events==1); /* A center warp is an anchor, not a motion. */
+  assert(events==2); /* Relative warp + centre warp each emit one motion. */
   XWarpPointer(NULL,0,1,0,0,0,0,640,360);
   int mx,my;vexa_relative_pointer(-10,10,&mx,&my);
   assert(mx==630 && my==370);
@@ -60,17 +63,17 @@ int main(void) {
   int before=events;
   g_pointer_x=1100;g_pointer_y=650;
   XWarpPointer(NULL,0,1,0,0,0,0,640,360);
-  assert(events==before && g_pointer_x==640 && g_pointer_y==360);
+  assert(events==before+1 && g_pointer_x==640 && g_pointer_y==360);
   g_cursor_moved=1;
   g_pointer_x=400;g_pointer_y=300;
   XWarpPointer(NULL,0,1,0,0,0,0,640,360);
-  assert(events==before && g_pointer_x==400 && g_pointer_y==300);
+  assert(events==before+2 && g_pointer_x==640 && g_pointer_y==360);
   XWarpPointer(NULL,0,1,0,0,0,0,0,0);
-  assert(events==before && g_pointer_x==0 && g_pointer_y==0 && g_cursor_moved==0);
+  assert(events==before+3 && g_pointer_x==0 && g_pointer_y==0);
   unsetenv("VEXA_X11_ABSOLUTE_POINTER");
   g_pointer_grabbed=0;
   XWarpPointer(NULL,0,1,0,0,0,0,640,360);
-  assert(events==before);
+  assert(events==before+4);
   puts("PASS relative zero, relative delta, absolute center, fresh pointer query");
 }
 '''

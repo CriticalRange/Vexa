@@ -138,6 +138,8 @@ fun QuickPanel(
     onExit: () -> Unit,
     padOn: Boolean = false,
     onTogglePad: (() -> Unit)? = null,
+    stretchOn: Boolean = true,
+    onToggleStretch: (() -> Unit)? = null,
     onOpenKeyboard: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
@@ -209,6 +211,14 @@ fun QuickPanel(
                         VexaGlyph.Gamepad,
                         if (padOn) c.plasma else c.textSecondary,
                         onClick = onTogglePad,
+                    )
+                    Spacer(Modifier.width(10.dp))
+                }
+                if (onToggleStretch != null) {
+                    CircleHudButton(
+                        VexaGlyph.Expand,
+                        if (stretchOn) c.plasma else c.textSecondary,
+                        onClick = onToggleStretch,
                     )
                     Spacer(Modifier.width(10.dp))
                 }
