@@ -162,6 +162,7 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
 
     private fun closeGameActivity() {
         if (isExiting) return
+        isExiting = true
 
         sendSurfaceDestroyed()
         sendUnregister()
@@ -182,18 +183,21 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
         override fun handleMessage(msg: Message) {
             when (msg.what) {
                 RuntimeIpc.MSG_START_RESULT -> {
+                    // This message means the runtime session is over: either the
+                    // guest called exit/exit_group (the code is its exit status)
+                    // or the launch failed. The worker process is single-use and
+                    // already released by RuntimeService, so close the game.
                     val code =
                         msg.data.getInt(RuntimeIpc.KEY_CODE, -1)
-                    if (code != 0) {
-                        VexaLogger.log(
-                            level = LogLevel.ERROR,
-                            category = LogCategory.FAILURE,
-                            message = "Runtime service start failed ($code)",
-                            fields = mapOf(
-                                "code" to code.toString()
-                            )
+                    VexaLogger.log(
+                        level = if (code == 0) LogLevel.INFO else LogLevel.ERROR,
+                        category = if (code == 0) LogCategory.ACTIVITY else LogCategory.FAILURE,
+                        message = if (code == 0) "Guest exited" else "Runtime session ended ($code)",
+                        fields = mapOf(
+                            "code" to code.toString()
                         )
-                    }
+                    )
+                    closeGameActivity()
                 }
 
                 RuntimeIpc.MSG_LOG_EVENT -> {

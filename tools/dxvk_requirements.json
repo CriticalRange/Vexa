@@ -1,0 +1,49 @@
+{
+  "source": "https://github.com/doitsujin/dxvk/wiki/Driver-support",
+  "retrieved": "2026-10-19",
+  "note": "Documentation-level minimums. DXVK's own adapter checks (src/dxvk/dxvk_adapter.cpp of the chosen release) are authoritative; update this profile when pinning a DXVK version.",
+  "profiles": {
+    "dxvk-3.x": {
+      "minApiVersion": "1.4.0",
+      "requiredExtensions": [
+        {"any": ["VK_EXT_depth_clip_enable"]},
+        {"any": ["VK_KHR_maintenance5"], "orFeature": "vulkan14.maintenance5"},
+        {"any": ["VK_KHR_maintenance6"], "orFeature": "vulkan14.maintenance6"},
+        {"any": ["VK_KHR_load_store_op_none"]},
+        {"any": ["VK_EXT_robustness2", "VK_KHR_robustness2"]},
+        {"any": ["VK_EXT_transform_feedback"]}
+      ],
+      "requiredFeatures": [
+        "vulkan12.descriptorIndexing",
+        "vulkan12.shaderInt8",
+        "core.shaderInt16",
+        "core.shaderInt64",
+        "vulkan12.scalarBlockLayout"
+      ],
+      "minLimits": {"maxPushConstantsSize": 256},
+      "optionalExtensions": [
+        "VK_KHR_maintenance8", "VK_KHR_maintenance9", "VK_KHR_maintenance10", "VK_KHR_maintenance11",
+        "VK_KHR_present_wait", "VK_KHR_unified_image_layout", "VK_EXT_descriptor_heap",
+        "VK_EXT_graphics_pipeline_library", "VK_KHR_swapchain_maintenance1|VK_EXT_swapchain_maintenance1", "VK_EXT_memory_budget",
+        "VK_EXT_shader_module_identifier", "VK_EXT_extended_dynamic_state3",
+        "VK_EXT_attachment_feedback_loop_layout"
+      ],
+      "optionalFeatures": [
+        "graphicsPipelineLibraryProperties.graphicsPipelineLibraryIndependentInterpolationDecoration"
+      ],
+      "notes": [
+        "DXVK provides no first-party support for Android or mobile graphics drivers.",
+        "Wine 10.1 or newer is needed for winevulkan support."
+      ]
+    },
+    "dxvk-1.10.3": {
+      "minApiVersion": "1.1.0",
+      "requiredExtensions": [],
+      "requiredFeatures": [],
+      "minLimits": {},
+      "optionalExtensions": [],
+      "optionalFeatures": [],
+      "notes": ["Legacy DXVK; the wiki lists only the Vulkan 1.1 requirement."]
+    }
+  }
+}

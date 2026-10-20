@@ -64,12 +64,18 @@ class RuntimeWorkerService : Service() {
                 )
             }
 
+            var runManifest: RunManifest? = null
             val code = try {
-                RuntimeBridge.startRuntime(CompatibilitySettings.apply(applicationContext, request))
+                val effective = CompatibilitySettings.apply(applicationContext, request)
+                runManifest = RunManifest.start(applicationContext, effective) { level, message ->
+                    sendWorkerLog(level, "CONFIG", message)
+                }
+                RuntimeBridge.startRuntime(effective)
             } catch (error: Exception) {
                 sendWorkerLog("ERROR", "BOOT", "Launch configuration failed: ${error.message}")
                 107
             }
+            runCatching { runManifest?.finish(code) }
             runCatching { rootSession?.stop("exit") }
             rootSession = null
             sendToSupervisor(RuntimeIpc.MSG_WORKER_START_RESULT) {

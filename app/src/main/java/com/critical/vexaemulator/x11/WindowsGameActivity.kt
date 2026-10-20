@@ -50,10 +50,11 @@ class WindowsGameActivity : Activity() {
                 }
                 RealX11Service.FAILED -> error(msg.data.getString(RealX11Service.ERROR).orEmpty())
                 RuntimeIpc.MSG_START_RESULT -> {
+                    // The runtime session is over (guest exit or launch failure)
+                    // and the single-use worker was released. Close the game.
                     val code = msg.data.getInt(RuntimeIpc.KEY_CODE)
-                    status.text = "Guest exited: $code"
-                    status.visibility = android.view.View.VISIBLE
                     android.util.Log.i("Vexa-RealX11", "guest-exit=$code")
+                    if (!isFinishing) finish()
                 }
                 RuntimeIpc.MSG_LOG_EVENT -> android.util.Log.i("Vexa-RealX11",
                     "${msg.data.getString(RuntimeIpc.KEY_CATEGORY)} ${msg.data.getString(RuntimeIpc.KEY_MESSAGE)} ${msg.data.getString(RuntimeIpc.KEY_FIELDS_JSON)}")

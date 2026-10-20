@@ -1,0 +1,7 @@
+{
+  "project": "FEX (VEXA fork)",
+  "source_repository": "https://github.com/CriticalRange/FEX.git",
+  "branch": "FEX-2601-local",
+  "commit": "eedae0c48af4a8e8f2fa2d31f34313962cc6f37a",
+  "note": "The Vulkan/X11 WSI, GLX shadow surface and window-api handoff hooks are committed in this fork; FEX HEAD must equal or descend from this commit."
+}

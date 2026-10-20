@@ -1547,10 +1547,18 @@ Status XGetWindowAttributes(Display* dpy, Window window, XWindowAttributes* attr
   }
   memset(attrs, 0, sizeof(*attrs));
   const struct vexa_window_geometry* geometry = window > 1 ? vexa_window(window) : NULL;
-  attrs->x = geometry ? geometry->x : (g_win_valid ? g_win_x : 0);
-  attrs->y = geometry ? geometry->y : (g_win_valid ? g_win_y : 0);
-  attrs->width = geometry ? geometry->width : (g_win_valid && g_win_w > 0 ? g_win_w : g_screen.width);
-  attrs->height = geometry ? geometry->height : (g_win_valid && g_win_h > 0 ? g_win_h : g_screen.height);
+  /* Godot creates its window at the project size (1920x1080) and later reads
+     the real bounds back through XGetWindowAttributes. A real WM reports the
+     mapped fullscreen geometry, so in published mode the main/input window
+     answers with the surface size, not the requested one. */
+  const int main_window = (window == 1 || window == g_input_window);
+  const int publish = g_published && g_screen.width > 1 && g_screen.height > 1 && main_window;
+  attrs->x = publish ? 0 : (geometry ? geometry->x : (g_win_valid ? g_win_x : 0));
+  attrs->y = publish ? 0 : (geometry ? geometry->y : (g_win_valid ? g_win_y : 0));
+  attrs->width = publish ? g_screen.width
+                         : (geometry ? geometry->width : (g_win_valid && g_win_w > 0 ? g_win_w : g_screen.width));
+  attrs->height = publish ? g_screen.height
+                          : (geometry ? geometry->height : (g_win_valid && g_win_h > 0 ? g_win_h : g_screen.height));
   attrs->depth = 24;
   attrs->visual = &g_visual;
   attrs->class = TrueColor;
@@ -1595,20 +1603,28 @@ Status XGetGeometry(Display* dpy, Drawable drawable, Window* root, int* x, int* 
   (void)drawable;
   vexa_read_window_size();
   const struct vexa_window_geometry* geometry = drawable > 1 ? vexa_window(drawable) : NULL;
+  /* Same published-surface override as XGetWindowAttributes: Godot sizes its
+     framebuffer from XGetGeometry on the main window. */
+  const int publish = g_published && g_screen.width > 1 && g_screen.height > 1 &&
+                      (drawable == 1 || drawable == g_input_window);
   if (root) {
     *root = 1;
   }
   if (x) {
-    *x = geometry ? geometry->x : (g_win_valid ? g_win_x : 0);
+    *x = publish ? 0 : (geometry ? geometry->x : (g_win_valid ? g_win_x : 0));
   }
   if (y) {
-    *y = geometry ? geometry->y : (g_win_valid ? g_win_y : 0);
+    *y = publish ? 0 : (geometry ? geometry->y : (g_win_valid ? g_win_y : 0));
   }
   if (width) {
-    *width = (unsigned int)(geometry ? geometry->width : (g_win_valid && g_win_w > 0 ? g_win_w : g_screen.width));
+    *width = (unsigned int)(publish ? g_screen.width
+                                   : (geometry ? geometry->width
+                                               : (g_win_valid && g_win_w > 0 ? g_win_w : g_screen.width)));
   }
   if (height) {
-    *height = (unsigned int)(geometry ? geometry->height : (g_win_valid && g_win_h > 0 ? g_win_h : g_screen.height));
+    *height = (unsigned int)(publish ? g_screen.height
+                                    : (geometry ? geometry->height
+                                                : (g_win_valid && g_win_h > 0 ? g_win_h : g_screen.height)));
   }
   if (border) {
     *border = 0;

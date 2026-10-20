@@ -159,3 +159,16 @@ add_custom_command(TARGET vexaloader POST_BUILD
         ${CMAKE_CURRENT_SOURCE_DIR}/../jniLibs/arm64-v8a
     COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:vexaloader>
         ${CMAKE_CURRENT_SOURCE_DIR}/../jniLibs/arm64-v8a/libvexaloader.so)
+
+# Vulkan capability dump for DXVK/driver checks (tools/vulkan_caps.py runs it
+# via adb). Packaged as a .so name so it lands in the exec-permitted lib dir.
+# FEX's Vulkan headers are newer than the NDK's (Vulkan 1.4, KHR_robustness2).
+add_executable(vexavkcaps tools/vk_caps.cpp)
+target_include_directories(vexavkcaps PRIVATE ${FEX_ROOT}/External/Vulkan-Headers/include)
+target_compile_features(vexavkcaps PRIVATE cxx_std_20)
+target_link_libraries(vexavkcaps dl)
+add_custom_command(TARGET vexavkcaps POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+        ${CMAKE_CURRENT_SOURCE_DIR}/../jniLibs/arm64-v8a
+    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:vexavkcaps>
+        ${CMAKE_CURRENT_SOURCE_DIR}/../jniLibs/arm64-v8a/libvexavkcaps.so)

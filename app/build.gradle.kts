@@ -1,4 +1,6 @@
 import java.util.Properties
+import javax.inject.Inject
+import org.gradle.process.ExecOperations
 
 plugins {
     alias(libs.plugins.android.application)
@@ -330,10 +332,19 @@ val buildI386X11Shims by tasks.registering(Exec::class) {
         rootProject.file("scripts/build_x11_fakes.sh").absolutePath)
 }
 
+val verifyFexCompat by tasks.registering(Exec::class) {
+    group = "build setup"
+    description = "Checks the FEX checkout contains the pinned commit (tools/fex.lock.json) and VEXA patches."
+    workingDir = rootProject.rootDir
+    commandLine(pythonExe, rootProject.file("tools/apply_fex_compat.py").absolutePath,
+        "--fex-root", fexRoot.get(), "--check")
+}
+
 val configureFexAndroid by
 tasks.registering(org.gradle.api.tasks.Exec::class) {
     group = "build setup"
     description = "Configures FEX Android build."
+    dependsOn(verifyFexCompat)
     dependsOn(buildAndroidSDL3Image)
     dependsOn(prepareI386Sysroot)
     workingDir = rootProject.rootDir
@@ -560,6 +571,35 @@ val stageSDL3Thunks by tasks.registering(Exec::class) {
         pythonExe,
         rootProject.file("guest-tests/graphics/stage_sdl3_thunks.py").absolutePath,
     )
+}
+
+abstract class WriteBuildManifest : DefaultTask() {
+    @get:OutputDirectory abstract val outputDir: DirectoryProperty
+    @get:Internal abstract val command: ListProperty<String>
+    @get:Inject abstract val execOps: ExecOperations
+
+    @TaskAction
+    fun write() {
+        execOps.exec {
+            commandLine(command.get() + listOf("--out", outputDir.get().file("build-manifest.json").asFile.absolutePath))
+        }
+    }
+}
+
+val writeBuildManifest by tasks.registering(WriteBuildManifest::class) {
+    group = "build setup"
+    description = "Records VEXA/FEX commits, patch set, FEX options and payload hashes into assets/build-manifest.json."
+    dependsOn(stageSDL3Thunks)
+    mustRunAfter(stageGuestRuntime)
+    outputs.upToDateWhen { false }
+    command.set(listOf(pythonExe, rootProject.file("tools/build_manifest.py").absolutePath,
+        "--fex-root", fexRoot.get(), "--fex-build", fexBuildDir.get()))
+}
+
+androidComponents {
+    onVariants { variant ->
+        variant.sources.assets?.addGeneratedSourceDirectory(writeBuildManifest, WriteBuildManifest::outputDir)
+    }
 }
 
 tasks.matching {

@@ -111,12 +111,19 @@ across child environments, and transfers guest `LD_PRELOAD`/`LD_LIBRARY_PATH`
 past the Android linker without applying them to native ARM64 binaries. It
 also includes Android-specific filesystem, process-ID, memory-protection and
 seccomp fallbacks needed by the observed Proton startup path. Rebuild
-LinuxEmulation and VEXA together. The optional `--vulkan-x11` patch enables
-the experimental X11 Vulkan WSI path; check the exact patch set before a build:
+LinuxEmulation and VEXA together. The X11 Vulkan WSI hooks are no longer a
+separate patch: they are committed in the VEXA FEX fork, and `tools/fex.lock.json`
+pins the minimum commit. The check fails when the FEX checkout does not contain
+that commit; Gradle runs it before configuring FEX:
 
 ```sh
-python tools/apply_fex_compat.py --fex-root ../FEX --check --vulkan-x11
+python tools/apply_fex_compat.py --fex-root ../FEX --check
 ```
+
+Every build writes `assets/build-manifest.json` (VEXA/FEX commits and dirty
+diffs, patch states, FEX CMake options, static-library and thunk hashes). Each
+launch writes `run_manifest.json` into the run's artifact directory, matching
+the libraries mapped in `/proc/self/maps` against that build manifest.
 
 ## Configuration
 
