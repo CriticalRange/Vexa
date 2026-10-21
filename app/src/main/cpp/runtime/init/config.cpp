@@ -399,8 +399,12 @@ namespace Vexa::Runtime::Init {
         FEXCore::Config::SetConfigFileLocation(cfgRoot + "/Config.json", false);
         FEXCore::Config::SetConfigFileLocation(cfgRoot + "/Config.json", true);
         FEXCore::Config::Set(FEXCore::Config::CONFIG_THUNKCONFIG, appCfgPath);
-        FEXCore::Config::Set(FEXCore::Config::CONFIG_SILENTLOG,
-                             "0"); // Set silent logs to 0 for dev
+        // FEX's own log output costs guest CPU during play. Default to silent;
+        // create files/fex_verbose.flag to re-enable it for debugging.
+        const bool fexVerbose =
+                ::access("/data/data/com.critical.vexaemulator/files/fex_verbose.flag",
+                         F_OK) == 0;
+        FEXCore::Config::Set(FEXCore::Config::CONFIG_SILENTLOG, fexVerbose ? "0" : "1");
         FEXCore::Config::Set(FEXCore::Config::CONFIG_OUTPUTLOG, "stderr");
         const bool silentLogSet = FEXCore::Config::Exists(FEXCore::Config::CONFIG_SILENTLOG);
         const bool outputLogSet = FEXCore::Config::Exists(FEXCore::Config::CONFIG_OUTPUTLOG);

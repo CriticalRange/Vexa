@@ -129,6 +129,13 @@ class PadProfile(
     val bAsEscape: Boolean = false,
     /** Let the left stick drive arrow keys as well — ETS2/FNA menu navigation. */
     val keyboardNavigationFallback: Boolean = false,
+    /**
+     * Deliver the keyboard/mouse fallback records without [PadCtl.SYNTH_FLAG]
+     * so SDL guests consume them too. For games whose native gamepad support
+     * is too weak to drive menus (Warband) the pad must masquerade as
+     * keyboard+mouse instead of staying gamepad-only.
+     */
+    val sendFallbackToSdl: Boolean = false,
 )
 
 object PadProfiles {
@@ -164,9 +171,20 @@ object PadProfiles {
         keyboardNavigationFallback = true,
     )
 
+    // Mount & Blade: Warband — gamepad support is too weak for menus, so the
+    // pad drives keyboard/mouse (arrows+Enter to navigate, WASD to move,
+    // right stick aims, triggers click).
+    private val WARBAND = PadProfile(
+        keys = DEFAULT.keys,
+        clicks = DEFAULT.clicks,
+        keyboardNavigationFallback = true,
+        sendFallbackToSdl = true,
+    )
+
     fun forProgram(programId: String?): PadProfile = when (programId) {
         "megabonk" -> MEGABONK
         "ets2" -> ETS2
+        "steam-48700" -> WARBAND
         else -> DEFAULT
     }
 }
@@ -226,7 +244,11 @@ class GuestPadState {
             PadCtl.RTRIGGER -> virtRt = down
             else -> onPadButton(down, control)
         }
-        profile.keys[control]?.let { for (k in it) onFaceKey(down, k) }
+        profile.keys[control]?.let {
+            for (k in it) {
+                if (profile.sendFallbackToSdl) onDirectKey(down, k) else onFaceKey(down, k)
+            }
+        }
         if (control == PadCtl.B && profile.bAsEscape) onDirectKey(down, XKeys.ESCAPE)
         if (profile.clicks.containsKey(control)) {
             if (down) clickHolds.add(control) else clickHolds.remove(control)

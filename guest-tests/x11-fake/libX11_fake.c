@@ -877,17 +877,21 @@ static int vexa_absolute_pointer(void) {
 /* Opt-in, bounded trace of the Android/X11/guest-warp coordinate boundary. */
 static void vexa_trace_pointer(const char* kind, int x, int y, int dx, int dy, int out_x, int out_y,
                                Window window) {
-  int flag = open("/data/data/com.critical.vexaemulator/files/rootfs/tmp/vexa-input-trace.flag", O_RDONLY);
+  int flag = open("/tmp/vexa-input-trace.flag", O_RDONLY);
   static int checked;
   if (!checked++) fprintf(stderr, "[VEXA][INPUT-TRACE] flag_fd=%d errno=%d\n", flag, flag < 0 ? errno : 0);
   if (flag < 0) return;
   close(flag);
-  int file = open("/data/data/com.critical.vexaemulator/files/rootfs/tmp/vexa-input-trace.log", O_WRONLY | O_CREAT | O_APPEND, 0600);
+  int file = open("/tmp/vexa-input-trace.log", O_WRONLY | O_CREAT | O_APPEND, 0600);
   if (file < 0) return;
   if (lseek(file, 0, SEEK_END) > 1024 * 1024) ftruncate(file, 0);
+  const struct vexa_window_geometry* geom = vexa_window(window);
   char line[256];
-  int n = snprintf(line, sizeof(line), "%s win=%lu input=%d,%d delta=%d,%d output=%d,%d pointer=%d,%d centered=%d screen=%dx%d\n",
-          kind, (unsigned long)window, x, y, dx, dy, out_x, out_y,
+  int n = snprintf(line, sizeof(line),
+          "%s win=%lu geo=%d,%d %dx%d input=%d,%d delta=%d,%d output=%d,%d pointer=%d,%d centered=%d screen=%dx%d\n",
+          kind, (unsigned long)window,
+          geom ? geom->x : -1, geom ? geom->y : -1, geom ? geom->width : -1, geom ? geom->height : -1,
+          x, y, dx, dy, out_x, out_y,
           g_pointer_x, g_pointer_y, g_warp_centered, g_screen.width, g_screen.height);
   if (n > 0 && n < (int)sizeof(line)) write(file, line, (size_t)n);
   close(file);
@@ -988,8 +992,26 @@ static void vexa_poll_pointer(Display* dpy) {
         mx = g_pointer_x;
         my = g_pointer_y;
       } else if ((type == ButtonPress || type == ButtonRelease) && g_warp_centered) {
-        mx = g_cursor_moved ? g_cursor_x : g_pointer_x;
-        my = g_cursor_moved ? g_cursor_y : g_pointer_y;
+        if (synth) {
+          mx = g_cursor_moved ? g_cursor_x : g_pointer_x;
+          my = g_cursor_moved ? g_cursor_y : g_pointer_y;
+        } else {
+          /* Touch and physical-mouse clicks are absolute: while the client
+             anchors the pointer for relative deltas, the click still has to
+             land where the user pressed. Emitting the MotionNotify first
+             moves both the tracked cursor and client-side accumulated
+             cursors onto the tap point. */
+          if (mx != g_pointer_x || my != g_pointer_y) {
+            XEvent mv;
+            vexa_fill_pointer(&mv, dpy, MotionNotify, mx, my, (int)g_pointer_state);
+            vexa_q_push_locked(&mv);
+          }
+          g_pointer_x = mx;
+          g_pointer_y = my;
+          g_cursor_x = mx;
+          g_cursor_y = my;
+          g_cursor_moved = 1;
+        }
       } else {
         g_cursor_x = mx;
         g_cursor_y = my;
@@ -1048,6 +1070,15 @@ static void vexa_init_screen(Display* dpy) {
   g_screen.cmap = 1;
   vexa_read_window_size();
   g_ready = 1;
+  {
+    int mf = open("/tmp/vexa-x11-loaded", O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (mf >= 0) {
+      char mb[64];
+      int mn = snprintf(mb, sizeof(mb), "geo=1 screen=%dx%d\n", g_screen.width, g_screen.height);
+      if (mn > 0) write(mf, mb, (size_t)mn);
+      close(mf);
+    }
+  }
 }
 
 #include "unity_native_mode.h"

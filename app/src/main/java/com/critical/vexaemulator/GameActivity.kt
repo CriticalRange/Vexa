@@ -931,11 +931,14 @@ class GameActivity : ComponentActivity(), SurfaceHolder.Callback {
         return true
     }
 
+    private fun padSynthFlag(): Int =
+        if (pad.profile.sendFallbackToSdl) 0 else PadCtl.SYNTH_FLAG
+
     private val padSink = object : PadSink {
         override fun pointer(type: Int, x: Int, y: Int, state: Int) =
-            writePointer(type, x, y, state or PadCtl.SYNTH_FLAG)
+            writePointer(type, x, y, state or padSynthFlag())
         override fun key(down: Boolean, keysym: Int) =
-            writePointer(if (down) 2 else 3, keysym, 0, PadCtl.SYNTH_FLAG)
+            writePointer(if (down) 2 else 3, keysym, 0, padSynthFlag())
         override fun directKey(down: Boolean, keysym: Int) =
             writePointer(if (down) 2 else 3, keysym, 0, 0)
         override fun pad(control: Int, value: Int) =

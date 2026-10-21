@@ -46,10 +46,23 @@ object GuestInstaller {
         }
         executable.setReadable(true, false)
         executable.setExecutable(true, false)
-        val baseEnv = if (program.preinstalled && program.env.none { it.startsWith("HOME=") }) {
+        val programEnv = if (program.preinstalled && program.env.none { it.startsWith("HOME=") }) {
             program.env + "HOME=${guestDir.absolutePath}"
         } else {
             program.env
+        }
+        // Steam titles ship .sh launchers that export LD_LIBRARY_PATH=<exe dir>
+        // because their bundled libraries sit next to the binary. We exec the
+        // ELF directly, so mirror the executable's directory into the path.
+        val libDir = program.fileName.replace('\\', '/').substringBeforeLast('/', "").ifEmpty { "." }
+        val baseEnv = run {
+            val index = programEnv.indexOfFirst { it.startsWith("LD_LIBRARY_PATH=") }
+            if (index < 0) return@run programEnv + "LD_LIBRARY_PATH=$libDir"
+            val paths = programEnv[index].substringAfter('=').split(':')
+            if (libDir in paths) programEnv
+            else programEnv.toMutableList().apply {
+                set(index, "LD_LIBRARY_PATH=" + (listOf(libDir) + paths).joinToString(":"))
+            }
         }
         val rootfs = File(root, "rootfs").apply { mkdirs() }
         val thunkHost = File(root, "thunks/host").apply { mkdirs() }

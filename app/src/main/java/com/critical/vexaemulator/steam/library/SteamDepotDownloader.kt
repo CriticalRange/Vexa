@@ -106,7 +106,10 @@ object SteamDepotDownloader {
         try {
             val completedBytes = AtomicLong(0)
             val lastUpdate = AtomicLong(0)
-            val chunkGate = Semaphore(6)
+            // Steam's own client keeps two dozen chunk fetches in flight; 6
+            // connections cannot saturate a fast link.
+            val chunkGate = Semaphore(16)
+            val fileGate = Semaphore(8)
             var totalBytes = 0L
             val manifests = depots.map { depot ->
                 onProgress(DepotProgress(-1f, "Authorizing game files..."))
@@ -133,9 +136,10 @@ object SteamDepotDownloader {
             }
             val transferStarted = System.currentTimeMillis()
             manifests.forEach { (depot, manifest, key) ->
-                // Bounded file workers prevent small files from serializing the whole transfer.
-                manifest.files.chunked(4).forEach { batch ->
-                coroutineScope { batch.map { file -> async {
+                // No batch barrier: files start as workers free up, so a slow
+                // file no longer stalls the next group of small files.
+                coroutineScope { manifest.files.map { file -> async {
+                    fileGate.withPermit {
                     val relative = file.fileName.orEmpty().replace('\\', '/')
                     if (relative.isBlank()) return@async
                     val dest = childFile(root, relative)
@@ -164,26 +168,32 @@ object SteamDepotDownloader {
                     RandomAccessFile(dest, "rw").use { output ->
                         val next = AtomicInteger(0)
                         coroutineScope {
-                            List(minOf(3, file.chunks.size)) {
+                            List(minOf(6, file.chunks.size)) {
                                 async {
                                   while (true) {
                                     val index = next.getAndIncrement()
                                     if (index >= file.chunks.size) break
                                     val chunk = file.chunks[index]
-                                    chunkGate.withPermit {
-                                        val size = chunk.uncompressedLength
-                                        if (size <= 0 || size > 32 * 1024 * 1024) error("Unexpected chunk size $size")
-                                        val buffer = ByteArray(size)
-                                        val written = downloadChunk(
-                                            cdn, depot.depotId, chunk, buffer, key, servers, content, depot.ownerAppId, this, tokens,
+                                    require(chunk.compressedLength in 1..(32 * 1024 * 1024)) { "Unexpected compressed chunk size" }
+                                    val size = chunk.uncompressedLength
+                                    if (size <= 0 || size > 32 * 1024 * 1024) error("Unexpected chunk size $size")
+                                    // The permit covers the HTTP fetch only; decrypt/decompress is
+                                    // CPU work and must not hold a network slot.
+                                    val encrypted = ByteArray(chunk.compressedLength)
+                                    val fetched = chunkGate.withPermit {
+                                        downloadChunk(
+                                            cdn, depot.depotId, chunk, encrypted, servers, content, depot.ownerAppId, this, tokens, index,
                                         )
-                                        if (written != size) error("Incomplete chunk in $relative")
-                                        synchronized(output) {
-                                            output.seek(chunk.offset)
-                                            output.write(buffer, 0, written)
-                                        }
-                                        noteProgress(completedBytes, lastUpdate, transferStarted, totalBytes, written.toLong(), onProgress)
                                     }
+                                    if (!fetched) error("Incomplete chunk in $relative")
+                                    val buffer = ByteArray(size)
+                                    val written = `in`.dragonbra.javasteam.steam.cdn.DepotChunk.process(chunk, encrypted, buffer, key)
+                                    if (written != size) error("Incomplete chunk in $relative")
+                                    synchronized(output) {
+                                        output.seek(chunk.offset)
+                                        output.write(buffer, 0, written)
+                                    }
+                                    noteProgress(completedBytes, lastUpdate, transferStarted, totalBytes, written.toLong(), onProgress)
                                   }
                                 }
                             }.awaitAll()
@@ -192,8 +202,8 @@ object SteamDepotDownloader {
                     }
                     dest.setReadable(true, false)
                     if (file.flags.contains(EDepotFileFlag.Executable)) dest.setExecutable(true, false)
+                    }
                 } }.awaitAll() }
-                }
             }
         } finally {
             cdn.close()
@@ -242,27 +252,25 @@ object SteamDepotDownloader {
         depotId: Int,
         chunk: `in`.dragonbra.javasteam.types.ChunkData,
         destination: ByteArray,
-        depotKey: ByteArray,
         servers: List<Server>,
         content: SteamContent,
         appId: Int,
         scope: CoroutineScope,
         tokens: TokenCache,
-    ): Int {
-        var last = 0
-        for (server in servers) {
-            val written = try { withTimeoutOrNull(20_000) {
+        chunkIndex: Int,
+    ): Boolean {
+        // Rotate the starting server per chunk: always hitting servers[0]
+        // concentrates all workers on one CDN host and triggers shaping.
+        for (attempt in servers.indices) {
+            val server = servers[(chunkIndex + attempt) % servers.size]
+            val fetched = try { withTimeoutOrNull(20_000) {
                 val token = tokens.get(content, depotId, appId, server, scope)
-                require(chunk.compressedLength in 1..(32 * 1024 * 1024)) { "Unexpected compressed chunk size" }
-                val encrypted = ByteArray(chunk.compressedLength)
-                val received = cdn.downloadDepotChunk(depotId, chunk, server, encrypted, null, null, token)
-                check(received == encrypted.size) { "Incomplete encrypted chunk" }
-                `in`.dragonbra.javasteam.steam.cdn.DepotChunk.process(chunk, encrypted, destination, depotKey)
-            } ?: 0 } catch (error: CancellationException) { throw error } catch (_: Exception) { 0 }
-            last = written
-            if (written > 0) return written
+                val received = cdn.downloadDepotChunk(depotId, chunk, server, destination, null, null, token)
+                received == destination.size
+            } == true } catch (error: CancellationException) { throw error } catch (_: Exception) { false }
+            if (fetched) return true
         }
-        return last
+        return false
     }
     private class TokenCache {
         private data class Entry(val value: String?, val expires: Long)
