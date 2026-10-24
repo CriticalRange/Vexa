@@ -77,7 +77,7 @@ namespace Vexa::Runtime {
         // trampoline binary, and it must survive into re-exec'd children for
         // grandchild execs.
         const std::vector<std::string> hostControls{
-            "VEXA_HEADLESS", "VEXA_HEADLESS_W", "VEXA_HEADLESS_H", "VEXA_GL_SRGB_SURFACE",
+            "VEXA_HEADLESS", "VEXA_HEADLESS_W", "VEXA_HEADLESS_H", "VEXA_GL_SRGB_SURFACE", "VEXA_GL_ALPHA_TEST", "VEXA_GL_CLIP_PLANES",
             "VEXA_REEXEC", "VEXA_ROOTFS", "VEXA_THUNK_HOST", "VEXA_THUNK_GUEST",
             "VEXA_WORKDIR", "VEXA_ARTIFACTS", "VEXA_COMPAT_SESSION",
             "VEXA_PROTON_PATH", "VEXA_STEAM_CLIENT_PATH", "VEXA_COMPAT_DATA_ROOT",

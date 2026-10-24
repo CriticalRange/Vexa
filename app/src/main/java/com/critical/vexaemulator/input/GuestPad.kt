@@ -129,6 +129,10 @@ class PadProfile(
     val bAsEscape: Boolean = false,
     /** Let the left stick drive arrow keys as well — ETS2/FNA menu navigation. */
     val keyboardNavigationFallback: Boolean = false,
+    /** Keep the d-pad on menu arrows when movement belongs to the left stick. */
+    val dpadMovesPlayer: Boolean = true,
+    /** Native SDL through fake X11 needs the packed relative-pointer marker. */
+    val packedX11Pointer: Boolean = false,
     /**
      * Deliver the keyboard/mouse fallback records without [PadCtl.SYNTH_FLAG]
      * so SDL guests consume them too. For games whose native gamepad support
@@ -181,10 +185,31 @@ object PadProfiles {
         sendFallbackToSdl = true,
     )
 
+    // Portal's bundled i386 SDL uses X11 input; the x86_64 evdev preload
+    // cannot provide a controller to it. Deliver the overlay's fallback
+    // keys/mouse directly, with one gameplay action per face button.
+    private val PORTAL = PadProfile(
+        keys = mapOf(
+            PadCtl.A to intArrayOf(XKeys.SPACE, XKeys.RETURN),
+            PadCtl.B to intArrayOf(XKeys.CONTROL_L),
+            PadCtl.X to intArrayOf(XKeys.E),
+            PadCtl.Y to intArrayOf(XKeys.R),
+            PadCtl.LB to intArrayOf(XKeys.SHIFT_L),
+            PadCtl.RB to intArrayOf(XKeys.E),
+            PadCtl.START to intArrayOf(XKeys.ESCAPE),
+            PadCtl.BACK to intArrayOf(XKeys.TAB),
+        ),
+        clicks = mapOf(PadCtl.RTRIGGER to 1, PadCtl.LTRIGGER to 3),
+        dpadMovesPlayer = false,
+        packedX11Pointer = true,
+        sendFallbackToSdl = true,
+    )
+
     fun forProgram(programId: String?): PadProfile = when (programId) {
         "megabonk" -> MEGABONK
         "ets2" -> ETS2
         "steam-48700" -> WARBAND
+        "portal", "steam-400" -> PORTAL
         else -> DEFAULT
     }
 }
@@ -334,10 +359,10 @@ class GuestPadState {
         emitPadButton(PadCtl.DPAD_DOWN, dpadDown, sink)
         emitPadButton(PadCtl.DPAD_LEFT, dpadLeft, sink)
         emitPadButton(PadCtl.DPAD_RIGHT, dpadRight, sink)
-        val up = dpadUp || stickUp
-        val down = dpadDown || stickDown
-        val left = dpadLeft || stickLeft
-        val right = dpadRight || stickRight
+        val up = (profile.dpadMovesPlayer && dpadUp) || stickUp
+        val down = (profile.dpadMovesPlayer && dpadDown) || stickDown
+        val left = (profile.dpadMovesPlayer && dpadLeft) || stickLeft
+        val right = (profile.dpadMovesPlayer && dpadRight) || stickRight
         hold(profile.stickKeys[0], up && !down, sink)
         hold(profile.stickKeys[1], down && !up, sink)
         hold(profile.stickKeys[2], left && !right, sink)
