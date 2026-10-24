@@ -73,3 +73,12 @@ __pycache__/
 /ets2_scr.png
 /tools/rsp_*.py
 /tools/ets2_hist*.txt
+# Session screenshots and capture scratch
+/*.png
+/*.ppm
+/scratch/
+/screens/
+/texdump/
+/tmp7/
+/laser_audit/
+/jobs_asir.txt
