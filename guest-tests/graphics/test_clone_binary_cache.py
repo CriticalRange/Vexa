@@ -1,10 +1,14 @@
 """Build an Android regression probe from the actual GL clone implementation."""
 from pathlib import Path
+import argparse
 import subprocess
 
 root = Path(__file__).resolve().parents[2]
 fex = root.parent / "FEX/ThunkLibs/libGL"
-out = root / "logs/clone-cache-20261021"
+parser = argparse.ArgumentParser()
+parser.add_argument("--out", type=Path, default=root / "logs/clone-cache-audit")
+args = parser.parse_args()
+out = args.out.resolve()
 host = (fex / "libGL_Host.cpp").read_text()
 clone = host[host.index("// ---- separable-pipeline vertex clone"):host.index("// Validates each bound pipeline once.")]
 source = r'''
@@ -17,9 +21,14 @@ source = r'''
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
+#include <memory>
+#include <mutex>
+#include <algorithm>
 #include <vector>
 #include <chrono>
 #include "clone_binary_cache.h"
+#include "program_cache_state.inc"
 ''' + clone + r'''
 static const char* vs = R"(#version 310 es
 precision highp float;
