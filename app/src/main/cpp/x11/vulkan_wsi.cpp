@@ -4,16 +4,22 @@
 #include <algorithm>
 #include <android/hardware_buffer.h>
 #include <chrono>
+#include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <dlfcn.h>
 #include <iterator>
 #include <memory>
 #include <mutex>
+#include <sys/eventfd.h>
+#include <thread>
+#include <tuple>
 #include <unordered_map>
 #include <vector>
 #include <vulkan/vulkan.h>
+#include <unistd.h>
 
 namespace {
 // Synthetic handles are private to this WSI. Never pass them to the Android
@@ -21,12 +27,22 @@ namespace {
 struct Surface {
   uint32_t window;
 };
+struct PresentFence {
+  VkDevice device;
+  VkFence fence{};
+  ~PresentFence();
+};
 struct Image {
   VkImage image{};
   VkDeviceMemory memory{};
   AHardwareBuffer *buffer{};
   uint32_t pixmap{};
   bool acquired = false, busy = false, initialized = false;
+  // In flight between caller-side submission and X11 accepting the pixmap.
+  bool pending = false;
+  std::shared_ptr<PresentFence> presentFence;
+  VkFence acquireFence{};
+  bool acquireSubmitted = false;
   VkCommandBuffer acquireCommand{}, releaseCommand{};
 };
 struct Swapchain {
@@ -34,24 +50,162 @@ struct Swapchain {
   VkQueue queue;
   uint32_t family;
   VkCommandPool pool{};
-  VkFence presentFence{};
   uint32_t window, serial = 0;
+  // Terminal failures stay latched until this swapchain is destroyed.
+  VkResult deferredError = VK_SUCCESS;
+  bool destroyed = false;
+  std::mutex stateMutex;
+  std::condition_variable changed;
+  struct Job {
+    std::shared_ptr<PresentFence> completion;
+    uint32_t image, serial;
+  };
+  std::deque<Job> jobs;
+  std::thread worker;
+  int wakeFd = -1;
+  ~Swapchain() { if (wakeFd >= 0) close(wakeFd); }
   Vexa::X11::PresentConnection connection;
   std::vector<Image> images;
 };
 std::mutex mutex;
 std::unordered_map<VkDevice, uint32_t> deviceFamilies;
 std::unordered_map<VkSurfaceKHR, std::unique_ptr<Surface>> surfaces;
-std::unordered_map<VkSwapchainKHR, std::unique_ptr<Swapchain>> chains;
+std::unordered_map<VkSwapchainKHR, std::shared_ptr<Swapchain>> chains;
+// Guest queue entry points and WSI's internal ownership submits share these
+// gates. Acquire is allowed to run concurrently with guest queue operations.
+struct QueueState {
+  VkDevice device{};
+  std::mutex mutex;
+};
+std::mutex queuesMutex;
+std::unordered_map<VkQueue, std::shared_ptr<QueueState>> queues;
 void *library = dlopen("libvulkan.so", RTLD_NOW | RTLD_LOCAL);
 template <typename T> T Load(const char *name) {
   return reinterpret_cast<T>(dlsym(library, name));
 }
 #define FN(n) Load<PFN_##n>(#n)
+PresentFence::~PresentFence() {
+  if (fence) FN(vkDestroyFence)(device, fence, nullptr);
+}
+std::shared_ptr<QueueState> Queue(VkQueue queue) {
+  std::lock_guard lock(queuesMutex);
+  auto &state = queues[queue];
+  if (!state) state = std::make_shared<QueueState>();
+  return state;
+}
+VkResult Submit(VkQueue queue, uint32_t count, const VkSubmitInfo *info, VkFence fence) {
+  auto state = Queue(queue);
+  std::lock_guard lock(state->mutex);
+  return FN(vkQueueSubmit)(queue, count, info, fence);
+}
+VkResult Submit2Impl(VkQueue queue, uint32_t count, const VkSubmitInfo2 *info, VkFence fence, bool khr) {
+  auto state = Queue(queue);
+  std::lock_guard lock(state->mutex);
+  auto fn = khr ? reinterpret_cast<PFN_vkQueueSubmit2>(FN(vkQueueSubmit2KHR)) : FN(vkQueueSubmit2);
+  return fn ? fn(queue, count, info, fence) : VK_ERROR_EXTENSION_NOT_PRESENT;
+}
+VkResult Submit2(VkQueue q, uint32_t n, const VkSubmitInfo2 *info, VkFence f) {
+  return Submit2Impl(q, n, info, f, false);
+}
+VkResult Submit2KHR(VkQueue q, uint32_t n, const VkSubmitInfo2 *info, VkFence f) {
+  return Submit2Impl(q, n, info, f, true);
+}
+VkResult BindSparse(VkQueue queue, uint32_t count, const VkBindSparseInfo *info, VkFence fence) {
+  auto state = Queue(queue);
+  std::lock_guard lock(state->mutex);
+  return FN(vkQueueBindSparse)(queue, count, info, fence);
+}
+VkResult QueueIdle(VkQueue queue) {
+  auto state = Queue(queue);
+  std::lock_guard lock(state->mutex);
+  return FN(vkQueueWaitIdle)(queue);
+}
+VkResult DeviceIdle(VkDevice device) {
+  std::vector<std::shared_ptr<QueueState>> states;
+  {
+    std::lock_guard lock(queuesMutex);
+    for (auto &[queue, state] : queues)
+      if (state->device == device) states.push_back(state);
+  }
+  // Every DeviceIdle uses the same order. A queue wait only locks its own
+  // queue, so an unrelated queue can still submit a semaphore signal.
+  std::sort(states.begin(), states.end());
+  std::vector<std::unique_lock<std::mutex>> locks;
+  for (auto &state : states) locks.emplace_back(state->mutex);
+  return FN(vkDeviceWaitIdle)(device);
+}
 template <class H, class P> H Handle(P *p) { return (H)(uintptr_t)p; }
 VkResult Fail(const char *why, VkResult code = VK_ERROR_FEATURE_NOT_PRESENT) {
   fprintf(stderr, "[VEXA][X11-WSI] %s\n", why);
   return code;
+}
+void Wake(Swapchain &s) {
+  uint64_t one = 1;
+  (void)write(s.wakeFd, &one, sizeof(one));
+}
+void LatchError(Swapchain &s, VkResult error) {
+  if (s.deferredError == VK_SUCCESS || error == VK_ERROR_DEVICE_LOST)
+    s.deferredError = error;
+  s.changed.notify_all();
+}
+void PresentWorker(Swapchain &s) {
+  bool connectionFailed = false;
+  for (;;) {
+    uint64_t value;
+    while (read(s.wakeFd, &value, sizeof(value)) == sizeof(value)) {}
+    Swapchain::Job job;
+    bool haveJob;
+    {
+      std::lock_guard lock(s.stateMutex);
+      haveJob = !s.jobs.empty();
+      if (s.destroyed && !haveJob) break;
+      if (haveJob) job = s.jobs.front();
+    }
+    if (haveJob) {
+      // Short bounded waits let this chain drain X events while GPU work is
+      // pending. Independent swapchains have independent workers.
+      VkResult r = FN(vkWaitForFences)(s.device, 1, &job.completion->fence,
+                                     VK_TRUE, 1000000);
+      if (r != VK_TIMEOUT) {
+        std::string error;
+        if (r == VK_SUCCESS && !connectionFailed &&
+            !s.connection.QueuePresent(s.window, s.images[job.image].pixmap,
+                                       job.serial, error)) {
+          fprintf(stderr, "[VEXA][X11-WSI] present failed: %s\n",
+                  error.c_str());
+          connectionFailed = true;
+        }
+        if (r == VK_SUCCESS && connectionFailed) r = VK_ERROR_SURFACE_LOST_KHR;
+        std::lock_guard lock(s.stateMutex);
+        auto &i = s.images[job.image];
+        i.pending = false;
+        i.busy = r == VK_SUCCESS;
+        if (r != VK_SUCCESS) LatchError(s, r);
+        s.jobs.pop_front();
+        s.changed.notify_all();
+      }
+    }
+    std::string error;
+    if (!connectionFailed && !s.connection.PollEvents(haveJob ? 0 : UINT64_MAX,
+                                                     s.wakeFd, error)) {
+      fprintf(stderr, "[VEXA][X11-WSI] event stream failed: %s\n", error.c_str());
+      connectionFailed = true;
+      std::lock_guard lock(s.stateMutex);
+      LatchError(s, VK_ERROR_SURFACE_LOST_KHR);
+    }
+    if (connectionFailed) s.connection.Disconnect();
+    {
+      std::unique_lock lock(s.stateMutex);
+      for (auto &i : s.images) {
+        if (i.busy && !connectionFailed && s.connection.IsIdle(i.pixmap)) {
+          i.busy = false;
+          s.changed.notify_all();
+        }
+      }
+      if (connectionFailed && s.jobs.empty())
+        s.changed.wait(lock, [&] { return s.destroyed || !s.jobs.empty(); });
+    }
+  }
 }
 template <class T>
 VkResult Enumerate(const std::vector<T> &v, uint32_t *count, T *out) {
@@ -157,13 +311,18 @@ VkResult Ownership(Swapchain &s, Image &i, bool acquire) {
   return FN(vkEndCommandBuffer)(cmd);
 }
 void Cleanup(Swapchain &s) {
-  FN(vkDeviceWaitIdle)(s.device);
+  // The worker has drained all release submissions. Only an acquired image
+  // that was never presented can still have WSI-owned GPU work outstanding.
+  for (auto &i : s.images)
+    if (i.acquireSubmitted)
+      FN(vkWaitForFences)(s.device, 1, &i.acquireFence, VK_TRUE, UINT64_MAX);
   std::string error;
-  if (s.presentFence)
-    FN(vkDestroyFence)(s.device, s.presentFence, nullptr);
   if (s.pool)
     FN(vkDestroyCommandPool)(s.device, s.pool, nullptr);
   for (auto &i : s.images) {
+    i.presentFence.reset();
+    if (i.acquireFence)
+      FN(vkDestroyFence)(s.device, i.acquireFence, nullptr);
     if (i.busy)
       s.connection.WaitIdle(i.pixmap, UINT64_MAX, error);
     if (i.pixmap)
@@ -175,12 +334,19 @@ void Cleanup(Swapchain &s) {
     if (i.buffer)
       AHardwareBuffer_release(i.buffer);
   }
+  s.connection.Disconnect();
 }
 VkResult CreateSwapchain(VkDevice device, const VkSwapchainCreateInfoKHR *info,
                          const VkAllocationCallbacks *, VkSwapchainKHR *out) {
-  std::lock_guard lock(mutex);
-  if (!info || !out || !surfaces.count(info->surface))
-    return VK_ERROR_SURFACE_LOST_KHR;
+  uint32_t window, family;
+  {
+    std::lock_guard lock(mutex);
+    if (!info || !out || !surfaces.count(info->surface))
+      return VK_ERROR_SURFACE_LOST_KHR;
+    if (!deviceFamilies.count(device)) return Fail("No graphics queue registered");
+    window = surfaces.at(info->surface)->window;
+    family = deviceFamilies.at(device);
+  }
   if (info->pNext || info->flags || info->imageArrayLayers != 1 ||
       !info->imageUsage ||
       (info->imageUsage &
@@ -197,12 +363,10 @@ VkResult CreateSwapchain(VkDevice device, const VkSwapchainCreateInfoKHR *info,
       !info->imageExtent.width || !info->imageExtent.height ||
       info->imageExtent.width > 8192 || info->imageExtent.height > 8192)
     return Fail("Unsupported swapchain parameters (FIFO RGBA exclusive only)");
-  auto s = std::make_unique<Swapchain>();
+  auto s = std::make_shared<Swapchain>();
   s->device = device;
-  s->window = surfaces.at(info->surface)->window;
-  if (!deviceFamilies.count(device))
-    return Fail("No graphics queue registered");
-  s->family = deviceFamilies.at(device);
+  s->window = window;
+  s->family = family;
   FN(vkGetDeviceQueue)(device, s->family, 0, &s->queue);
   VkCommandPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
   poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
@@ -222,14 +386,17 @@ VkResult CreateSwapchain(VkDevice device, const VkSwapchainCreateInfoKHR *info,
   if (result != VK_SUCCESS)
     return result;
   VkFenceCreateInfo fenceInfo{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
-  result = FN(vkCreateFence)(device, &fenceInfo, nullptr, &s->presentFence);
-  if (result != VK_SUCCESS) {
-    Cleanup(*s);
-    return result;
-  }
   for (uint32_t n = 0; n < info->minImageCount; ++n) {
     s->images.emplace_back();
     auto &i = s->images.back();
+    i.presentFence = std::make_shared<PresentFence>();
+    i.presentFence->device = device;
+    result = FN(vkCreateFence)(device, &fenceInfo, nullptr, &i.presentFence->fence);
+    if (result != VK_SUCCESS)
+      break;
+    result = FN(vkCreateFence)(device, &fenceInfo, nullptr, &i.acquireFence);
+    if (result != VK_SUCCESS)
+      break;
     VkCommandBufferAllocateInfo commands{
         VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
     commands.commandPool = s->pool;
@@ -317,8 +484,22 @@ VkResult CreateSwapchain(VkDevice device, const VkSwapchainCreateInfoKHR *info,
     Cleanup(*s);
     return result;
   }
+  s->wakeFd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+  if (s->wakeFd < 0) {
+    Cleanup(*s);
+    return VK_ERROR_OUT_OF_HOST_MEMORY;
+  }
+  try {
+    s->worker = std::thread(PresentWorker, std::ref(*s));
+  } catch (const std::system_error &) {
+    Cleanup(*s);
+    return VK_ERROR_OUT_OF_HOST_MEMORY;
+  }
   *out = Handle<VkSwapchainKHR>(s.get());
-  chains.emplace(*out, std::move(s));
+  {
+    std::lock_guard lock(mutex);
+    chains.emplace(*out, std::move(s));
+  }
   return VK_SUCCESS;
 }
 VkImageLayout Layout(VkImageLayout v) {
@@ -361,21 +542,61 @@ void RegisterDevice(VkPhysicalDevice p, VkDevice d,
   FN(vkGetPhysicalDeviceQueueFamilyProperties)(p, &n, q.data());
   std::lock_guard lock(mutex);
   for (uint32_t i = 0; i < info->queueCreateInfoCount; ++i) {
-    auto f = info->pQueueCreateInfos[i].queueFamilyIndex;
-    if (f < n && (q[f].queueFlags & VK_QUEUE_GRAPHICS_BIT)) {
+    const auto &created = info->pQueueCreateInfos[i];
+    auto f = created.queueFamilyIndex;
+    for (uint32_t index = 0; index < created.queueCount; ++index) {
+      VkQueue queue{};
+      if (created.flags) {
+        VkDeviceQueueInfo2 query{VK_STRUCTURE_TYPE_DEVICE_QUEUE_INFO_2};
+        query.flags = created.flags;
+        query.queueFamilyIndex = f;
+        query.queueIndex = index;
+        auto get = FN(vkGetDeviceQueue2);
+        if (get) get(d, &query, &queue);
+      } else FN(vkGetDeviceQueue)(d, f, index, &queue);
+      if (queue) {
+        auto state = Queue(queue);
+        std::lock_guard lock(queuesMutex);
+        state->device = d;
+      }
+    }
+    if (!created.flags && !deviceFamilies.count(d) && f < n &&
+        (q[f].queueFlags & VK_QUEUE_GRAPHICS_BIT)) {
       deviceFamilies[d] = f;
-      return;
     }
   }
 }
+void DestroyDevice(VkDevice device, const VkAllocationCallbacks *alloc) {
+  {
+    std::lock_guard lock(mutex);
+    deviceFamilies.erase(device);
+  }
+  {
+    std::lock_guard lock(queuesMutex);
+    for (auto it = queues.begin(); it != queues.end();)
+      if (it->second->device == device) it = queues.erase(it);
+      else ++it;
+  }
+  FN(vkDestroyDevice)(device, alloc);
+}
 void DestroySwapchain(VkDevice, VkSwapchainKHR chain,
                       const VkAllocationCallbacks *) {
-  std::lock_guard lock(mutex);
-  auto it = chains.find(chain);
-  if (it != chains.end()) {
-    Cleanup(*it->second);
+  std::shared_ptr<Swapchain> s;
+  {
+    std::lock_guard lock(mutex);
+    auto it = chains.find(chain);
+    if (it == chains.end()) return;
+    s = std::move(it->second);
     chains.erase(it);
   }
+  {
+    std::lock_guard lock(s->stateMutex);
+    s->destroyed = true;
+    s->changed.notify_all();
+  }
+  Wake(*s);
+  if (s->worker.joinable()) s->worker.join();
+  Cleanup(*s);
 }
 VkResult Images(VkDevice, VkSwapchainKHR chain, uint32_t *n, VkImage *out) {
   std::lock_guard lock(mutex);
@@ -389,50 +610,81 @@ VkResult Images(VkDevice, VkSwapchainKHR chain, uint32_t *n, VkImage *out) {
 }
 VkResult Acquire(VkDevice device, VkSwapchainKHR chain, uint64_t timeout,
                  VkSemaphore semaphore, VkFence fence, uint32_t *out) {
-  std::lock_guard lock(mutex);
-  auto it = chains.find(chain);
-  if (it == chains.end() || !out || it->second->device != device)
-    return VK_ERROR_OUT_OF_DATE_KHR;
-  auto &s = *it->second;
-  std::string error;
+  std::shared_ptr<Swapchain> owner;
+  {
+    std::lock_guard lock(mutex);
+    auto it = chains.find(chain);
+    if (it == chains.end() || !out || it->second->device != device)
+      return VK_ERROR_OUT_OF_DATE_KHR;
+    owner = it->second;
+  }
+  auto &s = *owner;
+  std::unique_lock lock(s.stateMutex);
   using Clock = std::chrono::steady_clock;
-  const auto start = Clock::now();
-  // Poll every buffer before blocking on one. One timeout budget covers the
-  // call.
-  for (unsigned pass = 0; pass < 2; ++pass)
+  const auto now = Clock::now();
+  const auto maxNs = std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::time_point::max() - now).count();
+  const auto deadline = timeout == UINT64_MAX || timeout >= uint64_t(maxNs)
+      ? Clock::time_point::max() : now + std::chrono::nanoseconds(timeout);
+  for (;;) {
+    if (s.destroyed) return VK_ERROR_OUT_OF_DATE_KHR;
+    if (s.deferredError != VK_SUCCESS) return s.deferredError;
     for (uint32_t n = 0; n < s.images.size(); ++n) {
       auto &i = s.images[n];
-      if (i.acquired)
+      if (i.acquired || i.pending || i.busy)
         continue;
-      uint64_t left = 0;
-      if (pass) {
-        auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                           Clock::now() - start)
-                           .count();
-        left = timeout == UINT64_MAX
-                   ? UINT64_MAX
-                   : (timeout > uint64_t(elapsed) ? timeout - elapsed : 0);
-      }
-      if (i.busy && !s.connection.WaitIdle(i.pixmap, left, error))
-        continue;
-      i.busy = false;
       auto ownership = Ownership(s, i, true);
       if (ownership != VK_SUCCESS)
         return ownership;
       VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
       submit.commandBufferCount = 1;
       submit.pCommandBuffers = &i.acquireCommand;
-      submit.signalSemaphoreCount = semaphore ? 1 : 0;
+      // When a caller fence is supplied, signal both caller primitives in
+      // the trailing batch. A failed marker must not leave its semaphore
+      // signaled even though Acquire returned an error.
+      submit.signalSemaphoreCount = semaphore && !fence ? 1 : 0;
       submit.pSignalSemaphores = &semaphore;
-      auto result = FN(vkQueueSubmit)(s.queue, 1, &submit, fence);
-      if (result != VK_SUCCESS)
+      auto queue = Queue(s.queue);
+      std::lock_guard queueLock(queue->mutex);
+      auto result = FN(vkResetFences)(device, 1, &i.acquireFence);
+      if (result == VK_SUCCESS) {
+        // Reset has removed the previous completion. If Submit fails there
+        // is no outstanding use to wait for during swapchain destruction.
+        i.acquireSubmitted = false;
+        result = FN(vkQueueSubmit)(s.queue, 1, &submit, i.acquireFence);
+      }
+      if (result != VK_SUCCESS) {
+        LatchError(s, result);
         return result;
+      }
+      i.acquireSubmitted = true;
+      // A private fence tracks command-buffer lifetime even if the caller
+      // destroys/reuses its fence before destroying this swapchain.
+      if (fence) {
+        VkSubmitInfo signal{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+        signal.signalSemaphoreCount = semaphore ? 1 : 0;
+        signal.pSignalSemaphores = &semaphore;
+        result = FN(vkQueueSubmit)(s.queue, 1, &signal, fence);
+        if (result != VK_SUCCESS) {
+          LatchError(s, result);
+          return result;
+        }
+      }
       i.acquired = true;
       i.initialized = true;
       *out = n;
       return VK_SUCCESS;
     }
-  return timeout ? VK_TIMEOUT : VK_NOT_READY;
+    if (!timeout) return VK_NOT_READY;
+    if (deadline == Clock::time_point::max()) s.changed.wait(lock);
+    else if (s.changed.wait_until(lock, deadline) == std::cv_status::timeout) {
+      // Recheck state at the deadline: an IdleNotify may have raced expiry.
+      if (s.deferredError != VK_SUCCESS) return s.deferredError;
+      if (s.destroyed) return VK_ERROR_OUT_OF_DATE_KHR;
+      const bool available = std::any_of(s.images.begin(), s.images.end(),
+          [](const Image &i) { return !i.acquired && !i.pending && !i.busy; });
+      if (!available) return VK_TIMEOUT;
+    }
+  }
 }
 VkResult Acquire2(VkDevice device, const VkAcquireNextImageInfoKHR *info,
                   uint32_t *out) {
@@ -489,64 +741,38 @@ VkResult Present(VkQueue queue, const VkPresentInfoKHR *info) {
   if (!info->swapchainCount || !info->pSwapchains || !info->pImageIndices ||
       (info->waitSemaphoreCount && !info->pWaitSemaphores))
     return Fail("Invalid Present arguments", VK_ERROR_INITIALIZATION_FAILED);
-  std::vector<VkCommandBuffer> commands;
-  VkDevice device = VK_NULL_HANDLE;
-  VkFence fence = VK_NULL_HANDLE;
-  for (uint32_t n = 0; n < info->swapchainCount; ++n) {
-    auto it = chains.find(info->pSwapchains[n]);
-    if (it == chains.end())
-      return VK_ERROR_OUT_OF_DATE_KHR;
-    auto &s = *it->second;
-    if (!device) {
-      device = s.device;
-      fence = s.presentFence;
-    } else if (device != s.device) {
-      return Fail("Present swapchains use different devices",
-                  VK_ERROR_INITIALIZATION_FAILED);
-    }
-    auto index = info->pImageIndices[n];
-    if (queue != s.queue || index >= s.images.size() ||
-        !s.images[index].acquired)
-      return Fail("Present queue/image not acquired by this swapchain");
-    auto result = Ownership(s, s.images[index], false);
-    if (result != VK_SUCCESS)
-      return result;
-    commands.push_back(s.images[index].releaseCommand);
-  }
   std::vector<VkPipelineStageFlags> stages(info->waitSemaphoreCount,
                                            VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
-  VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
-  submit.commandBufferCount = commands.size();
-  submit.pCommandBuffers = commands.data();
-  submit.waitSemaphoreCount = info->waitSemaphoreCount;
-  submit.pWaitSemaphores = info->pWaitSemaphores;
-  submit.pWaitDstStageMask = stages.data();
-  // Waiting for this release submission is enough to hand the AHB to X11.
-  // QueueWaitIdle also waits for unrelated work queued by the game.
-  VkResult result = FN(vkResetFences)(device, 1, &fence);
-  if (result != VK_SUCCESS)
-    return result;
-  result = FN(vkQueueSubmit)(queue, 1, &submit, fence);
-  if (result != VK_SUCCESS)
-    return result;
-  result = FN(vkWaitForFences)(device, 1, &fence, VK_TRUE, UINT64_MAX);
-  if (result != VK_SUCCESS)
-    return result;
-  std::string error;
+  // Phase 1: validate each entry and record its release command. Validation
+  // results are written to pResults immediately; the X11 handoff happens later
+  // on the worker and deferred errors surface on the next Acquire/Present.
+  std::vector<VkCommandBuffer> commands;
+  std::vector<std::tuple<Swapchain *, uint32_t, uint32_t>> accepted;
+  std::vector<Swapchain *> lockedChains;
+  std::vector<std::unique_lock<std::mutex>> chainLocks;
+  VkResult result = VK_SUCCESS;
   for (uint32_t n = 0; n < info->swapchainCount; ++n) {
     auto it = chains.find(info->pSwapchains[n]);
     VkResult r = VK_ERROR_OUT_OF_DATE_KHR;
     if (it != chains.end()) {
       auto &s = *it->second;
+      if (std::find(lockedChains.begin(), lockedChains.end(), &s) != lockedChains.end())
+        return Fail("Duplicate present swapchain", VK_ERROR_INITIALIZATION_FAILED);
+      lockedChains.push_back(&s);
+      chainLocks.emplace_back(s.stateMutex);
       uint32_t index = info->pImageIndices[n];
-      if (index < s.images.size() && s.images[index].acquired) {
-        auto &i = s.images[index];
-        r = s.connection.Present(s.window, i.pixmap, ++s.serial, error)
-                ? VK_SUCCESS
-                : Fail(error.c_str(), VK_ERROR_SURFACE_LOST_KHR);
+      if (s.deferredError != VK_SUCCESS) {
+        r = s.deferredError;
+      } else if (s.destroyed) {
+        r = VK_ERROR_OUT_OF_DATE_KHR;
+      } else if (queue != s.queue || index >= s.images.size() ||
+                 !s.images[index].acquired || s.images[index].pending) {
+        r = Fail("Present queue/image not acquired by this swapchain");
+      } else {
+        r = Ownership(s, s.images[index], false);
         if (r == VK_SUCCESS) {
-          i.acquired = false;
-          i.busy = true;
+          commands.push_back(s.images[index].releaseCommand);
+          accepted.emplace_back(&s, index, n);
         }
       }
     }
@@ -554,6 +780,54 @@ VkResult Present(VkQueue queue, const VkPresentInfoKHR *info) {
       info->pResults[n] = r;
     if (r != VK_SUCCESS)
       result = r;
+  }
+  if (accepted.empty())
+    return result;
+  // Phase 2: one submission for every accepted image. A single submit consumes
+  // the caller's wait semaphores exactly once, which binary semaphores
+  // require, and keeps VkQueue ordering on the caller's thread.
+  const VkDevice device = std::get<0>(accepted.front())->device;
+  std::shared_ptr<PresentFence> completion;
+  VkResult r;
+  if (accepted.size() == 1) {
+    completion =
+        std::get<0>(accepted.front())->images[std::get<1>(accepted.front())]
+            .presentFence;
+    r = FN(vkResetFences)(device, 1, &completion->fence);
+  } else {
+    completion = std::make_shared<PresentFence>();
+    completion->device = device;
+    VkFenceCreateInfo fi{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+    r = FN(vkCreateFence)(device, &fi, nullptr, &completion->fence);
+  }
+  if (r == VK_SUCCESS) {
+    VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+    submit.commandBufferCount = commands.size();
+    submit.pCommandBuffers = commands.data();
+    submit.waitSemaphoreCount = info->waitSemaphoreCount;
+    submit.pWaitSemaphores = info->pWaitSemaphores;
+    submit.pWaitDstStageMask = stages.data();
+    r = Submit(queue, 1, &submit, completion->fence);
+  }
+  if (r != VK_SUCCESS) {
+    // A submission failure applies to every accepted entry. The images stay
+    // acquired so the caller can retry presenting them.
+    if (info->pResults)
+      for (auto &a : accepted)
+        info->pResults[std::get<2>(a)] = r;
+    if (r == VK_ERROR_DEVICE_LOST)
+      for (auto &[s, index, entry] : accepted) LatchError(*s, r);
+    return r;
+  }
+  // Phase 3: mark and enqueue. Serials are assigned here so the worker FIFO
+  // preserves each swapchain's order. Shared completion owns a multi-image
+  // submission's fence until every affected worker has finished waiting.
+  for (auto &[s, index, entry] : accepted) {
+    auto &i = s->images[index];
+    i.acquired = false;
+    i.pending = true;
+    s->jobs.push_back({completion, index, ++s->serial});
+    Wake(*s);
   }
   return result;
 }
@@ -579,5 +853,12 @@ extern "C" void *Vexa_X11VulkanGetProcAddr(const char *name) {
   ENTRY("vkGetSwapchainImagesKHR", Images);
   ENTRY("vkAcquireNextImageKHR", Acquire);
   ENTRY("vkQueuePresentKHR", Present);
+  ENTRY("vkQueueSubmit", Submit);
+  ENTRY("vkQueueSubmit2", Submit2);
+  ENTRY("vkQueueSubmit2KHR", Submit2KHR);
+  ENTRY("vkQueueBindSparse", BindSparse);
+  ENTRY("vkQueueWaitIdle", QueueIdle);
+  ENTRY("vkDeviceWaitIdle", DeviceIdle);
+  ENTRY("vkDestroyDevice", DestroyDevice);
   return nullptr;
 }

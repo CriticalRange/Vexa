@@ -23,6 +23,12 @@ public:
     bool ImportHardwareBuffer(uint32_t window, uint32_t width, uint32_t height,
                               AHardwareBuffer *buffer, uint32_t &pixmap, std::string &error);
     bool Present(uint32_t window, uint32_t pixmap, uint32_t serial, std::string &error);
+    // Send without a round-trip. PollEvents reports asynchronous protocol errors
+    // and consumes IdleNotify; an idle pixmap alone may be reused.
+    bool QueuePresent(uint32_t window, uint32_t pixmap, uint32_t serial, std::string &error);
+    bool PollEvents(uint64_t timeoutNs, int wakeFd, std::string &error);
+    bool IsIdle(uint32_t pixmap);
+    void Disconnect();
     // timeoutNs=0 polls available packets; UINT64_MAX is clamped to two seconds.
     // False on timeout leaves the pixmap busy and must not permit its reuse.
     bool WaitIdle(uint32_t pixmap, uint64_t timeoutNs, std::string &error);

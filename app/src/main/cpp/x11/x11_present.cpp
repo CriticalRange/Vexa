@@ -71,6 +71,17 @@ struct PresentConnection::Impl {
         return false;
     }
     bool Ready(std::string &error) { return fd >= 0 || Fail(error, "X11 connection is closed", false); }
+    bool QueuePixmap(uint32_t window, uint32_t pixmap, uint32_t serial, std::string &error) {
+        error.clear();
+        if (!Ready(error)) return false;
+        auto p = pixmaps.find(pixmap);
+        if (p == pixmaps.end() || p->second.window != window) return Fail(error, "Pixmap does not belong to this presentation window", false);
+        if (p->second.busy) return Fail(error, "Pixmap is still in use by X11; wait for IdleNotify before reuse", false);
+        auto b = Request(present, 1, 72); Put32(b, 4, window); Put32(b, 8, pixmap); Put32(b, 12, serial);
+        p->second.serial = serial; p->second.busy = true;
+        uint16_t seq;
+        return Send(b, "PresentPixmap", Clock::now() + IoLimit, seq, error);
+    }
     void Reset() {
         if (fd >= 0) close(fd);
         fd = -1; base = mask = root = visual = 0; rootDepth = dri3 = present = 0;
@@ -384,16 +395,61 @@ bool PresentConnection::ImportHardwareBuffer(uint32_t window, uint32_t width, ui
 }
 
 bool PresentConnection::Present(uint32_t window, uint32_t pixmap, uint32_t serial, std::string &error) {
+    auto &i = *impl_; std::lock_guard<std::mutex> lock(i.mutex);
+    return i.QueuePixmap(window, pixmap, serial, error) && i.RoundTrip(Clock::now() + IoLimit, error);
+}
+
+bool PresentConnection::QueuePresent(uint32_t window, uint32_t pixmap, uint32_t serial, std::string &error) {
+    auto &i = *impl_; std::lock_guard<std::mutex> lock(i.mutex);
+    return i.QueuePixmap(window, pixmap, serial, error);
+}
+
+bool PresentConnection::PollEvents(uint64_t timeoutNs, int wakeFd, std::string &error) {
     auto &i = *impl_; std::lock_guard<std::mutex> lock(i.mutex); error.clear();
     if (!i.Ready(error)) return false;
-    auto p = i.pixmaps.find(pixmap);
-    if (p == i.pixmaps.end() || p->second.window != window) return i.Fail(error, "Pixmap does not belong to this presentation window", false);
-    if (p->second.busy) return i.Fail(error, "Pixmap is still in use by X11; wait for IdleNotify before reuse", false);
-    const auto deadline = Clock::now() + IoLimit;
-    auto b = Request(i.present, 1, 72); Put32(b, 4, window); Put32(b, 8, pixmap); Put32(b, 12, serial);
-    p->second.serial = serial; p->second.busy = true;
-    uint16_t seq;
-    return i.Send(b, "PresentPixmap", deadline, seq, error) && i.RoundTrip(deadline, error);
+    const auto bounded = std::min<uint64_t>(timeoutNs, std::chrono::duration_cast<std::chrono::nanoseconds>(IoLimit).count());
+    const auto deadline = Clock::now() + std::chrono::nanoseconds(bounded);
+    for (;;) {
+        bool dispatched = false;
+        while (i.received.size() >= 32) {
+            size_t count = 32;
+            const auto type = i.received[0] & 0x7f;
+            if (type == 1 || type == 35) {
+                const auto extra = Get32(i.received.data() + 4);
+                if (extra > (MaxPacket - 32) / 4) return i.Fail(error, "X11 packet length exceeds limit");
+                count += size_t(extra) * 4;
+            }
+            // A partial packet is retained across polls, including timeout=0.
+            if (i.received.size() < count) break;
+            Bytes packet(i.received.begin(), i.received.begin() + count);
+            i.received.erase(i.received.begin(), i.received.begin() + count);
+            if (!i.Dispatch(std::move(packet), error)) return false;
+            dispatched = true;
+        }
+        if (dispatched) return true;
+        pollfd descriptors[2]{{i.fd, POLLIN, 0}, {wakeFd, POLLIN, 0}};
+        const int result = poll(descriptors, wakeFd >= 0 ? 2 : 1, Milliseconds(deadline));
+        if (result < 0 && errno == EINTR) {
+            if (Clock::now() >= deadline) return true;
+            continue;
+        }
+        if (result < 0) return i.Fail(error, "X11 event poll: " + std::string(strerror(errno)));
+        if (!result || (wakeFd >= 0 && descriptors[1].revents)) return true;
+        if (!(descriptors[0].revents & POLLIN)) return i.Fail(error, "X11 event socket disconnected");
+        if (!i.ReadMore(Clock::now() + IoLimit, error, true)) return false;
+        // Dispatch complete packets even if the requested poll deadline passed.
+    }
+}
+
+bool PresentConnection::IsIdle(uint32_t pixmap) {
+    auto &i = *impl_; std::lock_guard<std::mutex> lock(i.mutex);
+    const auto found = i.pixmaps.find(pixmap);
+    return i.fd >= 0 && found != i.pixmaps.end() && !found->second.busy;
+}
+
+void PresentConnection::Disconnect() {
+    auto &i = *impl_; std::lock_guard<std::mutex> lock(i.mutex);
+    i.Reset();
 }
 
 bool PresentConnection::WaitIdle(uint32_t pixmap, uint64_t timeoutNs, std::string &error) {
