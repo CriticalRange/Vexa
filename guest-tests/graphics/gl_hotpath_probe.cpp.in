@@ -1,0 +1,181 @@
+#include <EGL/egl.h>
+#include <GLES3/gl32.h>
+#include <algorithm>
+#include <array>
+#include <atomic>
+#include <cassert>
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <functional>
+#include <memory>
+#include <mutex>
+#include <regex>
+#include <string>
+#include <string_view>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
+#include <unistd.h>
+#include <sys/syscall.h>
+using GLdouble = double;
+#define GL_DOUBLE 0x140A
+#define GL_BUFFER_IMMUTABLE_STORAGE 0x821F
+static unsigned queries, capacityQueries, writes, clocks, pixelStores;
+static void CountStore(GLenum n, GLint v) { ++pixelStores; glPixelStorei(n,v); }
+static void CountGet(GLenum n, GLint* v) { ++queries; glGetIntegerv(n,v); }
+static void CountCapacity(GLenum t, GLenum n, GLint64* v) { ++capacityQueries; glGetBufferParameteri64v(t,n,v); }
+static void Count1i(GLuint p, GLint l, GLint v) { ++writes; glProgramUniform1i(p,l,v); }
+static void Count1f(GLuint p, GLint l, GLfloat v) { ++writes; glProgramUniform1f(p,l,v); }
+static void Count4fv(GLuint p, GLint l, GLsizei c, const GLfloat* v) { ++writes; glProgramUniform4fv(p,l,c,v); }
+static void Count1iv(GLuint p, GLint l, GLsizei c, const GLint* v) { ++writes; glProgramUniform1iv(p,l,c,v); }
+static void CountM4(GLuint p, GLint l, GLsizei c, GLboolean t, const GLfloat* v) { ++writes; glProgramUniformMatrix4fv(p,l,c,t,v); }
+static void CountU4(GLint l, GLsizei c, const GLfloat* v) { ++writes; glUniform4fv(l,c,v); }
+static void CountU1(GLint l, GLint v) { ++writes; glUniform1i(l,v); }
+#define glGetIntegerv CountGet
+#define glGetBufferParameteri64v CountCapacity
+#define glProgramUniform1i Count1i
+#define glProgramUniform1f Count1f
+#define glProgramUniform4fv Count4fv
+#define glProgramUniform1iv Count1iv
+#define glProgramUniformMatrix4fv CountM4
+#define glUniform4fv CountU4
+#define glUniform1i CountU1
+#define glPixelStorei CountStore
+static uint64_t GLHostNowNs() { ++clocks; return std::chrono::steady_clock::now().time_since_epoch().count(); }
+static bool VexaTboWriteLog() { return false; }
+static bool VexaTboBoundTarget(GLenum, GLint*) { return false; }
+static GLint VexaHostBoundBuffer(GLenum) { return 0; }
+@UPLOAD_OPTIONS@
+@UPLOAD@
+@UNPACK@
+#include "legacy_clip_state.h"
+#include "legacy_client_state.h"
+#include "arb_assembly_state.h"
+#include "program_cache_state.inc"
+@PRECISION@
+static bool VexaClipAvailable();
+static int VexaClipQuery(GLenum,GLfloat*);
+static int VexaLegacyQuery(GLenum,GLfloat*);
+static int VexaAssemblyTarget(GLenum);
+static bool VexaAssemblyQuery(GLenum,GLfloat*);
+#include "alpha_test.inc"
+#include "legacy_clip.inc"
+#include "arb_assembly_runtime.inc"
+#include "legacy_client_runtime.inc"
+#include "legacy_client_host.inc"
+static GLuint VexaBuildStrippedVertexProgram(GLuint) { assert(false); return 0; }
+@PRE_DRAW@
+
+static GLuint Shader(GLenum kind, const std::string& source) {
+  GLuint s=glCreateShader(kind); const char* p=source.c_str(); glShaderSource(s,1,&p,nullptr); glCompileShader(s);
+  GLint ok=0;glGetShaderiv(s,GL_COMPILE_STATUS,&ok);
+  if(!ok){char log[4096]{};glGetShaderInfoLog(s,sizeof(log),nullptr,log);fprintf(stderr,"%s\n%s\n",log,p);}assert(ok);return s;
+}
+static GLuint Program(const std::string& vs,const std::string& fs) {
+  GLuint p=glCreateProgram(),v=Shader(GL_VERTEX_SHADER,vs),f=Shader(GL_FRAGMENT_SHADER,fs);
+  glAttachShader(p,v);glAttachShader(p,f);glLinkProgram(p);GLint ok=0;glGetProgramiv(p,GL_LINK_STATUS,&ok);assert(ok);
+  glDeleteShader(v);glDeleteShader(f);return p;
+}
+static const char* vertex=R"(#version 310 es
+precision highp float;
+layout(location=0) in vec4 tint;
+out vec4 color;
+void main(){vec2 p=vec2((gl_VertexID<<1)&2,gl_VertexID&2);gl_Position=vec4(p*2.-1.,0.,1.);color=tint;}
+)";
+static const char* fragment=R"(#version 310 es
+precision highp float;
+in vec4 color;
+layout(location=0) out vec4 outputColor;
+void main(){outputColor=color;}
+)";
+static void Clear() {glViewport(0,0,2,2);glClearColor(0,0,0,1);glClear(GL_COLOR_BUFFER_BIT);}
+static void Pixel(int r,int g,int b) {
+  GLubyte px[4]{};glReadPixels(0,0,1,1,GL_RGBA,GL_UNSIGNED_BYTE,px);
+  if(abs(px[0]-r)>1||abs(px[1]-g)>1||abs(px[2]-b)>1)fprintf(stderr,"pixel %u,%u,%u expected %d,%d,%d\n",px[0],px[1],px[2],r,g,b);
+  assert(abs(px[0]-r)<=1&&abs(px[1]-g)<=1&&abs(px[2]-b)<=1);assert(glGetError()==GL_NO_ERROR);
+}
+int main(int argc,char** argv) {
+  bool compat=argc>1&&!strcmp(argv[1],"compat");
+  if(compat){setenv("VEXA_GL_ALPHA_TEST","1",1);setenv("VEXA_GL_CLIP_PLANES","1",1);}
+  EGLDisplay d=eglGetDisplay(EGL_DEFAULT_DISPLAY);assert(eglInitialize(d,nullptr,nullptr));
+  EGLint ca[]={EGL_RENDERABLE_TYPE,EGL_OPENGL_ES3_BIT,EGL_SURFACE_TYPE,EGL_PBUFFER_BIT,EGL_RED_SIZE,8,EGL_GREEN_SIZE,8,EGL_BLUE_SIZE,8,EGL_ALPHA_SIZE,8,EGL_NONE};EGLConfig cfg;EGLint n;assert(eglChooseConfig(d,ca,&cfg,1,&n)&&n);
+  EGLint attrs[]={EGL_CONTEXT_CLIENT_VERSION,3,EGL_NONE},sa[]={EGL_WIDTH,2,EGL_HEIGHT,2,EGL_NONE};
+  EGLContext a=eglCreateContext(d,cfg,EGL_NO_CONTEXT,attrs),b=eglCreateContext(d,cfg,a,attrs);assert(a&&b);
+  EGLSurface surface=eglCreatePbufferSurface(d,cfg,sa);assert(eglMakeCurrent(d,surface,surface,a));
+  struct Cleanup {
+    EGLDisplay d; EGLContext a,b; EGLSurface s;
+    ~Cleanup(){eglMakeCurrent(d,EGL_NO_SURFACE,EGL_NO_SURFACE,EGL_NO_CONTEXT);eglDestroyContext(d,b);eglDestroyContext(d,a);eglDestroySurface(d,s);eglTerminate(d);}
+  } cleanup {d,a,b,surface};
+  VexaRegisterProgramContext(a,EGL_NO_CONTEXT);VexaRegisterProgramContext(b,a);VexaSelectProgramContext(a);
+  GLuint buf;glGenBuffers(1,&buf);glBindBuffer(GL_ARRAY_BUFFER,buf);std::vector<unsigned char> data(1024,17);glBufferData(GL_ARRAY_BUFFER,data.size(),data.data(),GL_DYNAMIC_DRAW);
+  queries=capacityQueries=clocks=0;unsigned char value=99;
+  fexfn_impl_libGL_glBufferSubData(GL_ARRAY_BUFFER,3,1,&value);
+  bool profile=VexaUploadProfileEnabled(),orphan=VexaOrphanExperiment.load();
+  assert(capacityQueries==unsigned(profile||orphan));assert(clocks==(profile?2u:0u));
+  auto* map=static_cast<unsigned char*>(glMapBufferRange(GL_ARRAY_BUFFER,0,1024,GL_MAP_READ_BIT));assert(map&&map[2]==17&&map[3]==99&&map[4]==17);glUnmapBuffer(GL_ARRAY_BUFFER);
+  if(profile){for(int i=0;i<300;++i)fexfn_impl_libGL_glBufferSubData(GL_ARRAY_BUFFER,i,1,&value);assert(VexaUploadSamples.size()==256&&VexaUploadDropped>0);VexaUploadReport();}
+  else assert(VexaUploadSamples.empty());
+  puts("PASS upload opt-in gates and partial-write preservation");
+  if(orphan){
+    std::fill(data.begin(),data.end(),21);fexfn_impl_libGL_glBufferSubData(GL_ARRAY_BUFFER,0,1024,data.data());map=static_cast<unsigned char*>(glMapBufferRange(GL_ARRAY_BUFFER,0,1024,GL_MAP_READ_BIT));assert(map&&map[0]==21&&map[1023]==21);glUnmapBuffer(GL_ARRAY_BUFFER);
+    const char* ext=reinterpret_cast<const char*>(glGetString(GL_EXTENSIONS));
+    using Storage=void(*)(GLenum,GLsizeiptr,const void*,GLbitfield);
+    auto storage=reinterpret_cast<Storage>(eglGetProcAddress("glBufferStorageEXT"));
+    if(ext&&strstr(ext,"GL_EXT_buffer_storage")&&storage){
+      GLuint immutable;glGenBuffers(1,&immutable);glBindBuffer(GL_ARRAY_BUFFER,immutable);storage(GL_ARRAY_BUFFER,1024,data.data(),0x0100|GL_MAP_READ_BIT);
+      std::fill(data.begin(),data.end(),42);fexfn_impl_libGL_glBufferSubData(GL_ARRAY_BUFFER,0,1024,data.data());assert(glGetError()==GL_NO_ERROR);
+      map=static_cast<unsigned char*>(glMapBufferRange(GL_ARRAY_BUFFER,0,1024,GL_MAP_READ_BIT));assert(map&&map[1023]==42);glUnmapBuffer(GL_ARRAY_BUFFER);
+      puts("PASS immutable storage is updated without orphaning");
+    }
+    puts("PASS opt-in full-buffer orphan");
+  }
+  if(profile||orphan)return 0;
+  capacityQueries=queries=clocks=0;fexfn_impl_libGL_glBufferSubData(GL_TEXTURE_2D,0,1,&value);assert(glGetError()==GL_INVALID_ENUM);assert(!capacityQueries&&!queries&&!clocks);
+  puts("PASS default path preserves native invalid-target errors without queries");
+  pixelStores=0;{VexaUnpackScope unpack;}assert(pixelStores==2);
+  glPixelStorei(GL_UNPACK_ALIGNMENT,1);pixelStores=0;{VexaUnpackScope unpack;}assert(pixelStores==0);
+  glPixelStorei(GL_UNPACK_ROW_LENGTH,7);glPixelStorei(GL_UNPACK_SKIP_PIXELS,1);glPixelStorei(GL_UNPACK_SKIP_ROWS,2);
+  glPixelStorei(GL_UNPACK_IMAGE_HEIGHT,9);glPixelStorei(GL_UNPACK_SKIP_IMAGES,3);glBindBuffer(GL_PIXEL_UNPACK_BUFFER,buf);
+  {VexaUnpackScope unpack;GLint v;glGetIntegerv(GL_PIXEL_UNPACK_BUFFER_BINDING,&v);assert(v==0);glGetIntegerv(GL_UNPACK_ROW_LENGTH,&v);assert(v==0);}
+  GLint restored;glGetIntegerv(GL_UNPACK_ROW_LENGTH,&restored);assert(restored==7);glGetIntegerv(GL_UNPACK_SKIP_IMAGES,&restored);assert(restored==3);glGetIntegerv(GL_PIXEL_UNPACK_BUFFER_BINDING,&restored);assert(restored==GLint(buf));
+  glBindBuffer(GL_PIXEL_UNPACK_BUFFER,0);for(GLenum name:{GL_UNPACK_ROW_LENGTH,GL_UNPACK_SKIP_PIXELS,GL_UNPACK_SKIP_ROWS,GL_UNPACK_IMAGE_HEIGHT,GL_UNPACK_SKIP_IMAGES})glPixelStorei(name,0);
+  puts("PASS unpack changes only necessary fields and restores nondefault state/PBO");
+  if(!compat){queries=0;{VexaLegacyArrayScope scope;assert(scope.Ready);}VexaPreDraw();assert(queries==0);puts("PASS modern draw has no compatibility state query");}
+  GLuint program=Program(VexaBGRAInstrument(vertex),fragment);glUseProgram(program);
+  GLubyte colors[]={255,0,0,255,255,0,0,255,255,0,0,255};glBufferData(GL_ARRAY_BUFFER,sizeof(colors),colors,GL_STATIC_DRAW);
+  glEnableVertexAttribArray(0);fexfn_impl_libGL_glVertexAttribPointer(0,0x80E1,GL_UNSIGNED_BYTE,GL_TRUE,0,nullptr);
+  auto draw=[&]{Clear();VexaLegacyArrayScope scope(0,3);assert(scope.Ready);glDrawArrays(GL_TRIANGLES,0,3);};draw();Pixel(0,0,255);
+  assert(eglMakeCurrent(d,surface,surface,b));VexaSelectProgramContext(b);glUseProgram(program);glBindBuffer(GL_ARRAY_BUFFER,buf);glEnableVertexAttribArray(0);glVertexAttribPointer(0,4,GL_UNSIGNED_BYTE,GL_TRUE,0,nullptr);assert(!VexaProgramContext().LegacyClient.Used);draw();Pixel(255,0,0);
+  assert(eglMakeCurrent(d,surface,surface,a));VexaSelectProgramContext(a);draw();Pixel(0,0,255);
+  fexfn_impl_libGL_glVertexAttribPointer(0,4,GL_UNSIGNED_BYTE,GL_TRUE,0,nullptr);draw();Pixel(255,0,0);
+  puts("PASS shared-context BGRA selector reset and conventional pointer replacement");
+  if(!compat)return 0;
+  GLuint p=Program(VexaClipInstrument(vertex,GL_VERTEX_SHADER),VexaClipInstrument(VexaAlphaInstrument(fragment),GL_FRAGMENT_SHADER));glUseProgram(p);
+  auto& ctx=VexaProgramContext();ctx.AlphaTest=true;VexaAlphaFunc(GL_GREATER,.5f);
+  writes=0;VexaApplyAlphaTest();VexaApplyClipPlanes();assert(writes>0);writes=0;
+  for(int i=0;i<100;++i){VexaApplyAlphaTest();VexaApplyClipPlanes();}assert(writes==0);
+  Clear();glDrawArrays(GL_TRIANGLES,0,3);Pixel(255,0,0);
+  ctx.AlphaFunction=GL_NEVER;VexaApplyAlphaTest();Clear();glDrawArrays(GL_TRIANGLES,0,3);Pixel(0,0,0);
+  ctx.AlphaTest=false;VexaApplyAlphaTest();ctx.Clip.Enabled[0]=1;ctx.Clip.Equation[0][3]=-1;VexaApplyClipPlanes();Clear();glDrawArrays(GL_TRIANGLES,0,3);Pixel(0,0,0);
+  ctx.Clip.Equation[0][3]=1;VexaApplyClipPlanes();Clear();glDrawArrays(GL_TRIANGLES,0,3);Pixel(255,0,0);
+  ctx.Clip.Projection[0]=2;VexaApplyClipPlanes();assert(ctx.Clip.Projected[0]==0&&ctx.Clip.Projected[3]==1);
+  auto alphaA=ctx.AlphaTest;ctx.AlphaTest=true;ctx.AlphaFunction=GL_NEVER;VexaApplyAlphaTest();
+  assert(eglMakeCurrent(d,surface,surface,b));VexaSelectProgramContext(b);glUseProgram(p);VexaApplyAlphaTest();VexaApplyClipPlanes();Clear();glDrawArrays(GL_TRIANGLES,0,3);Pixel(255,0,0);
+  assert(eglMakeCurrent(d,surface,surface,a));VexaSelectProgramContext(a);glUseProgram(p);VexaApplyAlphaTest();Clear();glDrawArrays(GL_TRIANGLES,0,3);Pixel(0,0,0);
+  // A successful relink resets native uniforms and must invalidate applied-value caches.
+  glLinkProgram(p);ctx.Shared->AlphaPrograms.erase(p);ctx.Shared->ClipPrograms.erase(p);writes=0;VexaApplyAlphaTest();VexaApplyClipPlanes();assert(writes>0);
+  puts("PASS unchanged alpha/clip writes elided; changes, sharing and relink reapplied");
+  ctx.AlphaTest=alphaA;std::fill_n(ctx.Clip.Enabled,6,0);glUseProgram(0);
+  auto& assembly=ctx.Assembly;assembly.Enabled[0]=assembly.Enabled[1]=true;
+  assembly.Default[0].Revision=1;assembly.Default[1].Revision=2;
+  assembly.Default[0].Shader=Shader(GL_VERTEX_SHADER,R"(#version 310 es
+precision highp float;uniform vec4 uVLocal[1];void main(){vec2 p=vec2((gl_VertexID<<1)&2,gl_VertexID&2);gl_Position=vec4(p*2.-1.,0.,1.)+uVLocal[0]*.001;})");
+  assembly.Default[1].Shader=Shader(GL_FRAGMENT_SHADER,R"(#version 310 es
+precision highp float;uniform vec4 uFLocal[1];uniform vec4 uFEnv[1];out vec4 color;void main(){color=uFLocal[0]+uFEnv[0]*.5;})");
+  assembly.Default[1].Local[0]={1,0,0,1};
+  auto arbDraw=[&]{Clear();VexaAssemblyDrawScope scope;assert(scope.Ready);glDrawArrays(GL_TRIANGLES,0,3);};arbDraw();Pixel(255,0,0);writes=0;arbDraw();assert(writes==0);
+  assembly.Env[1][0]={0,0,1,0};arbDraw();Pixel(255,0,128);assembly.Default[1].Local[0]={0,1,0,1};arbDraw();Pixel(0,255,128);
+  puts("PASS ARB local/env uniform cache updates only changed native values");
+}

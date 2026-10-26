@@ -86,6 +86,7 @@ namespace Vexa::Runtime {
             "VEXA_REAL_X11", "VEXA_X11_SOCKET",
             "VEXA_GRAPHICS_BACKEND", "VEXA_GLX_SWAP_INTERVAL", "VEXA_GL_SHADOW",
             "VEXA_VK_PROFILE", "VEXA_VK_MAILBOX", "VEXA_VK_OPTIMIZE_LOOPS",
+            "VEXA_VK_KEEP_DEDICATED_PREF", "VEXA_VK_NO_SPEC_COMPOSITE_FIX",
         };
         for (const auto &key : hostControls) {
             ::unsetenv(key.c_str());
