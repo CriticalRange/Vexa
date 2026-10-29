@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <unistd.h>
 
 #include <FEXCore/Config/Config.h>
 #include <FEXCore/Utils/Allocator.h>
@@ -32,16 +33,18 @@ namespace Vexa::Runtime::Init {
         }
 
         const bool is64 = FEXCore::Config::Get_IS64BIT_MODE();
+        const long systemPageSize = sysconf(_SC_PAGESIZE);
+        const size_t pageSize = systemPageSize > 0 ? static_cast<size_t>(systemPageSize) : 4096;
 
         if (is64) {
             g_base48 =
-                    FEXCore::Allocator::Setup48BitAllocatorIfExists();
+                    FEXCore::Allocator::Setup48BitAllocatorIfExists(pageSize);
         } else {
             constexpr uint64_t First64BitAddr = 0x1'0000'0000ULL;
             g_low4gb = FEXCore::Allocator::StealMemoryRegion(First64BitAddr,
                                                              First64BitAddr + First64BitAddr);
 
-            FEXCore::Allocator::SetupHooks();
+            FEXCore::Allocator::SetupHooks(pageSize);
             g_alloc32 = FEX::HLE::Create32BitAllocator();
 
             // Upstream hands the x32 handler a passthrough allocator because

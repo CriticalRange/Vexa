@@ -18,6 +18,7 @@ FEX_STATIC_LIBS = (
     "FEXCore/Source/libFEXCore.a", "FEXCore/Source/libFEXCore_Base.a",
     "Source/Tools/LinuxEmulation/libLinuxEmulation.a", "Source/Common/libCommon.a",
     "Source/Tools/CommonTools/libCommonTools.a",
+    "FEXCore/Source/libJemallocLibs.a", "External/rpmalloc/librpmalloc.a",
 )
 # Guest shims staged into the rootfs next to the thunks (stage_sdl3_thunks.PAYLOADS).
 ROOTFS_PAYLOADS = (
@@ -50,6 +51,9 @@ def git_identity(root):
     if dirty:
         # Same commit with different local edits must not look identical.
         identity["diffSha256"] = hashlib.sha256(git("diff", "HEAD", "--binary").stdout.encode()).hexdigest()
+    merge_head = git("rev-parse", "--verify", "MERGE_HEAD")
+    if merge_head.returncode == 0:
+        identity["mergeHead"] = merge_head.stdout.strip()
     return identity
 
 
