@@ -5,9 +5,18 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -17,6 +26,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -24,28 +35,36 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.critical.vexaemulator.guest.GuestCatalog
 import com.critical.vexaemulator.guest.CustomGuestStore
-import com.critical.vexaemulator.ui.SteamGameHero
-import com.critical.vexaemulator.ui.rememberSteamDetails
-import androidx.compose.foundation.clickable
-import androidx.compose.material3.Text
+import com.critical.vexaemulator.guest.GuestCatalog
+import com.critical.vexaemulator.guest.GuestProgram
 import com.critical.vexaemulator.logging.LogCategory
 import com.critical.vexaemulator.logging.LogLevel
 import com.critical.vexaemulator.logging.VexaLogger
 import com.critical.vexaemulator.steam.library.SteamLibrary
 import com.critical.vexaemulator.ui.DownloadStatusBar
+import com.critical.vexaemulator.ui.MetaItem
+import com.critical.vexaemulator.ui.MetadataRow
+import com.critical.vexaemulator.ui.PanelSurface
 import com.critical.vexaemulator.ui.SectionCard
 import com.critical.vexaemulator.ui.SectionLabel
+import com.critical.vexaemulator.ui.SteamGameHero
 import com.critical.vexaemulator.ui.SwitchRow
+import com.critical.vexaemulator.ui.TinyPill
 import com.critical.vexaemulator.ui.VexaButton
 import com.critical.vexaemulator.ui.VexaGlyph
 import com.critical.vexaemulator.ui.VexaPrefs
+import com.critical.vexaemulator.ui.rememberSteamDetails
 import com.critical.vexaemulator.ui.theme.VexaEmulatorTheme
+import com.critical.vexaemulator.ui.theme.VexaMotion
 import com.critical.vexaemulator.ui.theme.VexaTheme
 import com.critical.vexaemulator.ui.theme.resolveDark
+import com.critical.vexaemulator.ui.typeBadge
 import kotlinx.coroutines.launch
 
 class ProgramActivity : ComponentActivity() {
@@ -231,4 +250,64 @@ private fun ProgramScreen(
             }
         }
     }
+}
+
+@Composable
+private fun ProgramDetailCard(program: GuestProgram) {
+    val c = VexaTheme.colors
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val path = CustomGuestStore.guestDir(context, program.id).resolve(program.fileName).absolutePath
+    PanelSurface(
+        modifier = Modifier.fillMaxWidth(),
+        color = c.bgBase,
+        borderColor = Color.Transparent,
+        elevated = false,
+    ) {
+        AnimatedContent(
+            targetState = program,
+            transitionSpec = {
+                val enter = fadeIn(tween(VexaMotion.MEDIUM)) +
+                    slideInVertically(tween(VexaMotion.MEDIUM, easing = VexaMotion.Emphasized)) { it / 8 }
+                enter togetherWith fadeOut(tween(VexaMotion.MICRO)) using SizeTransform(clip = false)
+            },
+            label = "detail",
+        ) { shown ->
+            val (typeLabel, typeColor) = shown.typeBadge()
+            val appId = shown.steamAppId ?: shown.env.firstOrNull { it.startsWith("SteamAppId=") }?.substringAfter("=")
+            Column(modifier = Modifier.padding(vertical = 14.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = shown.title,
+                        style = MaterialTheme.typography.headlineLarge.copy(color = c.textPrimary),
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f).padding(end = 12.dp),
+                    )
+                    TinyPill(typeLabel, typeColor)
+                }
+                Spacer(Modifier.height(8.dp))
+                Text(text = shown.summary, style = MaterialTheme.typography.bodyMedium.copy(color = c.textSecondary))
+                Spacer(Modifier.height(14.dp))
+                MetadataRow(items = detailMeta(shown, path, appId, c.plasma, c.ultraviolet, c.success))
+            }
+        }
+    }
+}
+
+private fun detailMeta(
+    program: GuestProgram,
+    path: String,
+    appId: String?,
+    argv: Color,
+    env: Color,
+    ok: Color,
+): List<MetaItem> = buildList {
+    if (program.preinstalled && !program.userAdded) add(MetaItem("preinstalled", ok, VexaGlyph.Check))
+    if (program.userAdded) add(MetaItem("added", ok, VexaGlyph.Check))
+    add(MetaItem(program.fileName, null, VexaGlyph.Terminal))
+    add(MetaItem(program.arch ?: "x86_64", null, VexaGlyph.Cube))
+    if (!appId.isNullOrBlank()) add(MetaItem("SteamAppId $appId", argv, VexaGlyph.Activity))
+    add(MetaItem(path, null, VexaGlyph.ChevronRight))
+    if (program.args.isNotEmpty()) add(MetaItem("argv: ${program.args.joinToString(" ")}", argv, VexaGlyph.ChevronRight))
+    program.env.forEach { add(MetaItem("env: $it", env, VexaGlyph.Activity)) }
 }

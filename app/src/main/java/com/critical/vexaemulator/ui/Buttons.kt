@@ -27,6 +27,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -186,11 +190,20 @@ fun VexaIconButton(
     tint: Color = VexaTheme.colors.textSecondary,
     size: Dp = 38.dp,
     container: Color = VexaTheme.colors.surface2,
+    contentDescription: String? = null,
 ) {
     val c = VexaTheme.colors
     val haptics = rememberHaptics()
     val source = remember { MutableInteractionSource() }
     val filled = container != c.surface2
+    val described = if (contentDescription == null) {
+        Modifier
+    } else {
+        Modifier.semantics {
+            this.contentDescription = contentDescription
+            role = Role.Button
+        }
+    }
     Box(
         modifier = modifier
             .size(size)
@@ -198,6 +211,7 @@ fun VexaIconButton(
             .clip(SmallShape)
             .background(container)
             .border(1.dp, if (filled) container else c.hairline, SmallShape)
+            .then(described)
             .clickable(source, ripple(color = tint)) {
                 haptics.tap()
                 onClick()

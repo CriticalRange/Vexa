@@ -1,20 +1,12 @@
 package com.critical.vexaemulator
 
-import android.app.ActivityOptions
 import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.SizeTransform
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -22,6 +14,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -36,6 +29,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -60,27 +54,21 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.critical.vexaemulator.guest.CustomGuestStore
-import com.critical.vexaemulator.guest.ElfArtwork
 import com.critical.vexaemulator.guest.GuestCatalog
 import com.critical.vexaemulator.guest.GuestProgram
-import com.critical.vexaemulator.logging.LogCategory
-import com.critical.vexaemulator.logging.LogLevel
-import com.critical.vexaemulator.logging.VexaLogger
 import com.critical.vexaemulator.steam.SteamLink
 import com.critical.vexaemulator.steam.SteamPersona
 import com.critical.vexaemulator.steam.SteamPersonaCache
@@ -89,14 +77,9 @@ import com.critical.vexaemulator.steam.library.CatalogKind
 import com.critical.vexaemulator.steam.library.SteamLibrary
 import com.critical.vexaemulator.ui.BrandLogo
 import com.critical.vexaemulator.ui.DownloadStatusBar
+import com.critical.vexaemulator.ui.downloadListInset
 import com.critical.vexaemulator.ui.GhostButton
 import com.critical.vexaemulator.ui.LogoSize
-import com.critical.vexaemulator.ui.MetaItem
-import com.critical.vexaemulator.ui.MetadataRow
-import com.critical.vexaemulator.ui.PanelSurface
-import com.critical.vexaemulator.ui.SectionLabel
-import com.critical.vexaemulator.ui.TinyPill
-import com.critical.vexaemulator.ui.VexaButton
 import com.critical.vexaemulator.ui.VexaGlyph
 import com.critical.vexaemulator.ui.VexaIcon
 import com.critical.vexaemulator.ui.VexaIconButton
@@ -104,19 +87,18 @@ import com.critical.vexaemulator.ui.VexaPrefs
 import com.critical.vexaemulator.ui.online.OnlineGamesScreen
 import com.critical.vexaemulator.ui.pressScale
 import com.critical.vexaemulator.ui.rememberHaptics
-import com.critical.vexaemulator.ui.theme.MonospaceTypography
+import com.critical.vexaemulator.ui.rememberSteamDetails
+import com.critical.vexaemulator.ui.rememberSteamImage
 import com.critical.vexaemulator.ui.theme.PillShape
 import com.critical.vexaemulator.ui.theme.TileShape
 import com.critical.vexaemulator.ui.theme.VexaEmulatorTheme
-import com.critical.vexaemulator.ui.theme.VexaMotion
 import com.critical.vexaemulator.ui.theme.VexaTheme
 import com.critical.vexaemulator.ui.theme.resolveDark
-import com.critical.vexaemulator.ui.typeBadge
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlin.math.hypot
-import kotlin.math.max
+import kotlin.coroutines.coroutineContext
 
 class MainActivity : ComponentActivity() {
     private var resumeGeneration by mutableIntStateOf(0)
@@ -147,7 +129,6 @@ private fun LauncherScreen(resumeGeneration: Int) {
     val c = VexaTheme.colors
     val context = LocalContext.current
     var libraryTick by remember { mutableIntStateOf(0) }
-    LaunchedEffect(resumeGeneration) { libraryTick++ }
     val programs = remember(libraryTick, resumeGeneration) {
         GuestCatalog.merged().sortedByDescending { it.preinstalled && !it.userAdded }
     }
@@ -157,6 +138,10 @@ private fun LauncherScreen(resumeGeneration: Int) {
     val scope = rememberCoroutineScope()
     var refreshing by remember { mutableStateOf(false) }
     val pullState = rememberPullToRefreshState()
+    val localScroll = rememberScrollState()
+    val allScroll = rememberScrollState()
+    val ownedGrid = rememberLazyGridState()
+    var refreshJob by remember { mutableStateOf<Job?>(null) }
 
     Box(Modifier.fillMaxSize().background(c.bgBase).imePadding()) {
         Column(
@@ -200,70 +185,59 @@ private fun LauncherScreen(resumeGeneration: Int) {
                         state = pullState,
                         threshold = refreshDistance,
                         onRefresh = {
+                            val previous = refreshJob
                             refreshing = true
-                            scope.launch {
-                                when (filter) {
-                                    LibraryFilter.Local -> {
-                                        CustomGuestStore.load(context)
-                                        libraryTick++
+                            val job = scope.launch {
+                                try {
+                                    when (filter) {
+                                        LibraryFilter.Local -> {
+                                            withContext(Dispatchers.IO) { CustomGuestStore.load(context) }
+                                            libraryTick++
+                                        }
+                                        LibraryFilter.Owned -> {
+                                            SteamLibrary.refresh(context, CatalogKind.Owned, force = true)
+                                        }
+                                        LibraryFilter.All -> {
+                                            SteamLibrary.refresh(context, CatalogKind.All, force = true)
+                                        }
                                     }
-                                    LibraryFilter.Owned -> SteamLibrary.refresh(context, CatalogKind.Owned)
-                                    LibraryFilter.All -> SteamLibrary.refresh(context, CatalogKind.All)
+                                } finally {
+                                    if (refreshJob === coroutineContext[Job]) refreshing = false
                                 }
-                                refreshing = false
                             }
+                            refreshJob = job
+                            previous?.cancel()
                         },
                     ),
             ) {
-                Column(
-                    Modifier
-                        .fillMaxSize()
-                        .verticalScroll(rememberScrollState())
-                        .navigationBarsPadding()
-                        .padding(bottom = 24.dp),
-                ) {
-            when (filter) {
-                LibraryFilter.Owned -> OnlineGamesScreen(CatalogKind.Owned, columns = layoutColumns)
-                LibraryFilter.All -> OnlineGamesScreen(CatalogKind.All, columns = layoutColumns)
-                LibraryFilter.Local -> {
-                    val selectProgram: (GuestProgram) -> Unit = { program ->
-                        VexaPrefs.updateLastProgram(program.id)
-                        context.startActivity(
-                            Intent(context, ProgramActivity::class.java)
-                                .putExtra(ProgramActivity.EXTRA_PROGRAM_ID, program.id),
-                        )
-                    }
-                    if (layoutColumns > 1) {
-                        programs.chunked(layoutColumns).forEach { rowItems ->
-                            Row(
-                                Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                            ) {
-                                rowItems.forEach { program ->
-                                    ProgramCard(
-                                        program = program,
-                                        selected = false,
-                                        onClick = { selectProgram(program) },
-                                        modifier = Modifier.weight(1f),
-                                    )
-                                }
-                                repeat(layoutColumns - rowItems.size) { Spacer(Modifier.weight(1f)) }
-                            }
-                            Spacer(Modifier.height(10.dp))
-                        }
-                    } else {
-                        programs.forEach { program ->
-                            ProgramRow(
-                                program = program,
-                                selected = false,
-                                onClick = { selectProgram(program) },
+                val listBottom = downloadListInset(library.downloads.size)
+                when (filter) {
+                    LibraryFilter.Owned -> OnlineGamesScreen(
+                        kind = CatalogKind.Owned,
+                        columns = layoutColumns,
+                        gridState = ownedGrid,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                    LibraryFilter.All -> OnlineGamesScreen(
+                        kind = CatalogKind.All,
+                        columns = layoutColumns,
+                        scrollState = allScroll,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                    LibraryFilter.Local -> LocalLibrary(
+                        programs = programs,
+                        columns = layoutColumns,
+                        selectedId = VexaPrefs.lastProgram,
+                        scrollState = localScroll,
+                        bottom = listBottom,
+                        onOpen = { program ->
+                            VexaPrefs.updateLastProgram(program.id)
+                            context.startActivity(
+                                Intent(context, ProgramActivity::class.java)
+                                    .putExtra(ProgramActivity.EXTRA_PROGRAM_ID, program.id),
                             )
-                            Spacer(Modifier.height(8.dp))
-                        }
-                    }
-                }
-            }
-            Spacer(Modifier.height(if (library.downloads.isEmpty()) 20.dp else 120.dp))
+                        },
+                    )
                 }
                 Indicator(
                     modifier = Modifier.align(Alignment.TopCenter),
@@ -286,7 +260,9 @@ private fun LauncherScreen(resumeGeneration: Int) {
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 library.downloads.forEach { (appId, progress) ->
-                    val title = library.games.find { it.appId == appId }?.name ?: "App $appId"
+                    val title = library.games.find { it.appId == appId }?.name
+                        ?: GuestCatalog.find("steam-$appId")?.title
+                        ?: "App $appId"
                     DownloadStatusBar(
                         appId = appId,
                         title = title,
@@ -302,20 +278,25 @@ private fun LauncherScreen(resumeGeneration: Int) {
 @Composable
 private fun HomeHeader() {
     val context = LocalContext.current
-    Box(Modifier.fillMaxWidth().height(64.dp)) {
+    BoxWithConstraints(Modifier.fillMaxWidth().height(64.dp)) {
+        val actionsWidth = 38.dp + 8.dp + 38.dp
+        val side = maxOf(64.dp, actionsWidth)
+        val chipMax = (maxWidth - side * 2 - 12.dp).coerceAtLeast(0.dp)
         BrandLogo(size = LogoSize.Header, modifier = Modifier.align(Alignment.CenterStart))
         AccountChip(
             onClick = { context.startActivity(Intent(context, AccountActivity::class.java)) },
-            modifier = Modifier.align(Alignment.Center),
+            modifier = Modifier.align(Alignment.Center).widthIn(max = minOf(180.dp, chipMax)),
         )
         Row(Modifier.align(Alignment.CenterEnd), verticalAlignment = Alignment.CenterVertically) {
             VexaIconButton(
                 VexaGlyph.Logs,
+                contentDescription = "Logs",
                 onClick = { context.startActivity(Intent(context, LogsActivity::class.java)) },
             )
             Spacer(Modifier.width(8.dp))
             VexaIconButton(
                 VexaGlyph.Settings,
+                contentDescription = "Settings",
                 onClick = { context.startActivity(Intent(context, SettingsActivity::class.java)) },
             )
         }
@@ -376,30 +357,65 @@ private fun AccountChip(onClick: () -> Unit, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun rememberProgramLogo(program: GuestProgram, guestDir: java.io.File): android.graphics.Bitmap? {
-    val details = com.critical.vexaemulator.ui.rememberSteamDetails(program)
-    val steamImage = com.critical.vexaemulator.ui.rememberSteamImage(
-        details?.let { listOf(it.vertical, it.header) }.orEmpty(),
-    )
-    var logo by remember(program.id, program.iconFile) {
-        mutableStateOf(ElfArtwork.bitmapFor(program, guestDir))
-    }
-    LaunchedEffect(program.id, program.fileName, program.iconFile) {
-        if (logo == null) {
-            logo = withContext(Dispatchers.IO) { ElfArtwork.load(program, guestDir) }
+private fun rememberProgramLogo(program: GuestProgram): android.graphics.Bitmap? {
+    val details = rememberSteamDetails(program)
+    return rememberSteamImage(details?.let { listOf(it.vertical, it.header) }.orEmpty())
+}
+
+@Composable
+private fun LocalLibrary(
+    programs: List<GuestProgram>,
+    columns: Int,
+    selectedId: String?,
+    scrollState: ScrollState,
+    bottom: Dp,
+    onOpen: (GuestProgram) -> Unit,
+) {
+    val c = VexaTheme.colors
+    Column(
+        Modifier
+            .fillMaxSize()
+            .verticalScroll(scrollState)
+            .navigationBarsPadding()
+            .padding(bottom = bottom),
+    ) {
+        if (programs.isEmpty()) {
+            Text("No local games to show.", color = c.textTertiary)
+        } else if (columns > 1) {
+            programs.chunked(columns).forEach { rowItems ->
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    rowItems.forEach { program ->
+                        ProgramCard(
+                            program = program,
+                            selected = program.id == selectedId,
+                            onClick = { onOpen(program) },
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                    repeat(columns - rowItems.size) { Spacer(Modifier.weight(1f)) }
+                }
+                Spacer(Modifier.height(10.dp))
+            }
+        } else {
+            programs.forEach { program ->
+                ProgramRow(
+                    program = program,
+                    selected = program.id == selectedId,
+                    onClick = { onOpen(program) },
+                )
+                Spacer(Modifier.height(8.dp))
+            }
         }
     }
-    return steamImage ?: logo
 }
 
 @Composable
 private fun ProgramRow(program: GuestProgram, selected: Boolean, onClick: () -> Unit) {
     val c = VexaTheme.colors
-    val context = LocalContext.current
     val haptics = rememberHaptics()
     val source = remember { MutableInteractionSource() }
-    val guestDir = remember(program.id) { CustomGuestStore.guestDir(context, program.id) }
-    val logo = rememberProgramLogo(program, guestDir)
+    val logo = rememberProgramLogo(program)
+    val image = remember(logo) { logo?.asImageBitmap() }
     Row(
         Modifier
             .fillMaxWidth()
@@ -418,9 +434,9 @@ private fun ProgramRow(program: GuestProgram, selected: Boolean, onClick: () -> 
             Modifier.size(48.dp).clip(RoundedCornerShape(10.dp)).background(c.surface3),
             contentAlignment = Alignment.Center,
         ) {
-            if (logo != null) {
+            if (image != null) {
                 Image(
-                    bitmap = logo.asImageBitmap(),
+                    bitmap = image,
                     contentDescription = program.title,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize(),
@@ -481,6 +497,9 @@ private fun LayoutModeIcon(columns: Int, selected: Boolean, onClick: () -> Unit)
             .size(34.dp)
             .clip(CircleShape)
             .background(if (selected) c.plasma else Color.Transparent)
+            .semantics {
+                contentDescription = if (columns == 1) "List" else "$columns columns"
+            }
             .clickable(source, ripple(color = c.plasma), onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
@@ -525,11 +544,10 @@ private fun ProgramCard(
     modifier: Modifier = Modifier,
 ) {
     val c = VexaTheme.colors
-    val context = LocalContext.current
     val haptics = rememberHaptics()
     val source = remember { MutableInteractionSource() }
-    val guestDir = remember(program.id) { CustomGuestStore.guestDir(context, program.id) }
-    val logo = rememberProgramLogo(program, guestDir)
+    val logo = rememberProgramLogo(program)
+    val image = remember(logo) { logo?.asImageBitmap() }
     Column(
         modifier
             .pressScale(source, 0.98f)
@@ -546,9 +564,9 @@ private fun ProgramCard(
             Modifier.fillMaxWidth().aspectRatio(if (portrait) 748f / 896f else 1f).background(c.surface3),
             contentAlignment = Alignment.Center,
         ) {
-            if (logo != null) {
+            if (image != null) {
                 Image(
-                    bitmap = logo.asImageBitmap(),
+                    bitmap = image,
                     contentDescription = program.title,
                     contentScale = ContentScale.Fit,
                     modifier = Modifier.fillMaxSize(),
@@ -571,63 +589,4 @@ private fun ProgramCard(
 private fun GuestProgram.glyphFallback(): VexaGlyph = when {
     preinstalled -> VexaGlyph.Gamepad
     else -> VexaGlyph.Terminal
-}
-
-@Composable
-internal fun ProgramDetailCard(program: GuestProgram) {
-    val c = VexaTheme.colors
-    val context = LocalContext.current
-    val path = CustomGuestStore.guestDir(context, program.id).resolve(program.fileName).absolutePath
-    PanelSurface(
-        modifier = Modifier.fillMaxWidth(),
-        color = c.bgBase,
-        borderColor = Color.Transparent,
-        elevated = false,
-    ) {
-        AnimatedContent(
-            targetState = program,
-            transitionSpec = {
-                (fadeIn(tween(VexaMotion.MEDIUM)) + slideInVertically(tween(VexaMotion.MEDIUM, easing = VexaMotion.Emphasized)) { it / 8 }) togetherWith
-                    fadeOut(tween(VexaMotion.MICRO)) using SizeTransform(clip = false)
-            },
-            label = "detail",
-        ) { p ->
-            val (typeLabel, typeColor) = p.typeBadge()
-            val appId = p.steamAppId ?: p.env.firstOrNull { it.startsWith("SteamAppId=") }?.substringAfter("=")
-            Column(modifier = Modifier.padding(vertical = 14.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = p.title,
-                        style = MaterialTheme.typography.headlineLarge.copy(color = c.textPrimary),
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f).padding(end = 12.dp),
-                    )
-                    TinyPill(typeLabel, typeColor)
-                }
-                Spacer(Modifier.height(8.dp))
-                Text(text = p.summary, style = MaterialTheme.typography.bodyMedium.copy(color = c.textSecondary))
-                Spacer(Modifier.height(14.dp))
-                MetadataRow(items = detailMeta(p, path, appId, c.plasma, c.ultraviolet, c.success))
-            }
-        }
-    }
-}
-
-private fun detailMeta(
-    program: GuestProgram,
-    path: String,
-    appId: String?,
-    argv: Color,
-    env: Color,
-    ok: Color,
-): List<MetaItem> = buildList {
-    if (program.preinstalled && !program.userAdded) add(MetaItem("preinstalled", ok, VexaGlyph.Check))
-    if (program.userAdded) add(MetaItem("added", ok, VexaGlyph.Check))
-    add(MetaItem(program.fileName, null, VexaGlyph.Terminal))
-    add(MetaItem(program.arch ?: "x86_64", null, VexaGlyph.Cube))
-    if (!appId.isNullOrBlank()) add(MetaItem("SteamAppId $appId", argv, VexaGlyph.Activity))
-    add(MetaItem(path, null, VexaGlyph.ChevronRight))
-    if (program.args.isNotEmpty()) add(MetaItem("argv: ${program.args.joinToString(" ")}", argv, VexaGlyph.ChevronRight))
-    program.env.forEach { add(MetaItem("env: $it", env, VexaGlyph.Activity)) }
 }

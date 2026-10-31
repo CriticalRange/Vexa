@@ -7,9 +7,10 @@ import java.io.File
 
 object CustomGuestStore {
     private const val FILE_NAME = "custom-programs.json"
+    private val gate = Any()
     private var persisted: List<GuestProgram> = emptyList()
 
-    fun load(context: Context) {
+    fun load(context: Context) = synchronized(gate) {
         val app = context.applicationContext
         val file = File(app.filesDir, FILE_NAME)
         persisted = if (!file.isFile) emptyList() else runCatching { parse(file.readText()) }.getOrDefault(emptyList())
@@ -33,7 +34,7 @@ object CustomGuestStore {
 
     fun programs(): List<GuestProgram> = GuestCatalog.userPrograms
 
-    fun save(context: Context, program: GuestProgram) {
+    fun save(context: Context, program: GuestProgram) = synchronized(gate) {
         val app = context.applicationContext
         persisted = persisted.filterNot { it.id == program.id } + program
         // Steam installs live in installed.json; keep them out of custom-programs.json.

@@ -19,6 +19,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -27,10 +28,19 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.critical.vexaemulator.steam.library.DepotProgress
 import com.critical.vexaemulator.ui.theme.VexaTheme
 import kotlin.math.roundToInt
+
+/** Space the library list must keep clear of the stacked download bars. */
+fun downloadListInset(count: Int): Dp {
+    if (count <= 0) return 20.dp
+    val bars = 76.dp * count
+    val gaps = 8.dp * (count - 1)
+    return 16.dp + bars + gaps + 12.dp
+}
 
 @Composable
 fun DownloadStatusBar(
@@ -44,6 +54,7 @@ fun DownloadStatusBar(
     val logo = rememberSteamImage(
         listOf("https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/$appId/header.jpg"),
     )
+    val image = remember(logo) { logo?.asImageBitmap() }
     val indeterminate = progress.fraction < 0f
     val speed = if (progress.bytesPerSecond == 0L && indeterminate) {
         "Starting"
@@ -69,9 +80,9 @@ fun DownloadStatusBar(
                 .clip(RoundedCornerShape(10.dp))
                 .background(c.surface3),
         ) {
-            if (logo != null) {
+            if (image != null) {
                 Image(
-                    logo.asImageBitmap(),
+                    image,
                     contentDescription = title,
                     modifier = Modifier.fillMaxWidth().fillMaxHeight(),
                     contentScale = ContentScale.Crop,

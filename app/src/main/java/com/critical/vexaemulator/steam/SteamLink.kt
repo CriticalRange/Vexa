@@ -19,16 +19,20 @@ import `in`.dragonbra.javasteam.steam.handlers.steamapps.License
 import `in`.dragonbra.javasteam.steam.handlers.steamapps.callback.LicenseListCallback
 import `in`.dragonbra.javasteam.steam.handlers.steamuser.LogOnDetails
 import `in`.dragonbra.javasteam.steam.handlers.steamuser.SteamUser
+import `in`.dragonbra.javasteam.steam.handlers.steamuser.callback.LoggedOffCallback
 import `in`.dragonbra.javasteam.steam.handlers.steamuser.callback.LoggedOnCallback
 import `in`.dragonbra.javasteam.steam.steamclient.AsyncJobFailedException
 import `in`.dragonbra.javasteam.steam.steamclient.SteamClient
 import `in`.dragonbra.javasteam.steam.steamclient.callbackmgr.CallbackManager
 import `in`.dragonbra.javasteam.steam.steamclient.callbacks.ConnectedCallback
+import `in`.dragonbra.javasteam.steam.steamclient.callbacks.DisconnectedCallback
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -77,6 +81,7 @@ object SteamLink {
     private val sessionToken = AtomicInteger(0)
     private val pumping = AtomicBoolean(false)
     private val signingIn = AtomicBoolean(false)
+    @Volatile private var lastAutoReconnectMs = 0L
     private val accountOnline = AtomicBoolean(false)
     private val guardCode = AtomicReference<CompletableFuture<String>?>(null)
     private val sessionMutex = Mutex()
@@ -162,32 +167,51 @@ object SteamLink {
                 }
                 return@withLock saved
             }
-            _state.value = SteamUiState.SignedIn(saved.accountName, saved.steamId, online = false)
-            try {
-                logOnSaved(saved)
-                if (generation.get() != gen) return@withLock null
-                accountOnline.set(true)
-                _state.value = SteamUiState.SignedIn(saved.accountName, saved.steamId, online = true)
-                VexaLogger.log(
-                    LogLevel.INFO,
-                    LogCategory.CONFIG,
-                    "Steam session connected",
-                    mapOf("steamId" to saved.steamId),
-                )
-                saved
-            } catch (error: Throwable) {
-                if (generation.get() != gen) return@withLock null
-                accountOnline.set(false)
-                val real = unwrap(error)
-                if (isRejected(error)) {
-                    SteamSessionStore.clear(app)
-                    _state.value = SteamUiState.Failed(publicMessage(real))
-                } else {
+            // A timeout or a dropped socket is not a logout. Try the saved token once more.
+            for (attempt in 0..1) {
+                _state.value = SteamUiState.SignedIn(saved.accountName, saved.steamId, online = false)
+                try {
+                    logOnSaved(saved)
+                    if (generation.get() != gen) return@withLock null
+                    accountOnline.set(true)
+                    _state.value = SteamUiState.SignedIn(saved.accountName, saved.steamId, online = true)
+                    VexaLogger.log(
+                        LogLevel.INFO,
+                        LogCategory.CONFIG,
+                        "Steam session connected",
+                        mapOf("steamId" to saved.steamId),
+                    )
+                    return@withLock saved
+                } catch (error: Throwable) {
+                    if (generation.get() != gen) {
+                        if (error is CancellationException) throw error
+                        return@withLock null
+                    }
+                    accountOnline.set(false)
+                    val timedOut = error is TimeoutCancellationException
+                    val stillRunning = currentCoroutineContext().isActive
+                    if (error is CancellationException && (!timedOut || !stillRunning)) throw error
+                    val real = unwrap(error)
+                    if (isRejected(error)) {
+                        SteamSessionStore.clear(app)
+                        _state.value = SteamUiState.Failed(publicMessage(real))
+                        logFailure(real)
+                        return@withLock null
+                    }
                     _state.value = SteamUiState.SignedIn(saved.accountName, saved.steamId, online = false)
+                    if (attempt == 1) {
+                        logFailure(real)
+                        return@withLock null
+                    }
+                    VexaLogger.log(
+                        LogLevel.INFO,
+                        LogCategory.CONFIG,
+                        "Steam connection dropped, signing in again",
+                        mapOf("error" to real.javaClass.simpleName),
+                    )
                 }
-                logFailure(real)
-                null
             }
+            null
         }
     }
 
@@ -428,6 +452,21 @@ object SteamLink {
                     licenseList.set(list.licenseList.toList())
                 }
             }
+            manager.subscribe(DisconnectedCallback::class.java) { event ->
+                if (token != sessionToken.get() || event.isUserInitiated) return@subscribe
+                onConnectionDropped()
+            }
+            manager.subscribe(LoggedOffCallback::class.java) { loggedOff ->
+                if (token != sessionToken.get()) return@subscribe
+                accountOnline.set(false)
+                if (isRejected(SteamSignInException(loggedOff.result))) {
+                    val app = appContext ?: return@subscribe
+                    SteamSessionStore.clear(app)
+                    _state.value = SteamUiState.Failed(publicMessage(SteamSignInException(loggedOff.result)))
+                    return@subscribe
+                }
+                onConnectionDropped()
+            }
             callbacks = manager
             steamClient = created
             steamUser = user
@@ -483,6 +522,26 @@ object SteamLink {
         val provider = Security.getProvider("BC") ?: return
         Security.removeProvider("BC")
         Security.addProvider(provider)
+    }
+
+    // replaceClient() disconnects on purpose. A later unexpected callback means the
+    // socket died, so sign in again with the saved token unless that sign-in is already running.
+    private fun onConnectionDropped() {
+        accountOnline.set(false)
+        if (sessionMutex.isLocked || signingIn.get()) return
+        val app = appContext ?: return
+        val saved = runCatching { SteamSessionStore.load(app) }.getOrNull() ?: return
+        if (saved.refreshToken.isBlank()) return
+        val current = _state.value
+        if (current is SteamUiState.SignedIn && current.online) {
+            _state.value = current.copy(online = false)
+        }
+        val now = System.currentTimeMillis()
+        synchronized(lock) {
+            if (now - lastAutoReconnectMs < 30_000L) return
+            lastAutoReconnectMs = now
+        }
+        scope.launch { ensureOnline(app) }
     }
 
     private fun isRejected(error: Throwable): Boolean {

@@ -35,8 +35,9 @@ The VEXA design system lives in `app/src/main/java/com/critical/vexaemulator/ui/
 
 ## Screens
 
-- `MainActivity`: launcher flow picker -> detail -> run -> system -> logs.
-- `GameActivity`: render surface + `GameHudChip` bar + `GameDebugPanel` overlay + `GameLoadingOverlay` boot screen.
+- `MainActivity` and `ProgramActivity`: program selection and launch flows.
+- `GameActivity`: rendering surface, controls and runtime overlays.
+- `LogsActivity`, `SettingsActivity` and `AccountActivity`: dedicated application screens.
 
 ## Rules
 

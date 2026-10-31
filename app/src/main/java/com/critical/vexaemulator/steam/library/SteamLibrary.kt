@@ -46,7 +46,7 @@ data class OnlineGame(
 data class OnlineLibraryState(
     val loading: Boolean = false,
     val phase: String = "",
-    val signedOut: Boolean = true,
+    val signedOut: Boolean = false,
     val connectionProblem: Boolean = false,
     val message: String = "",
     val games: List<OnlineGame> = emptyList(),
@@ -95,10 +95,12 @@ object SteamLibrary {
     private var ownedComplete = false
     private var storeNext = 0
     private var storeTotal = 0
+    private var storeGames = listOf<OnlineGame>()
+    private var storeCanLoadMore = false
     private val _state = MutableStateFlow(OnlineLibraryState())
     val state: StateFlow<OnlineLibraryState> = _state.asStateFlow()
-    suspend fun refresh(context: Context, requested: CatalogKind) = catalogMutex.withLock {
-        if (requested == CatalogKind.Owned && ownedComplete) {
+    suspend fun refresh(context: Context, requested: CatalogKind, force: Boolean = false) = catalogMutex.withLock {
+        if (!force && requested == CatalogKind.Owned && ownedComplete) {
             kind = CatalogKind.Owned
             _state.update {
                 it.copy(
@@ -113,6 +115,26 @@ object SteamLibrary {
             }
             return@withLock
         }
+        if (!force && requested == CatalogKind.All && storeGames.isNotEmpty()) {
+            kind = CatalogKind.All
+            _state.update {
+                it.copy(
+                    loading = false,
+                    phase = "",
+                    signedOut = false,
+                    connectionProblem = false,
+                    message = "",
+                    games = storeGames,
+                    canLoadMore = storeCanLoadMore,
+                )
+            }
+            return@withLock
+        }
+        val visibleAll = when {
+            requested != CatalogKind.All -> emptyList()
+            kind == CatalogKind.All -> _state.value.games
+            else -> storeGames
+        }
         kind = requested
         val app = context.applicationContext
         val started = System.currentTimeMillis()
@@ -122,7 +144,16 @@ object SteamLibrary {
                 storeNext = 0
                 storeTotal = 0
                 pending = emptyList()
-                _state.update { it.copy(loading = true, phase = "Loading Steam catalog...", message = "", games = emptyList(), canLoadMore = false, connectionProblem = false) }
+                _state.update {
+                    it.copy(
+                        loading = true,
+                        phase = "Loading Steam catalog...",
+                        message = "",
+                        games = visibleAll,
+                        canLoadMore = storeCanLoadMore && visibleAll.isNotEmpty(),
+                        connectionProblem = false,
+                    )
+                }
                 pending = loadStorePage()
                 publishPage(app, append = false, enrich = false)
                 if (SteamLink.connectedClient() != null) {
@@ -130,24 +161,56 @@ object SteamLibrary {
                     enrichVisible()
                 }
             } else {
+                _state.update {
+                    it.copy(
+                        loading = true,
+                        phase = "Connecting to Steam...",
+                        message = "",
+                        connectionProblem = false,
+                        signedOut = false,
+                        games = ownedGames.ifEmpty { it.games },
+                    )
+                }
                 val session = withTimeout(45_000) { SteamLink.ensureOnline(app) }
                 if (session == null || SteamLink.connectedClient() == null) {
                     val saved = SteamLink.state.value is SteamUiState.SignedIn
-                    show(
-                        signedOut = !saved,
-                        message = if (saved) {
-                            "The Steam account is saved, but VEXA could not open a connection."
-                        } else {
-                            "No Steam account is connected on this device."
-                        },
-                        connectionProblem = true,
-                    )
+                    val message = if (saved) {
+                        "Steam connection dropped. The account is still saved."
+                    } else {
+                        "No Steam account is connected on this device."
+                    }
+                    if (ownedGames.isEmpty()) {
+                        show(signedOut = !saved, message = message, connectionProblem = true)
+                    } else {
+                        _state.update {
+                            it.copy(
+                                loading = false,
+                                signedOut = !saved,
+                                connectionProblem = true,
+                                message = message,
+                                games = ownedGames,
+                            )
+                        }
+                    }
                     return@withLock
                 }
-                if (ownedGames.isEmpty()) {
-                    _state.update { it.copy(loading = true, phase = "Loading your games...", message = "", games = emptyList(), canLoadMore = false, connectionProblem = false) }
-                    ownedIds = loadOwnedAppIds()
-                    if (ownedIds.isEmpty()) {
+                if (force || ownedGames.isEmpty()) {
+                    _state.update {
+                        it.copy(
+                            loading = true,
+                            phase = "Loading your games...",
+                            message = "",
+                            games = ownedGames,
+                            canLoadMore = false,
+                            connectionProblem = false,
+                            signedOut = false,
+                        )
+                    }
+                    val ids = loadOwnedAppIds()
+                    ownedIds = ids
+                    if (ids.isEmpty()) {
+                        ownedGames = emptyList()
+                        ownedComplete = false
                         show(false, "Steam returned no owned games for this account.")
                         return@withLock
                     }
@@ -172,7 +235,18 @@ object SteamLibrary {
             }
             Log.i("VexaSteamLibrary", "${requested.name}: ${state.value.games.size} rows in ${System.currentTimeMillis() - started}ms")
         } catch (error: TimeoutCancellationException) {
-            _state.update { it.copy(connectionProblem = true, message = "Steam took too long to respond.") }
+            val saved = SteamLink.state.value is SteamUiState.SignedIn
+            _state.update {
+                it.copy(
+                    connectionProblem = true,
+                    signedOut = !saved,
+                    message = if (saved) {
+                        "Steam connection dropped. The account is still saved."
+                    } else {
+                        "Steam took too long to respond."
+                    },
+                )
+            }
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
@@ -181,12 +255,17 @@ object SteamLibrary {
         } finally {
             _state.update { it.copy(loading = false, phase = "") }
             if (requested == CatalogKind.Owned && state.value.games.isNotEmpty()) rememberOwned()
+            if (requested == CatalogKind.All && state.value.games.isNotEmpty()) rememberStore()
         }
     }
     private fun rememberOwned() {
         ownedGames = state.value.games
         ownedPending = pending
         ownedComplete = ownedGames.isNotEmpty() && ownedPending.isEmpty() && ownedGames.all { it.detailsReady }
+    }
+    private fun rememberStore() {
+        storeGames = state.value.games
+        storeCanLoadMore = state.value.canLoadMore
     }
     private fun show(signedOut: Boolean, message: String, connectionProblem: Boolean = false) {
         _state.update { current ->
@@ -209,7 +288,10 @@ object SteamLibrary {
         } catch (error: CancellationException) { throw error
         } catch (error: Exception) {
             _state.update { it.copy(message = publicText(error)) }
-        } finally { _state.update { it.copy(loading = false, phase = "") } }
+        } finally {
+            _state.update { it.copy(loading = false, phase = "") }
+            if (kind == CatalogKind.All) rememberStore()
+        }
     }
     @Synchronized
     fun install(context: Context, appId: Int) {
@@ -274,7 +356,7 @@ object SteamLibrary {
             state.copy(
                 loading = enrich && SteamLink.connectedClient() != null,
                 phase = "Checking download availability...",
-                signedOut = SteamLink.connectedClient() == null,
+                signedOut = SteamLink.state.value is SteamUiState.SignedOut,
                 games = shown,
                 canLoadMore = pending.isNotEmpty() || (kind == CatalogKind.All && storeNext < storeTotal),
                 message = when {

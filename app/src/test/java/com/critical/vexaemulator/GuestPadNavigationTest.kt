@@ -1,6 +1,8 @@
 package com.critical.vexaemulator
 
 import com.critical.vexaemulator.input.GuestPadState
+import com.critical.vexaemulator.input.PadProfile
+import com.critical.vexaemulator.input.PadProfiles
 import com.critical.vexaemulator.input.PadSink
 import com.critical.vexaemulator.input.XKeys
 import org.junit.Assert.*
@@ -16,7 +18,7 @@ class GuestPadNavigationTest {
     }
 
     @Test fun `stick emits one direct arrow press and releases at neutral`() {
-        val pad = GuestPadState().apply { keyboardNavigationFallback = true }
+        val pad = navigationPad()
         val sink = Sink()
         pad.virtLeftY = -1f
         pad.pump(1280, 720, sink)
@@ -27,7 +29,7 @@ class GuestPadNavigationTest {
     }
 
     @Test fun `opposing directions cancel and release restores remaining direction`() {
-        val pad = GuestPadState().apply { keyboardNavigationFallback = true }
+        val pad = navigationPad()
         val sink = Sink()
         pad.setDpad(0, true)
         pad.pump(1280, 720, sink)
@@ -48,5 +50,13 @@ class GuestPadNavigationTest {
         pad.setDpad(0, true)
         pad.pump(1280, 720, sink)
         assertTrue(sink.direct.isEmpty())
+    }
+
+    private fun navigationPad() = GuestPadState().apply {
+        profile = PadProfile(
+            keys = PadProfiles.DEFAULT.keys,
+            clicks = PadProfiles.DEFAULT.clicks,
+            keyboardNavigationFallback = true,
+        )
     }
 }

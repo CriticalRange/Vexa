@@ -32,12 +32,26 @@ fun GuestProgram.glyph(): VexaGlyph = when (category()) {
     else -> VexaGlyph.Terminal
 }
 
-fun GuestProgram.tagline(): String = when (category()) {
-    ProgramCategory.Games -> "godot · x86_64"
-    ProgramCategory.Vulkan -> "vulkan · xcb"
-    ProgramCategory.GL -> "mesa · x11"
-    ProgramCategory.BusyBox -> "multi-call util"
-    else -> "x86_64 elf"
+fun GuestProgram.tagline(): String {
+    val cpu = arch ?: "x86_64"
+    return when (category()) {
+        ProgramCategory.Games -> "${engineLabel()} · $cpu"
+        ProgramCategory.Vulkan -> "vulkan · xcb"
+        ProgramCategory.GL -> "mesa · x11"
+        ProgramCategory.BusyBox -> "multi-call util"
+        else -> "$cpu elf"
+    }
+}
+
+private fun GuestProgram.engineLabel(): String = when (id) {
+    "brotato" -> "godot"
+    "deadcells" -> "hashlink"
+    "terraria", "celeste" -> "fna"
+    "megabonk", "vampiresurvivors", "hollowknight", "unturned", "summer-demo" -> "unity"
+    "ets2" -> "prism3d"
+    "undertale" -> "gamemaker"
+    "prismlauncher" -> "qt"
+    else -> "game"
 }
 
 /** Short type label and its accent for badges. */

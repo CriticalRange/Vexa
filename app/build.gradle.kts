@@ -5,6 +5,12 @@ import org.gradle.process.ExecOperations
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.ktlint)
+}
+
+ktlint {
+    android.set(true)
+    baseline.set(file("config/ktlint/baseline.xml"))
 }
 
 
