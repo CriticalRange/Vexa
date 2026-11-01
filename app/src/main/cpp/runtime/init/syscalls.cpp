@@ -78,8 +78,7 @@ namespace Vexa::Runtime::Init {
         VEXA_LOGI(env, "FEX",
                   "Syscall ABI",
                   Vexa::Log::AddFields({
-                                               Vexa::Log::F("OS_ABI",
-                                                            static_cast<int>(state.syscallHandler->GetOSABI()))
+                                               Vexa::Log::F("is64Bit", state.is64BitMode)
                                        }).c_str()
         );
         return {Vexa::Common::Code::Ok, Vexa::Common::Phase::Init,

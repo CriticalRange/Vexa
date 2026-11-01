@@ -115,9 +115,6 @@ object GuestCatalog {
                 "LD_LIBRARY_PATH=lib64",
                 "MONO_IOMAP=all",
                 "FNA3D_MOJOSHADER_PROFILE=glsles3",
-                "VEXA_AUDIO_TRACE=1",
-                "VEXA_FAUDIO_TRACE=1",
-                "FAUDIO_LOG_API_CALLS=1",
                 "SteamAppId=105600",
             ),
             preinstalled = true,
@@ -135,8 +132,6 @@ object GuestCatalog {
                 "FNA3D_MOJOSHADER_PROFILE=glsles",
                 "FNA3D_FORCE_DRIVER=OpenGL",
                 "FNA3D_OPENGL_FORCE_ES3=1",
-                "VEXA_SDL2_TRACE=1",
-                "VEXA_AUDIO_TRACE=1",
             ),
             preinstalled = true,
         ),
@@ -177,7 +172,7 @@ object GuestCatalog {
                 // submission onto the single emulated render thread. Re-test it before
                 // adding it back - it was needed when the display list was broken.
             ),
-            env = listOf("DISPLAY=:0", "SDL_VIDEODRIVER=x11", "SteamAppId=1794680", "VEXA_STEAM_TRACE=1", "VEXA_MONO_COMPAT=1", "VEXA_ALSA_BLOCKING=1"),
+            env = listOf("DISPLAY=:0", "SDL_VIDEODRIVER=x11", "SteamAppId=1794680", "VEXA_MONO_COMPAT=1", "VEXA_ALSA_BLOCKING=1"),
             preinstalled = true,
         ),
         GuestProgram(
@@ -192,7 +187,6 @@ object GuestCatalog {
                 "DISPLAY=:0",
                 "SDL_VIDEODRIVER=x11",
                 "SteamAppId=367520",
-                "VEXA_STEAM_TRACE=1",
                 "VEXA_MONO_COMPAT=1",
                 "LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libvexa_memcpy214.so",
             ),
@@ -212,7 +206,6 @@ object GuestCatalog {
                 "SteamAppId=227300",
                 "VEXA_GL_SRGB_SURFACE=1",
                 "VEXA_X11_ABSOLUTE_POINTER=1",
-                "VEXA_STEAM_TRACE=1",
                 "LD_BIND_NOW=1",
                 "VEXA_FAKE_IM=1",
                 // glmap stays a bare name so it is found next to the other guest libs.
@@ -229,7 +222,7 @@ object GuestCatalog {
                 "engine on the same GL stack. Not a Unity title, so it does not exercise the Unity offscreen-backbuffer path.",
             assetPath = "",
             fileName = "runner",
-            env = listOf("DISPLAY=:0", "SDL_VIDEODRIVER=x11", "SteamAppId=391540", "VEXA_STEAM_TRACE=1"),
+            env = listOf("DISPLAY=:0", "SDL_VIDEODRIVER=x11", "SteamAppId=391540"),
             preinstalled = true,
         ),
         GuestProgram(
@@ -240,7 +233,7 @@ object GuestCatalog {
             assetPath = "",
             fileName = "Unturned.x86_64",
             args = listOf("-screen-fullscreen", "0", "-screen-width", "2712", "-screen-height", "1220"),
-            env = listOf("DISPLAY=:0", "SDL_VIDEODRIVER=x11", "SteamAppId=304930", "VEXA_STEAM_TRACE=1"),
+            env = listOf("DISPLAY=:0", "SDL_VIDEODRIVER=x11", "SteamAppId=304930"),
             preinstalled = true,
         ),
         GuestProgram(
@@ -251,7 +244,7 @@ object GuestCatalog {
             assetPath = "",
             fileName = "Summer at the Edge of the Universe.x86_64",
             args = listOf("-screen-fullscreen", "0", "-screen-width", "2712", "-screen-height", "1220"),
-            env = listOf("DISPLAY=:0", "SDL_VIDEODRIVER=x11", "SteamAppId=2757760", "VEXA_STEAM_TRACE=1"),
+            env = listOf("DISPLAY=:0", "SDL_VIDEODRIVER=x11", "SteamAppId=2757760"),
             preinstalled = true,
         ),
         GuestProgram(

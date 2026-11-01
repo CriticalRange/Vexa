@@ -249,8 +249,7 @@ namespace Vexa::Runtime::Init {
             }
 
             // Validation RIP is executable
-            const bool abi64 =
-                    state.syscallHandler->GetOSABI() == FEXCore::HLE::SyscallOSABI::OS_LINUX64;
+            const bool abi64 = state.is64BitMode;
             if (loader.Is64BitMode() != abi64) {
                 const auto fields = Vexa::Log::AddFields({
                                                              Vexa::Log::F("loaderIs64", loader.Is64BitMode()),

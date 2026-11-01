@@ -103,6 +103,8 @@ val buildThunks =
     providers.environmentVariable("BUILD_THUNKS").orElse("ON")
 val build32BitThunks =
     providers.environmentVariable("VEXA_BUILD_32BIT_THUNKS").orElse("ON")
+val enableFexAllocator =
+    providers.environmentVariable("VEXA_FEX_ALLOCATOR").orElse("OFF")
 val enableRuntimeShaderTranslator =
     providers.environmentVariable("VEXA_ENABLE_RUNTIME_SHADER_TRANSLATOR").orElse("OFF")
 
@@ -383,7 +385,7 @@ tasks.registering(org.gradle.api.tasks.Exec::class) {
         "-DENABLE_LTO=OFF",
         "-DENABLE_CCACHE=OFF",
         "-DENABLE_WERROR=OFF",
-        "-DENABLE_JEMALLOC=OFF",
+        "-DENABLE_FEX_ALLOCATOR=${enableFexAllocator.get()}",
         "-DENABLE_JEMALLOC_GLIBC_ALLOC=OFF"
     )
     if (buildThunks.get() == "ON") {
@@ -491,6 +493,8 @@ android {
                     "-DANDROID_STL=c++_shared",
                     "-DFEX_ROOT=${cmakePath(fexRoot.get())}",
                     "-DFEX_BUILD=${cmakePath(fexBuildDir.get())}",
+                    "-DVEXA_FEX_ALLOCATOR=${enableFexAllocator.get()}",
+                    "-DCMAKE_INTERPROCEDURAL_OPTIMIZATION=${System.getenv("VEXA_LTO") ?: "OFF"}",
                 )
             }
         }

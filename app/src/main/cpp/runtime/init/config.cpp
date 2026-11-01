@@ -394,6 +394,28 @@ namespace Vexa::Runtime::Init {
         FEXCore::Config::Set(FEXCore::Config::CONFIG_APP_CONFIG_NAME,
                              appConfigName.empty() ? "Unknown" : appConfigName);
 
+        // The worker supplies this private, persistent path, not the per-run
+        // artifacts directory. Upstream's cache is experimental, so opt in
+        // explicitly until real-game correctness and warm starts are verified.
+        const char *cacheDir = ::getenv("VEXA_FEX_CACHE_DIR");
+        const char *cacheControl = ::getenv("VEXA_FEX_DISKCACHE");
+        bool diskCacheEnabled = cacheDir && *cacheDir && cacheControl &&
+                                std::string_view(cacheControl) == "1";
+        if (diskCacheEnabled) {
+            std::error_code cacheError;
+            std::filesystem::create_directories(cacheDir, cacheError);
+            if (cacheError || ::access(cacheDir, W_OK | X_OK) != 0) {
+                VEXA_LOGW(env, "FEX", "JIT disk cache directory unavailable; disabled", "{}");
+                diskCacheEnabled = false;
+            }
+        }
+        FEXCore::Config::Set(FEXCore::Config::CONFIG_DISKCACHE, diskCacheEnabled ? "1" : "0");
+        if (diskCacheEnabled) {
+            // DiskCachePath is a base path and FEX appends bucket names directly.
+            FEXCore::Config::Set(FEXCore::Config::CONFIG_DISKCACHEPATH, std::string(cacheDir) + "/");
+        }
+        VEXA_LOGI(env, "FEX", diskCacheEnabled ? "JIT disk cache enabled" : "JIT disk cache disabled", "{}");
+
         FEXCore::Config::SetConfigDirectory(cfgRoot + "/", false);
         FEXCore::Config::SetConfigDirectory(cfgRoot + "/", true);
         FEXCore::Config::SetConfigFileLocation(cfgRoot + "/Config.json", false);

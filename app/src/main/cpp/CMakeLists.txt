@@ -12,6 +12,12 @@ cmake_minimum_required(VERSION 3.22.1)
 # build script scope).
 project("vexa")
 
+# CMake 3.22 selects gold for Clang IPO, but modern Android NDKs ship lld.
+if(ANDROID AND CMAKE_INTERPROCEDURAL_OPTIMIZATION)
+    set(CMAKE_C_LINK_OPTIONS_IPO "-fuse-ld=lld")
+    set(CMAKE_CXX_LINK_OPTIONS_IPO "-fuse-ld=lld")
+endif()
+
 # Host thunks are dlopened independently of Java's System.loadLibrary group.
 # Export FEX's callback/guest-stack helpers into Android's global lookup group.
 # Otherwise their weak imports resolve to null, notably for i386 guest malloc.
@@ -82,10 +88,27 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     ${FEX_ROOT}/Source/Tools/LinuxEmulation
     ${FEX_ROOT}/External/fmt/include
     ${FEX_ROOT}/External/robin-map/include
+    ${FEX_ROOT}/External/unordered_dense/include
     ${FEX_BUILD}/include)
 
 add_library(FEXJemallocLibs STATIC IMPORTED)
 set_target_properties(FEXJemallocLibs PROPERTIES IMPORTED_LOCATION "${FEX_BUILD}/FEXCore/Source/libJemallocLibs.a")
+option(VEXA_FEX_ALLOCATOR "Link FEX's rpmalloc-backed allocator" OFF)
+if(EXISTS "${FEX_BUILD}/CMakeCache.txt")
+    file(STRINGS "${FEX_BUILD}/CMakeCache.txt" FEX_ALLOCATOR_CONFIG
+        REGEX "^ENABLE_FEX_ALLOCATOR:BOOL=")
+    if(FEX_ALLOCATOR_CONFIG)
+        if(VEXA_FEX_ALLOCATOR AND NOT FEX_ALLOCATOR_CONFIG STREQUAL "ENABLE_FEX_ALLOCATOR:BOOL=ON")
+            message(FATAL_ERROR "VEXA requests rpmalloc but the selected FEX build has it disabled")
+        elseif(NOT VEXA_FEX_ALLOCATOR AND FEX_ALLOCATOR_CONFIG STREQUAL "ENABLE_FEX_ALLOCATOR:BOOL=ON")
+            message(FATAL_ERROR "The selected FEX build uses rpmalloc; set VEXA_FEX_ALLOCATOR=ON")
+        endif()
+    endif()
+endif()
+if(VEXA_FEX_ALLOCATOR)
+    add_library(FEXRpmalloc STATIC IMPORTED)
+    set_target_properties(FEXRpmalloc PROPERTIES IMPORTED_LOCATION "${FEX_BUILD}/External/rpmalloc/librpmalloc.a")
+endif()
 add_library(FEXFmt STATIC IMPORTED)
 set_target_properties(FEXFmt PROPERTIES IMPORTED_LOCATION "${FEX_BUILD}/External/fmt/libfmt.a")
 add_library(FEXXXHash STATIC IMPORTED)
@@ -138,6 +161,9 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
           atomic
           m
     )
+if(VEXA_FEX_ALLOCATOR)
+    target_link_libraries(${CMAKE_PROJECT_NAME} FEXRpmalloc)
+endif()
 
 # Preloaded by wrap.sh before ART creates its heap. Reserves the low VA
 # range Brotato's ET_EXEC image needs.

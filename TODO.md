@@ -1,5 +1,21 @@
 VEXA is a general-purpose Linux x86_64 runner. Older items that name one game are historical notes, not the current product.
 
+## Priority: FEX upgrade and FPS stability (2026-10-29)
+
+- [~] FEX 2610 integration is in progress in `C:/Users/zeytu/Documents/FEX-2610-vexa` and `C:/Users/zeytu/Documents/vexa-fex-2610`; see `docs/fex-2610-upgrade-2026-10-29.md` for build results and blockers. The candidate APK has been installed for device testing; neither candidate is production-ready.
+- [~] Android rpmalloc candidate passes native allocator, x86-64/i386 ELF, selected syscall and reexec device probes. Remaining: integrated app/graphics and Proton tests, 16 KiB device, lifecycle and full compatibility-check reconciliation. FD-backed guest reexec through VEXA currently returns ENOTSUP.
+- [~] Dead Cells passed a short GameActivity gameplay smoke test on an installed FEX 2610 candidate APK; it is not a general Linux compatibility or FPS result. The normal patch verifier was skipped for this test build and the source merge is committed on the experimental branch. See the upgrade report for the pre-test save backup and changed in-game save.
+- [ ] Integrate the latest released upstream FEX into the Android fork in an isolated upgrade branch. Review upstream changes against every VEXA-specific implementation; prefer upstream where it covers the same behavior, retaining and testing Android-specific adaptations. Preserve the existing fork and runtime assets until the upgraded build is verified.
+- [ ] Audit Android build, allocator, signals, syscalls, execution, 32/64-bit thunks, Vulkan/GL/SDL and WSI integration; test ELF and Proton paths. Record the upstream version, fork revision, binary hashes and remaining compatibility gaps.
+- [ ] Measure matched gameplay frame-time p50/p95/p99 and actual presentation, CPU/JIT/driver, GPU passes, acquire/present, frequency and thermal conditions with minimal profiling overhead. Compare identical scenes, settings and cold/warm runs; report observed FPS and image correctness.
+- [ ] Evaluate upstream JIT contention, self-modifying-code and bounded disk-cache changes on Android. Correlate compilation/cache events with frame-time spikes; do not assume cache improves steady-state FPS.
+- [ ] Measure Vulkan pipeline creation and existing application/driver cache behavior; add persistent caching only if pipeline compilation causes stutter and safe cache identity/invalidation is established.
+- [ ] A/B test Android performance hints, selected threads, display refresh and frame pacing when the measurement identifies CPU frequency or presentation as a constraint.
+- [ ] Profile hot guest/JIT blocks and target demonstrated translation costs; investigate futex waits and worker scheduling based on critical-thread wall time.
+- [ ] Profile native Vulkan GPU passes and separately validate X11/DXVK WSI in real games. Optimize only measured bottlenecks while preserving synchronization and rendered output.
+- [ ] Later, if measured worthwhile: final-pass rotation fusion, 32-bit Vulkan marshalling, small thunk allocations/locks, and compiler/build flags. Prior timeline-fence, MAILBOX and shader-unroll experiments did not establish repeatable gains.
+- [ ] Preserve correctness: do not disable strict split-lock handling as a generic FPS fix. Keep current runtime and rollback path until new source, complete staged host/guest binaries and device behavior are verified.
+
 ## Runtime TODO: FEX Bring-up Sequence
 
 - [x] First priority: Compile VEXA runtime wrapper directly against FEX headers/libs

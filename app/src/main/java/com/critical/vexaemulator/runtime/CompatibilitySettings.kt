@@ -37,6 +37,9 @@ object CompatibilitySettings {
             "VEXA_THUNK_GUEST=${request.thunkGuestPath}",
             "VEXA_WORKDIR=${request.workingDirectory}",
             "VEXA_ARTIFACTS=${request.artifactDirectory}",
+            // Artifacts are reset on each launch. The JIT cache must instead live
+            // in Android's private cache directory and survive subsequent runs.
+            "VEXA_FEX_CACHE_DIR=${File(context.cacheDir, "fex-jit").absolutePath}",
         )
         val controlKeys = controls.map { it.substringBefore('=') }.toSet()
         val merged = environment(context).filterNot {

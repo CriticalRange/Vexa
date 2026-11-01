@@ -1,0 +1,9 @@
+# FEX 2610 Android disk cache and LTO experiment
+
+Disk cache is opt-in via launch environment `VEXA_FEX_DISKCACHE=1`. The app supplies its private `cache/fex-jit` directory; direct standalone runs must also supply `VEXA_FEX_CACHE_DIR`. An unavailable path disables the cache. The mapper is registered before context construction, because the FEX context constructor initializes the disk cache. FEX falls back to pread when mapping fails.
+
+On the connected Android device, an isolated LTO-enabled runtime created FOZ cache files. A GL guest probe generated a 2,201,143-byte database and 221,692-byte index. A second run with strace showed reads of existing cache entries. After correcting mapper initialization order, strace confirmed a successful 8 GiB virtual file mapping of the cache database; this is virtual address space, not an 8 GiB allocation of physical RAM. The GL probe could not create a context in the standalone environment, so graphics and game correctness remain unverified. Cache hits, FPS and frame-time gains have not been measured.
+
+FEX and VEXA were compiled separately in `FEX-2610-vexa/build-android-lto-test` and `vexa-fex-2610/build-vexa-lto-test`, using Android NDK 29, RelWithDebInfo, ThinLTO, and the Android FEX allocator. The generated VEXA build.ninja selected `-fuse-ld=gold`, which NDK 29 does not provide; for this experiment only it was changed to `-fuse-ld=lld`. This generated-file workaround is not a production build-system fix. The resulting libvexa.so SHA-256 was `c7c61dbaa9254822b45da06dc485798e183e5a646d8c383af35bdc3c36eb27f3`, matching the device copy. The standalone loader successfully ran static x86-64 and i386 hello guests. An actual APK/GameActivity and sustained gameplay test with LTO were not performed, and no performance comparison was made.
+
+The existing candidate merge and APK integration remain incomplete. No device application, game save, or packaged runtime was replaced during this experiment.
